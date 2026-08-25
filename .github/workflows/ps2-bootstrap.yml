@@ -1,0 +1,65 @@
+name: PS2 Bootstrap CI
+
+on:
+  push:
+    branches: [ "ps2" ]
+    paths:
+      - "port/ps2/**"
+      - "port/include/system.h"
+      - "include/**"
+      - ".github/workflows/ps2-bootstrap.yml"
+  pull_request:
+    branches: [ "ps2" ]
+    paths:
+      - "port/ps2/**"
+      - "port/include/system.h"
+      - "include/**"
+      - ".github/workflows/ps2-bootstrap.yml"
+  workflow_dispatch:
+
+jobs:
+  ee-bootstrap:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/ps2dev/ps2dev:latest
+      options: --user 0
+    timeout-minutes: 15
+
+    steps:
+      - name: Install host-side build tools
+        run: apk add --no-cache bash cmake git
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Record current toolchain
+        run: |
+          echo "PS2DEV=$PS2DEV"
+          echo "PS2SDK=$PS2SDK"
+          mips64r5900el-ps2-elf-gcc --version
+          mips64r5900el-ps2-elf-ld --version | head -n 1
+          cmake --version | head -n 1
+          sha256sum "$PS2SDK/samples/ps2dev.cmake"
+
+      - name: Configure PS2 bootstrap
+        run: |
+          cmake -S port/ps2 -B build-ps2 \
+            -DCMAKE_TOOLCHAIN_FILE="$PS2SDK/samples/ps2dev.cmake"
+
+      - name: Build PS2 bootstrap
+        run: cmake --build build-ps2 -j2 --verbose
+
+      - name: Inspect EE ELF
+        run: |
+          test -f build-ps2/pd-ps2-bootstrap.elf
+          mips64r5900el-ps2-elf-size build-ps2/pd-ps2-bootstrap.elf
+          mips64r5900el-ps2-elf-readelf -h build-ps2/pd-ps2-bootstrap.elf
+          mips64r5900el-ps2-elf-nm -n build-ps2/pd-ps2-bootstrap.elf | tail -n 20
+
+      - name: Upload bootstrap ELF
+        uses: actions/upload-artifact@v4
+        with:
+          name: pd-ps2-bootstrap
+          path: build-ps2/pd-ps2-bootstrap.elf
+          if-no-files-found: error
+          retention-days: 14
