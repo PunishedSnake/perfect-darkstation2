@@ -13,6 +13,11 @@
 #define PS2_GS_MAX_TEXTURES 64
 #define PS2_GS_NATIVE_QUEUE_QW 16384u
 
+/* GS TEST.ATST encodings, cross-checked against current PS2SDK libgs. */
+#define PS2_GS_ATST_ALWAYS  1u
+#define PS2_GS_ATST_GEQUAL  5u
+#define PS2_GS_AFAIL_KEEP   0u
+
 struct Ps2GsTextureSlot {
     bool used;
     bool uploaded;
@@ -456,6 +461,22 @@ extern "C" void ps2GsCoreSetAlphaBlend(bool enable)
         if (s_frame_building) {
             ps2GsCoreEmitAlpha();
         }
+    }
+}
+
+extern "C" void ps2GsCoreSetAlphaTest(bool enable, uint8_t reference)
+{
+    if (!s_gs) {
+        return;
+    }
+
+    s_gs->Test->ATE = enable ? GS_SETTING_ON : GS_SETTING_OFF;
+    s_gs->Test->ATST = enable ? PS2_GS_ATST_GEQUAL : PS2_GS_ATST_ALWAYS;
+    s_gs->Test->AREF = reference;
+    s_gs->Test->AFAIL = PS2_GS_AFAIL_KEEP;
+
+    if (s_frame_building) {
+        ps2GsCoreEmitTest();
     }
 }
 
