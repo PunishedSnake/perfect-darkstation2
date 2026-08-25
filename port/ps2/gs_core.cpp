@@ -21,6 +21,11 @@ struct Ps2GsTextureSlot {
 static GSGLOBAL *s_gs;
 static struct Ps2GsTextureSlot s_textures[PS2_GS_MAX_TEXTURES];
 
+static_assert(sizeof(Ps2GsColorVertex) == sizeof(GSPRIMPOINT),
+    "packet-ready color vertex must match current gsKit REGLIST source layout");
+static_assert(sizeof(Ps2GsTexturedVertex) == sizeof(GSPRIMSTQPOINT),
+    "packet-ready textured vertex must match current gsKit REGLIST source layout");
+
 static struct Ps2GsTextureSlot *ps2GsCoreTextureSlot(Ps2GsTextureHandle handle)
 {
     if (handle == PS2_GS_TEXTURE_INVALID || handle > PS2_GS_MAX_TEXTURES) {
@@ -38,8 +43,8 @@ extern "C" bool ps2GsCoreInit(const struct Ps2GsCreateInfo *info)
     }
 
     const struct Ps2GsCreateInfo defaults = {
-        GS_PSM_CT16,
-        GS_PSMZ_16,
+        PS2_GS_PSM_CT16,
+        PS2_GS_PSMZ_16,
         true,
         true,
     };
@@ -95,9 +100,9 @@ extern "C" bool ps2GsCoreInit(const struct Ps2GsCreateInfo *info)
     return true;
 }
 
-extern "C" GSGLOBAL *ps2GsCoreGetLegacyGlobal(void)
+extern "C" bool ps2GsCoreIsReady(void)
 {
-    return s_gs;
+    return s_gs != NULL;
 }
 
 extern "C" int ps2GsCoreGetWidth(void)
@@ -113,6 +118,44 @@ extern "C" int ps2GsCoreGetHeight(void)
 extern "C" int ps2GsCoreGetMode(void)
 {
     return s_gs ? s_gs->Mode : 0;
+}
+
+extern "C" int ps2GsCoreGetRefreshRate(void)
+{
+    if (!s_gs) {
+        return 60;
+    }
+
+    switch (s_gs->Mode) {
+        case GS_MODE_PAL:
+        case GS_MODE_DTV_576P:
+        case GS_MODE_DVD_PAL:
+            return 50;
+        case GS_MODE_VGA_640_72:
+        case GS_MODE_VGA_800_72:
+            return 72;
+        case GS_MODE_VGA_640_75:
+        case GS_MODE_VGA_800_75:
+        case GS_MODE_VGA_1024_75:
+        case GS_MODE_VGA_1280_75:
+            return 75;
+        case GS_MODE_VGA_640_85:
+        case GS_MODE_VGA_800_85:
+        case GS_MODE_VGA_1024_85:
+            return 85;
+        default:
+            return 60;
+    }
+}
+
+extern "C" int ps2GsCoreGetOffsetX(void)
+{
+    return s_gs ? s_gs->OffsetX : 0;
+}
+
+extern "C" int ps2GsCoreGetOffsetY(void)
+{
+    return s_gs ? s_gs->OffsetY : 0;
 }
 
 extern "C" void ps2GsCoreBeginFrame(void)
@@ -327,17 +370,20 @@ extern "C" void ps2GsCoreReleaseTexture(Ps2GsTextureHandle handle)
     }
 }
 
-extern "C" void ps2GsCoreDrawColorTriangles(const GSPRIMPOINT *vertices, uint32_t vertex_count)
+extern "C" void ps2GsCoreDrawColorTriangles(const struct Ps2GsColorVertex *vertices,
+    uint32_t vertex_count)
 {
     if (!s_gs || !vertices || vertex_count == 0) {
         return;
     }
 
-    gsKit_prim_list_triangle_gouraud_3d(s_gs, (int)vertex_count, vertices);
+    /* CURRENT IMPLEMENTATION: gsKit copies this byte-identical REGLIST source. */
+    gsKit_prim_list_triangle_gouraud_3d(
+        s_gs, (int)vertex_count, reinterpret_cast<const GSPRIMPOINT *>(vertices));
 }
 
 extern "C" void ps2GsCoreDrawTexturedTriangles(Ps2GsTextureHandle handle,
-    const GSPRIMSTQPOINT *vertices, uint32_t vertex_count)
+    const struct Ps2GsTexturedVertex *vertices, uint32_t vertex_count)
 {
     if (!s_gs || !vertices || vertex_count == 0) {
         return;
@@ -350,5 +396,8 @@ extern "C" void ps2GsCoreDrawTexturedTriangles(Ps2GsTextureHandle handle,
 
     gsKit_set_texfilter(s_gs, slot->texture.Filter);
     gsKit_prim_list_triangle_goraud_texture_stq_3d(
-        s_gs, &slot->texture, (int)vertex_count, vertices);
+        s_gs,
+        &slot->texture,
+        (int)vertex_count,
+        reinterpret_cast<const GSPRIMSTQPOINT *>(vertices));
 }
