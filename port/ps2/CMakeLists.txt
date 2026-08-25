@@ -44,6 +44,12 @@ if(NOT EXISTS "${GSKIT}/include/gsKit.h")
   message(FATAL_ERROR "Current gsKit headers not found under ${GSKIT}/include")
 endif()
 
+find_program(PD_PS2_PYTHON3 NAMES python3 REQUIRED)
+
+set(PD_PS2_ROMID "ntsc-final")
+set(PD_PS2_ASSET_DIR "${PD_ROOT}/src/assets/${PD_PS2_ROMID}")
+set(PD_PS2_GENERATED_DIR "${PD_ROOT}/src/generated/${PD_PS2_ROMID}")
+
 set(PD_PS2_COMMON_INCLUDE_DIRS
   "${PD_ROOT}/include"
   "${PD_ROOT}/include/PR"
@@ -71,6 +77,34 @@ set(PD_PS2_GAME_DEFINITIONS
   PAL=0
   VERSION=2
 )
+
+# The upstream game compile depends on generated enum headers even when no
+# asset binary is linked yet. Generate only the top-level headers required by
+# constants.h first; grow this list from concrete compiler evidence rather than
+# making the PS2 bootstrap run the entire desktop asset pipeline pre-emptively.
+function(pd_ps2_generate_asset_header json_name tool_name header_name)
+  set(input "${PD_PS2_ASSET_DIR}/${json_name}")
+  set(output "${PD_PS2_GENERATED_DIR}/${header_name}")
+  add_custom_command(
+    OUTPUT "${output}"
+    COMMAND "${CMAKE_COMMAND}" -E env "ROMID=${PD_PS2_ROMID}"
+      "${PD_PS2_PYTHON3}" "${PD_ROOT}/tools/assetmgr/${tool_name}"
+      "${input}" --headers-only "--romid=${PD_PS2_ROMID}"
+    DEPENDS
+      "${input}"
+      "${PD_ROOT}/tools/assetmgr/${tool_name}"
+      "${PD_ROOT}/tools/assetmgr/assetmgr.py"
+    WORKING_DIRECTORY "${PD_ROOT}"
+    VERBATIM
+  )
+  set(PD_PS2_GENERATED_HEADERS ${PD_PS2_GENERATED_HEADERS} "${output}" PARENT_SCOPE)
+endfunction()
+
+set(PD_PS2_GENERATED_HEADERS "")
+pd_ps2_generate_asset_header("animations.json" "mkanims" "animations.h")
+pd_ps2_generate_asset_header("sequences.json" "mksequences" "sequences.h")
+pd_ps2_generate_asset_header("textures.json" "mktextures" "textures.h")
+add_custom_target(pd_ps2_asset_headers DEPENDS ${PD_PS2_GENERATED_HEADERS})
 
 add_executable(pd_ps2_bootstrap
   bootstrap.c
@@ -131,9 +165,11 @@ add_library(pd_ps2_game_bridge OBJECT
   "${PD_ROOT}/port/src/pdmain.c"
   "${PD_ROOT}/port/src/pdsched.c"
 )
+add_dependencies(pd_ps2_game_bridge pd_ps2_asset_headers)
 
 target_include_directories(pd_ps2_game_bridge PRIVATE
   ${PD_PS2_COMMON_INCLUDE_DIRS}
+  "${PD_PS2_GENERATED_DIR}"
   "${GSKIT}/include"
 )
 
