@@ -1,5 +1,6 @@
 #include <stdbool.h>
 #include <stdint.h>
+#include <string.h>
 
 #include <dmaKit.h>
 #include <gsKit.h>
@@ -9,7 +10,26 @@
 #include "log_ps2.h"
 #include "system.h"
 
+#define PS2_GS_MAX_TEXTURES 64
+
+struct Ps2GsTextureSlot {
+    bool used;
+    bool uploaded;
+    GSTEXTURE texture;
+};
+
 static GSGLOBAL *s_gs;
+static struct Ps2GsTextureSlot s_textures[PS2_GS_MAX_TEXTURES];
+
+static struct Ps2GsTextureSlot *ps2GsCoreTextureSlot(Ps2GsTextureHandle handle)
+{
+    if (handle == PS2_GS_TEXTURE_INVALID || handle > PS2_GS_MAX_TEXTURES) {
+        return NULL;
+    }
+
+    struct Ps2GsTextureSlot *slot = &s_textures[handle - 1];
+    return slot->used ? slot : NULL;
+}
 
 extern "C" bool ps2GsCoreInit(const struct Ps2GsCreateInfo *info)
 {
@@ -55,6 +75,7 @@ extern "C" bool ps2GsCoreInit(const struct Ps2GsCreateInfo *info)
     gsKit_mode_switch(gs, GS_ONESHOT);
     gsKit_set_test(gs, config->z_buffering ? GS_ZTEST_ON : GS_ZTEST_OFF);
 
+    memset(s_textures, 0, sizeof(s_textures));
     s_gs = gs;
 
     sysLogPrintf(LOG_NOTE,
@@ -203,4 +224,131 @@ extern "C" void ps2GsCoreSetTextureClamp(uint32_t cms, uint32_t cmt)
     s_gs->Clamp->WMS = (cms & 2u) ? GS_CMODE_CLAMP : GS_CMODE_REPEAT;
     s_gs->Clamp->WMT = (cmt & 2u) ? GS_CMODE_CLAMP : GS_CMODE_REPEAT;
     gsKit_set_clamp(s_gs, GS_CMODE_RESET);
+}
+
+extern "C" Ps2GsTextureHandle ps2GsCoreCreateTexture(void)
+{
+    for (uint32_t i = 0; i < PS2_GS_MAX_TEXTURES; ++i) {
+        if (!s_textures[i].used) {
+            memset(&s_textures[i], 0, sizeof(s_textures[i]));
+            s_textures[i].used = true;
+            return (Ps2GsTextureHandle)(i + 1);
+        }
+    }
+
+    sysLogPrintf(LOG_ERROR, "GS core: texture table exhausted (%d)", PS2_GS_MAX_TEXTURES);
+    return PS2_GS_TEXTURE_INVALID;
+}
+
+extern "C" bool ps2GsCoreTextureExists(Ps2GsTextureHandle handle)
+{
+    return ps2GsCoreTextureSlot(handle) != NULL;
+}
+
+extern "C" bool ps2GsCoreTextureReady(Ps2GsTextureHandle handle)
+{
+    struct Ps2GsTextureSlot *slot = ps2GsCoreTextureSlot(handle);
+    return slot && slot->uploaded;
+}
+
+extern "C" bool ps2GsCoreUploadTextureRgba32(Ps2GsTextureHandle handle,
+    const uint8_t *rgba32, uint32_t width, uint32_t height)
+{
+    if (!s_gs || !rgba32 || width == 0 || height == 0 || width > 1024 || height > 1024) {
+        return false;
+    }
+
+    struct Ps2GsTextureSlot *slot = ps2GsCoreTextureSlot(handle);
+    if (!slot) {
+        return false;
+    }
+
+    GSTEXTURE *tex = &slot->texture;
+    const u32 bytes = gsKit_texture_size((int)width, (int)height, GS_PSM_CT32);
+
+    /*
+     * CURRENT IMPLEMENTATION: gsKit's VRAM allocator is monotonic. Preserve the
+     * existing correctness rule and reject resizing an already resident handle
+     * rather than leak another allocation behind the caller's back.
+     */
+    if (slot->uploaded && (tex->Width != width || tex->Height != height)) {
+        sysLogPrintf(LOG_WARNING,
+            "GS core: texture resize rejected id=%u old=%ux%u new=%ux%u",
+            (unsigned int)handle, tex->Width, tex->Height, width, height);
+        return false;
+    }
+
+    if (!slot->uploaded) {
+        memset(tex, 0, sizeof(*tex));
+        tex->Width = width;
+        tex->Height = height;
+        tex->PSM = GS_PSM_CT32;
+        tex->Filter = GS_FILTER_NEAREST;
+        tex->Vram = gsKit_vram_alloc(s_gs, bytes, GSKIT_ALLOC_USERBUFFER);
+        if (tex->Vram == GSKIT_ALLOC_ERROR) {
+            sysLogPrintf(LOG_ERROR,
+                "GS core: VRAM allocation failed id=%u size=%u",
+                (unsigned int)handle, bytes);
+            return false;
+        }
+        slot->uploaded = true;
+    }
+
+    /*
+     * CURRENT IMPLEMENTATION: current gsKit_texture_upload() ultimately uses
+     * the synchronous texture-send path, including DMA waits before and after
+     * the transfer. Keeping that policy here makes it removable without
+     * changing Fast3D when native upload batching is introduced.
+     */
+    tex->Mem = (u32 *)(uintptr_t)rgba32;
+    gsKit_texture_upload(s_gs, tex);
+    tex->Mem = NULL;
+    return true;
+}
+
+extern "C" void ps2GsCoreSetTextureFilter(Ps2GsTextureHandle handle, bool linear_filter)
+{
+    struct Ps2GsTextureSlot *slot = ps2GsCoreTextureSlot(handle);
+    if (slot) {
+        slot->texture.Filter = linear_filter ? GS_FILTER_LINEAR : GS_FILTER_NEAREST;
+    }
+}
+
+extern "C" void ps2GsCoreReleaseTexture(Ps2GsTextureHandle handle)
+{
+    struct Ps2GsTextureSlot *slot = ps2GsCoreTextureSlot(handle);
+    if (slot) {
+        /*
+         * CURRENT IMPLEMENTATION: logical retirement only. VRAM is not
+         * reclaimed until the native residency allocator replaces gsKit's
+         * monotonic allocator.
+         */
+        slot->used = false;
+    }
+}
+
+extern "C" void ps2GsCoreDrawColorTriangles(const GSPRIMPOINT *vertices, uint32_t vertex_count)
+{
+    if (!s_gs || !vertices || vertex_count == 0) {
+        return;
+    }
+
+    gsKit_prim_list_triangle_gouraud_3d(s_gs, (int)vertex_count, vertices);
+}
+
+extern "C" void ps2GsCoreDrawTexturedTriangles(Ps2GsTextureHandle handle,
+    const GSPRIMSTQPOINT *vertices, uint32_t vertex_count)
+{
+    if (!s_gs || !vertices || vertex_count == 0) {
+        return;
+    }
+
+    struct Ps2GsTextureSlot *slot = ps2GsCoreTextureSlot(handle);
+    if (!slot || !slot->uploaded) {
+        return;
+    }
+
+    gsKit_set_texfilter(s_gs, slot->texture.Filter);
+    gsKit_prim_list_triangle_goraud_texture_stq_3d(
+        s_gs, &slot->texture, (int)vertex_count, vertices);
 }
