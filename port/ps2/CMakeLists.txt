@@ -15,6 +15,17 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 get_filename_component(PD_ROOT "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
 
+execute_process(
+  COMMAND git rev-parse --short=12 HEAD
+  WORKING_DIRECTORY "${PD_ROOT}"
+  OUTPUT_VARIABLE PD_PS2_GIT_COMMIT
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+  ERROR_QUIET
+)
+if(PD_PS2_GIT_COMMIT STREQUAL "")
+  set(PD_PS2_GIT_COMMIT "unknown")
+endif()
+
 if(NOT DEFINED ENV{GSKIT})
   message(FATAL_ERROR "GSKIT environment variable is required for the PS2 diagnostic renderer")
 endif()
@@ -50,7 +61,10 @@ target_compile_options(pd_ps2_bootstrap PRIVATE
   -fwrapv
 )
 
-target_compile_definitions(pd_ps2_bootstrap PRIVATE PLATFORM_PS2=1)
+target_compile_definitions(pd_ps2_bootstrap PRIVATE
+  PLATFORM_PS2=1
+  PD_PS2_GIT_COMMIT="${PD_PS2_GIT_COMMIT}"
+)
 target_link_directories(pd_ps2_bootstrap PRIVATE "${GSKIT}/lib")
 
 # Current ps2sdk-ports installs EE zlib into PS2SDK/ports. Keep it behind the
@@ -64,3 +78,4 @@ set_target_properties(pd_ps2_bootstrap PROPERTIES
 
 message(STATUS "Perfect Dark PS2 bootstrap root: ${PD_ROOT}")
 message(STATUS "Perfect Dark PS2 bootstrap gsKit: ${GSKIT}")
+message(STATUS "Perfect Dark PS2 bootstrap commit: ${PD_PS2_GIT_COMMIT}")
