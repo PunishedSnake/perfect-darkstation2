@@ -1,5 +1,4 @@
 #include <stdbool.h>
-#include <stdio.h>
 #include <string.h>
 #include <zlib.h>
 
@@ -36,24 +35,24 @@ static bool validateRomHeader(struct romsource *source)
     u8 header[64];
 
     if (romSourceGetSize(source) != PD_ROM_SIZE) {
-        printf("ROM probe: wrong size (%u, expected %u)\n",
+        sysLogPrintf(LOG_ERROR, "ROM probe: wrong size (%u, expected %u)",
             romSourceGetSize(source), PD_ROM_SIZE);
         return false;
     }
 
     if (!romSourceReadAt(source, 0, header, sizeof(header))) {
-        puts("ROM probe: header read failed");
+        sysLogPrintf(LOG_ERROR, "ROM probe: header read failed");
         return false;
     }
 
     if (readBe32(header) != 0x80371240u) {
-        printf("ROM probe: wrong z64 magic %08x\n", readBe32(header));
+        sysLogPrintf(LOG_ERROR, "ROM probe: wrong z64 magic %08x", readBe32(header));
         return false;
     }
 
     if (memcmp(header + 0x20, "Perfect Dark", 12) != 0 ||
         memcmp(header + 0x3b, "NPDE", 4) != 0) {
-        puts("ROM probe: expected NTSC-final Perfect Dark header not found");
+        sysLogPrintf(LOG_ERROR, "ROM probe: expected NTSC-final Perfect Dark header not found");
         return false;
     }
 
@@ -73,12 +72,12 @@ static int inflateDataSegment(struct romsource *source)
     int zret;
 
     if (!romSourceReadAt(source, PD_ROM_DATA_OFS, rzipHeader, sizeof(rzipHeader))) {
-        puts("ROM probe: RZIP header read failed");
+        sysLogPrintf(LOG_ERROR, "ROM probe: RZIP header read failed");
         return -1;
     }
 
     if (rzipHeader[0] != 0x11 || rzipHeader[1] != 0x73) {
-        printf("ROM probe: data segment is not RZIP 1173 (%02x%02x)\n",
+        sysLogPrintf(LOG_ERROR, "ROM probe: data segment is not RZIP 1173 (%02x%02x)",
             rzipHeader[0], rzipHeader[1]);
         return -1;
     }
@@ -87,13 +86,16 @@ static int inflateDataSegment(struct romsource *source)
         ((u32)rzipHeader[3] << 8) | (u32)rzipHeader[4];
 
     if (expectedSize < PD_ROM_FILES_OFS + 12u || expectedSize > PD_RZIP_MAX_DATA_SEG) {
-        printf("ROM probe: implausible data segment size %u\n", expectedSize);
+        sysLogPrintf(LOG_ERROR, "ROM probe: implausible data segment size %u", expectedSize);
         return -1;
     }
 
+    sysLogPrintf(LOG_NOTE, "ROM probe: RZIP 1173 expected output=%u input_chunk=%u",
+        expectedSize, PD_RZIP_INPUT_CHUNK);
+
     output = sysMemAlloc(expectedSize);
     if (!output) {
-        printf("ROM probe: could not allocate %u-byte final data segment\n", expectedSize);
+        sysLogPrintf(LOG_ERROR, "ROM probe: could not allocate %u-byte final data segment", expectedSize);
         return -1;
     }
 
@@ -103,7 +105,7 @@ static int inflateDataSegment(struct romsource *source)
 
     zret = inflateInit2(&stream, -MAX_WBITS);
     if (zret != Z_OK) {
-        printf("ROM probe: inflateInit2 failed: %d\n", zret);
+        sysLogPrintf(LOG_ERROR, "ROM probe: inflateInit2 failed: %d", zret);
         goto cleanup;
     }
 
@@ -117,7 +119,7 @@ static int inflateDataSegment(struct romsource *source)
 
             if (nextOffset >= romSize || amount == 0 ||
                 !romSourceReadAt(source, nextOffset, input, amount)) {
-                puts("ROM probe: compressed stream ended before Z_STREAM_END");
+                sysLogPrintf(LOG_ERROR, "ROM probe: compressed stream ended before Z_STREAM_END");
                 inflateEnd(&stream);
                 goto cleanup;
             }
@@ -137,20 +139,20 @@ static int inflateDataSegment(struct romsource *source)
         }
 
         if (zret != Z_OK) {
-            printf("ROM probe: inflate failed: %d after %lu input bytes\n",
+            sysLogPrintf(LOG_ERROR, "ROM probe: inflate failed: %d after %lu input bytes",
                 zret, (unsigned long)stream.total_in);
             inflateEnd(&stream);
             goto cleanup;
         }
 
         if (stream.total_in == beforeIn && stream.total_out == beforeOut) {
-            puts("ROM probe: inflate made no progress");
+            sysLogPrintf(LOG_ERROR, "ROM probe: inflate made no progress");
             inflateEnd(&stream);
             goto cleanup;
         }
 
         if (stream.avail_out == 0) {
-            puts("ROM probe: output filled before Z_STREAM_END");
+            sysLogPrintf(LOG_ERROR, "ROM probe: output filled before Z_STREAM_END");
             inflateEnd(&stream);
             goto cleanup;
         }
@@ -158,7 +160,7 @@ static int inflateDataSegment(struct romsource *source)
 
     zret = inflateEnd(&stream);
     if (zret != Z_OK || stream.total_out != expectedSize) {
-        printf("ROM probe: decompressed size mismatch (%lu, expected %u)\n",
+        sysLogPrintf(LOG_ERROR, "ROM probe: decompressed size mismatch (%lu, expected %u)",
             (unsigned long)stream.total_out, expectedSize);
         goto cleanup;
     }
@@ -169,16 +171,16 @@ static int inflateDataSegment(struct romsource *source)
         const u32 secondFile = readBe32(offsets + 8);
 
         if (firstFile == 0 || secondFile <= firstFile || secondFile > PD_ROM_SIZE) {
-            printf("ROM probe: file table sanity failed (%08x, %08x)\n",
+            sysLogPrintf(LOG_ERROR, "ROM probe: file table sanity failed (%08x, %08x)",
                 firstFile, secondFile);
             goto cleanup;
         }
 
-        printf("ROM probe: RZIP 1173 -> %u bytes, consumed %u compressed bytes\n",
+        sysLogPrintf(LOG_NOTE, "ROM probe: RZIP 1173 -> %u bytes, consumed %u compressed bytes",
             expectedSize, compressedBytes);
-        printf("ROM probe: first file extent %08x..%08x (%u bytes)\n",
+        sysLogPrintf(LOG_NOTE, "ROM probe: first file extent %08x..%08x (%u bytes)",
             firstFile, secondFile, secondFile - firstFile);
-        printf("ROM probe: data FNV1a %08x\n", fnv1a32(output, expectedSize));
+        sysLogPrintf(LOG_NOTE, "ROM probe: data FNV1a %08x", fnv1a32(output, expectedSize));
     }
 
     result = 1;
@@ -194,28 +196,30 @@ int ps2RomProbe(const char *path)
     int result;
 
     if (!path || !path[0]) {
-        puts("ROM probe: no path");
+        sysLogPrintf(LOG_WARNING, "ROM probe: no path");
         return 0;
     }
 
-    printf("ROM probe: opening %s\n", path);
+    sysLogPrintf(LOG_NOTE, "ROM probe: opening %s", path);
 
     if (!romSourceOpenFile(&source, path)) {
-        printf("ROM probe: open failed: %s\n", path);
+        sysLogPrintf(LOG_ERROR, "ROM probe: open failed: %s", path);
         return -1;
     }
+
+    sysLogPrintf(LOG_NOTE, "ROM probe: source size=%u bytes", romSourceGetSize(&source));
 
     if (!validateRomHeader(&source)) {
         romSourceClose(&source);
         return -1;
     }
 
-    puts("ROM probe: header and bounded source contract ok");
+    sysLogPrintf(LOG_NOTE, "ROM probe: header and bounded source contract ok");
     result = inflateDataSegment(&source);
     romSourceClose(&source);
 
     if (result > 0) {
-        puts("ROM probe: real ROM data path ok");
+        sysLogPrintf(LOG_NOTE, "ROM probe: real ROM data path ok");
     }
 
     return result;
