@@ -31,7 +31,7 @@ jobs:
 
     steps:
       - name: Install host-side build tools
-        run: apk add --no-cache bash cmake git
+        run: apk add --no-cache bash cmake git ninja
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -43,11 +43,12 @@ jobs:
           mips64r5900el-ps2-elf-gcc --version
           mips64r5900el-ps2-elf-ld --version | head -n 1
           cmake --version | head -n 1
+          ninja --version
           sha256sum port/ps2/ps2dev-toolchain.cmake
 
       - name: Configure PS2 bootstrap
         run: |
-          cmake -S port/ps2 -B build-ps2 \
+          cmake -S port/ps2 -B build-ps2 -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/port/ps2/ps2dev-toolchain.cmake"
 
       - name: Build PS2 bootstrap
