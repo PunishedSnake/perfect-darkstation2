@@ -15,13 +15,20 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 get_filename_component(PD_ROOT "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
 
-execute_process(
-  COMMAND git rev-parse --short=12 HEAD
-  WORKING_DIRECTORY "${PD_ROOT}"
-  OUTPUT_VARIABLE PD_PS2_GIT_COMMIT
-  OUTPUT_STRIP_TRAILING_WHITESPACE
-  ERROR_QUIET
-)
+# CI exposes the exact checkout revision directly. Prefer that over invoking
+# git from inside the minimal PS2DEV container; local builds fall back to git.
+set(PD_PS2_GIT_COMMIT "")
+if(DEFINED ENV{GITHUB_SHA} AND NOT "$ENV{GITHUB_SHA}" STREQUAL "")
+  string(SUBSTRING "$ENV{GITHUB_SHA}" 0 12 PD_PS2_GIT_COMMIT)
+else()
+  execute_process(
+    COMMAND git rev-parse --short=12 HEAD
+    WORKING_DIRECTORY "${PD_ROOT}"
+    OUTPUT_VARIABLE PD_PS2_GIT_COMMIT
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+  )
+endif()
 if(PD_PS2_GIT_COMMIT STREQUAL "")
   set(PD_PS2_GIT_COMMIT "unknown")
 endif()
