@@ -5,6 +5,7 @@
 #include <gsKit.h>
 
 #include "gfx_window_ps2.h"
+#include "gs_core.h"
 #include "system.h"
 
 /*
@@ -17,7 +18,8 @@
  *
  * Whole-system rule: swap_buffers_begin() never waits. Presentation waits only
  * in swap_buffers_end(), after Fast3D has submitted the frame and called its
- * rendering backend finish hook.
+ * rendering backend finish hook. The actual GS presentation primitive lives in
+ * gs_core so the window contract does not depend on gsKit transport details.
  */
 
 static GSGLOBAL *s_window_gs;
@@ -80,7 +82,7 @@ static void ps2_window_init(const struct GfxWindowInitSettings *settings)
 
 static void ps2_window_close(void)
 {
-    /* GS lifetime is owned by the PS2 platform layer during bring-up. */
+    /* GS lifetime is owned by gs_core during bring-up. */
 }
 
 static int ps2_get_display_mode(int modenum, int *out_w, int *out_h)
@@ -206,7 +208,7 @@ static void ps2_swap_buffers_begin(void)
 static void ps2_swap_buffers_end(void)
 {
     if (s_window_gs) {
-        gsKit_sync_flip(s_window_gs);
+        ps2GsCorePresent();
     }
 }
 
