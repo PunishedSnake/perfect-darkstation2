@@ -44,6 +44,21 @@ if(NOT EXISTS "${GSKIT}/include/gsKit.h")
   message(FATAL_ERROR "Current gsKit headers not found under ${GSKIT}/include")
 endif()
 
+set(PD_PS2_COMMON_INCLUDE_DIRS
+  "${PD_ROOT}/include"
+  "${PD_ROOT}/include/PR"
+  "${PD_ROOT}/port/include"
+  "${PD_ROOT}/port/fast3d"
+)
+
+set(PD_PS2_CORRECTNESS_FLAGS
+  -Og
+  -G0
+  -fno-strict-aliasing
+  -funsigned-char
+  -fwrapv
+)
+
 add_executable(pd_ps2_bootstrap
   bootstrap.c
   system_ps2.c
@@ -56,10 +71,7 @@ add_executable(pd_ps2_bootstrap
 )
 
 target_include_directories(pd_ps2_bootstrap PRIVATE
-  "${PD_ROOT}/include"
-  "${PD_ROOT}/include/PR"
-  "${PD_ROOT}/port/include"
-  "${PD_ROOT}/port/fast3d"
+  ${PD_PS2_COMMON_INCLUDE_DIRS}
   "${GSKIT}/include"
 )
 
@@ -67,11 +79,7 @@ target_include_directories(pd_ps2_bootstrap PRIVATE
 # while the Perfect Dark port currently carries known -O2 issues.
 # The target-local -Og deliberately wins here until correctness is established.
 target_compile_options(pd_ps2_bootstrap PRIVATE
-  -Og
-  -G0
-  -fno-strict-aliasing
-  -funsigned-char
-  -fwrapv
+  ${PD_PS2_CORRECTNESS_FLAGS}
   $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>
   $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>
 )
@@ -89,6 +97,28 @@ target_link_libraries(pd_ps2_bootstrap PRIVATE gskit dmakit z kernel)
 set_target_properties(pd_ps2_bootstrap PROPERTIES
   OUTPUT_NAME "pd-ps2-bootstrap"
   SUFFIX ".elf"
+)
+
+# Compile the real current Fast3D translator under the EE compiler even before
+# we link the complete game runtime. This is an ABI/source-contract gate: it
+# exposes desktop-only assumptions in gfx_pc.cpp without dragging unrelated
+# subsystems into the hardware bring-up executable.
+add_library(pd_ps2_fast3d_contract OBJECT
+  "${PD_ROOT}/port/fast3d/gfx_pc.cpp"
+)
+
+target_include_directories(pd_ps2_fast3d_contract PRIVATE
+  ${PD_PS2_COMMON_INCLUDE_DIRS}
+)
+
+target_compile_options(pd_ps2_fast3d_contract PRIVATE
+  ${PD_PS2_CORRECTNESS_FLAGS}
+  -fno-exceptions
+  -fno-rtti
+)
+
+target_compile_definitions(pd_ps2_fast3d_contract PRIVATE
+  PLATFORM_PS2=1
 )
 
 message(STATUS "Perfect Dark PS2 bootstrap root: ${PD_ROOT}")
