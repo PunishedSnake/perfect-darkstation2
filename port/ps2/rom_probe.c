@@ -112,7 +112,7 @@ static int inflateDataSegment(struct romsource *source)
 
     sysLogPrintf(LOG_NOTE, "ROM probe: entering bounded inflate loop at ROM offset %08x",
         PD_ROM_DATA_OFS + PD_RZIP_HEADER_SIZE);
-    ps2LogFlush();
+    ps2LogCheckpoint();
 
     nextOffset = PD_ROM_DATA_OFS + PD_RZIP_HEADER_SIZE;
 
@@ -206,7 +206,7 @@ int ps2RomProbe(const char *path)
     }
 
     sysLogPrintf(LOG_NOTE, "ROM probe: opening %s", path);
-    ps2LogFlush();
+    ps2LogCheckpoint();
 
     if (!romSourceOpenFile(&source, path)) {
         sysLogPrintf(LOG_ERROR, "ROM probe: open failed: %s", path);
@@ -226,6 +226,7 @@ int ps2RomProbe(const char *path)
 
     if (result > 0) {
         sysLogPrintf(LOG_NOTE, "ROM probe: real ROM data path ok");
+        ps2LogCheckpoint();
     }
 
     return result;
