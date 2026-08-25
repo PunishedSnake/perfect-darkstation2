@@ -3,9 +3,6 @@
 #include <stdint.h>
 #include <string.h>
 
-#include <gsKit.h>
-#include <gsInline.h>
-
 #include "gfx_cc.h"
 #include "gfx_rendering_api.h"
 #include "gfx_ps2.h"
@@ -33,6 +30,11 @@
 #define PS2_GFX_MAX_SHADERS 32
 #define PS2_GFX_TRANSLATE_VERTS 96
 
+/* GS packed-register IDs consumed by the packet-ready core boundary. */
+#define PS2_GS_REG_RGBAQ 0x01u
+#define PS2_GS_REG_ST    0x02u
+#define PS2_GS_REG_XYZ2  0x05u
+
 struct ShaderProgram {
     bool used;
     bool supported;
@@ -49,12 +51,6 @@ struct Ps2Viewport {
     int height;
 };
 
-/*
- * Transitional escape hatch. GS-ready vertex packing is now the only reason
- * this Fast3D adapter still needs a GSGLOBAL pointer. Once those records become
- * project-owned packet data, gfx_ps2 will no longer depend on gsKit types.
- */
-static GSGLOBAL *s_gs;
 static struct ShaderProgram s_shaders[PS2_GFX_MAX_SHADERS];
 static struct ShaderProgram *s_shader;
 static Ps2GsTextureHandle s_selected_texture[2];
@@ -73,19 +69,8 @@ static bool s_warned_framebuffer;
 static bool s_warned_depth_prim;
 static bool s_warned_mipmap;
 
-static GSPRIMSTQPOINT s_stq_vertices[PS2_GFX_TRANSLATE_VERTS];
-static GSPRIMPOINT s_color_vertices[PS2_GFX_TRANSLATE_VERTS];
-
-extern "C" void gfxPs2BindGs(GSGLOBAL *gs)
-{
-    s_gs = gs;
-    if (gs) {
-        s_viewport.x = 0;
-        s_viewport.y = 0;
-        s_viewport.width = gs->Width;
-        s_viewport.height = gs->Height;
-    }
-}
+static struct Ps2GsTexturedVertex s_stq_vertices[PS2_GFX_TRANSLATE_VERTS];
+static struct Ps2GsColorVertex s_color_vertices[PS2_GFX_TRANSLATE_VERTS];
 
 static const char *ps2_get_name(void)
 {
@@ -317,6 +302,56 @@ static uint8_t ps2_color_component(float v)
     return (uint8_t)out;
 }
 
+static uint32_t ps2_float_bits(float value)
+{
+    uint32_t bits;
+    memcpy(&bits, &value, sizeof(bits));
+    return bits;
+}
+
+static struct Ps2GsPackedReg ps2_pack_rgbaq(
+    uint8_t r, uint8_t g, uint8_t b, uint8_t a, float q)
+{
+    struct Ps2GsPackedReg out;
+    out.value = (uint64_t)r |
+                ((uint64_t)g << 8) |
+                ((uint64_t)b << 16) |
+                ((uint64_t)a << 24) |
+                ((uint64_t)ps2_float_bits(q) << 32);
+    out.reg = PS2_GS_REG_RGBAQ;
+    return out;
+}
+
+static struct Ps2GsPackedReg ps2_pack_st(float s, float t)
+{
+    struct Ps2GsPackedReg out;
+    out.value = (uint64_t)ps2_float_bits(s) |
+                ((uint64_t)ps2_float_bits(t) << 32);
+    out.reg = PS2_GS_REG_ST;
+    return out;
+}
+
+static int ps2_fixed_xy(float value, int offset)
+{
+    int fixed = (int)(value * 16.0f) + offset;
+    if (fixed < 0) fixed = 0;
+    if (fixed >= 4096 * 16) fixed = 4096 * 16 - 1;
+    return fixed;
+}
+
+static struct Ps2GsPackedReg ps2_pack_xyz2(float x, float y, int z)
+{
+    const uint32_t fx = (uint32_t)ps2_fixed_xy(x, ps2GsCoreGetOffsetX());
+    const uint32_t fy = (uint32_t)ps2_fixed_xy(y, ps2GsCoreGetOffsetY());
+
+    struct Ps2GsPackedReg out;
+    out.value = (uint64_t)(fx & 0xffffu) |
+                ((uint64_t)(fy & 0xffffu) << 16) |
+                ((uint64_t)(uint32_t)z << 32);
+    out.reg = PS2_GS_REG_XYZ2;
+    return out;
+}
+
 static int ps2_map_clip_depth(float z, float w)
 {
     float ndc = (w != 0.0f) ? (z / w) : 1.0f;
@@ -352,7 +387,7 @@ static size_t ps2_vbo_stride(const struct ShaderProgram *prg)
 
 static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_vbo_num_tris)
 {
-    if (!s_gs || !s_shader || !s_shader->supported || !buf_vbo || buf_vbo_num_tris == 0) {
+    if (!ps2GsCoreIsReady() || !s_shader || !s_shader->supported || !buf_vbo || buf_vbo_num_tris == 0) {
         return;
     }
 
@@ -421,12 +456,12 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
             const uint8_t ca = s_use_alpha ? ps2_color_component(a) : 0x80;
 
             if (s_shader->textured) {
-                s_stq_vertices[i].rgbaq = color_to_RGBAQ(cr, cg, cb, ca, inv_w);
-                s_stq_vertices[i].stq = vertex_to_STQ(tex_u[0] * inv_w, tex_v[0] * inv_w);
-                s_stq_vertices[i].xyz2 = vertex_to_XYZ2(s_gs, sx, sy, iz);
+                s_stq_vertices[i].rgbaq = ps2_pack_rgbaq(cr, cg, cb, ca, inv_w);
+                s_stq_vertices[i].st = ps2_pack_st(tex_u[0] * inv_w, tex_v[0] * inv_w);
+                s_stq_vertices[i].xyz2 = ps2_pack_xyz2(sx, sy, iz);
             } else {
-                s_color_vertices[i].rgbaq = color_to_RGBAQ(cr, cg, cb, ca, 0.0f);
-                s_color_vertices[i].xyz2 = vertex_to_XYZ2(s_gs, sx, sy, iz);
+                s_color_vertices[i].rgbaq = ps2_pack_rgbaq(cr, cg, cb, ca, 0.0f);
+                s_color_vertices[i].xyz2 = ps2_pack_xyz2(sx, sy, iz);
             }
         }
 
@@ -439,6 +474,22 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
 
         base_vertex += batch_vertices;
     }
+}
+
+static void ps2_reset_viewport(void)
+{
+    if (!ps2GsCoreIsReady()) {
+        s_viewport.x = 0;
+        s_viewport.y = 0;
+        s_viewport.width = 0;
+        s_viewport.height = 0;
+        return;
+    }
+
+    s_viewport.x = 0;
+    s_viewport.y = 0;
+    s_viewport.width = ps2GsCoreGetWidth();
+    s_viewport.height = ps2GsCoreGetHeight();
 }
 
 static void ps2_init(void)
@@ -456,27 +507,16 @@ static void ps2_init(void)
     s_filter_mode = FILTER_LINEAR;
     s_mipmap_filter = MIPMAP_DISABLED;
     s_anisotropy = 1;
-
-    if (s_gs) {
-        s_viewport.x = 0;
-        s_viewport.y = 0;
-        s_viewport.width = s_gs->Width;
-        s_viewport.height = s_gs->Height;
-    }
+    ps2_reset_viewport();
 
     sysLogPrintf(LOG_NOTE,
-        "GfxPS2 init: shaders=%d translate_batch=%d GS textures owned by core",
+        "GfxPS2 init: shaders=%d translate_batch=%d GS packet vertices owned by adapter",
         PS2_GFX_MAX_SHADERS, PS2_GFX_TRANSLATE_VERTS);
 }
 
 static void ps2_on_resize(void)
 {
-    if (s_gs) {
-        s_viewport.x = 0;
-        s_viewport.y = 0;
-        s_viewport.width = s_gs->Width;
-        s_viewport.height = s_gs->Height;
-    }
+    ps2_reset_viewport();
 }
 
 static void ps2_start_frame(void)
@@ -581,7 +621,8 @@ static int ps2_get_max_anisotropy_level(void)
     return 1;
 }
 
-extern "C" struct GfxRenderingAPI gfx_ps2_api = {
+extern "C" {
+struct GfxRenderingAPI gfx_ps2_api = {
     ps2_get_name,
     ps2_get_max_texture_size,
     ps2_get_clip_parameters,
@@ -621,3 +662,4 @@ extern "C" struct GfxRenderingAPI gfx_ps2_api = {
     ps2_set_anisotropy_level,
     ps2_get_max_anisotropy_level,
 };
+}
