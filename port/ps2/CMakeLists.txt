@@ -111,6 +111,13 @@ foreach(lang_json IN LISTS PD_PS2_LANG_JSON)
     "lang/${lang_name}.json" "mklang" "lang/${lang_name}.h" "en")
 endforeach()
 
+file(GLOB PD_PS2_PADS_JSON CONFIGURE_DEPENDS "${PD_PS2_ASSET_DIR}/pads/*.json")
+foreach(pads_json IN LISTS PD_PS2_PADS_JSON)
+  get_filename_component(pads_name "${pads_json}" NAME_WE)
+  pd_ps2_generate_asset_header(
+    "pads/${pads_name}.json" "mkpads" "pads/${pads_name}.h")
+endforeach()
+
 add_custom_target(pd_ps2_asset_headers DEPENDS ${PD_PS2_GENERATED_HEADERS})
 
 add_executable(pd_ps2_bootstrap
