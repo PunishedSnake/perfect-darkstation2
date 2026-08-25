@@ -65,6 +65,7 @@ add_executable(pd_ps2_bootstrap
   system_ps2.c
   video_diag.c
   gs_core.cpp
+  gs_native_queue.cpp
   gfx_api_scene.c
   gfx_ps2.cpp
   gfx_window_ps2.c
@@ -109,8 +110,9 @@ set_target_properties(pd_ps2_bootstrap PROPERTIES
 # The real Fast3D translator remains linked as the compatibility frontend.
 # gfx_api_scene.c is the current lower-level correctness baseline while GS
 # ownership is moved below gfx_ps2 into gs_core. DualShock 2 input is a separate
-# physical backend plus semantic shooter mapping, ready to be bridged into the
-# full Perfect Dark input API without flattening native dual-analog data first.
+# physical backend plus semantic shooter mapping. gs_native_queue is the first
+# project-owned PATH3 transport layer and is compiled before taking over the
+# active renderer so packet correctness can be gated independently.
 
 message(STATUS "Perfect Dark PS2 bootstrap root: ${PD_ROOT}")
 message(STATUS "Perfect Dark PS2 bootstrap gsKit: ${GSKIT}")
