@@ -11,4 +11,14 @@
  */
 void ps2LogFlush(void);
 
+/*
+ * Durable bring-up checkpoint.
+ *
+ * Current PS2SDK does not implement fsync(). On filesystem-backed launchers,
+ * especially mass:, file size/directory metadata may remain stale until close.
+ * A checkpoint therefore flushes, closes, and reopens the log in append mode.
+ * Keep these checkpoints coarse; do not call this from frame/hot paths.
+ */
+void ps2LogCheckpoint(void);
+
 #endif
