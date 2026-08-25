@@ -1,6 +1,10 @@
 #ifndef PD_PS2_LOG_H
 #define PD_PS2_LOG_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /*
  * PS2 bring-up logger control plane.
  *
@@ -20,5 +24,9 @@ void ps2LogFlush(void);
  * Keep these checkpoints coarse; do not call this from frame/hot paths.
  */
 void ps2LogCheckpoint(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
