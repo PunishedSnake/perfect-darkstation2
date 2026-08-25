@@ -121,6 +121,17 @@ static bool ps2_shader_common_supported(const struct CCFeatures *f)
            !f->used_textures[1] && f->num_inputs <= 1;
 }
 
+static bool ps2_shader_item_is_tex0_alpha(uint8_t item)
+{
+    /*
+     * CURRENT IMPLEMENTATION: gfx_generate_cc() encodes G_ACMUX_TEXEL0 as
+     * SHADER_TEXEL0 in the alpha half. SHADER_TEXEL0A is used when texture
+     * alpha enters through the RGB combiner. Both mean texel0.a when consumed
+     * as an alpha scalar, matching the current OpenGL backend's interpretation.
+     */
+    return item == SHADER_TEXEL0 || item == SHADER_TEXEL0A;
+}
+
 static bool ps2_shader_alpha_is_input1(const struct CCFeatures *f)
 {
     return !f->opt_alpha ||
@@ -130,7 +141,7 @@ static bool ps2_shader_alpha_is_input1(const struct CCFeatures *f)
 static bool ps2_shader_alpha_is_tex0(const struct CCFeatures *f)
 {
     return !f->opt_alpha ||
-           (f->do_single[0][1] && f->c[0][1][3] == SHADER_TEXEL0A);
+           (f->do_single[0][1] && ps2_shader_item_is_tex0_alpha(f->c[0][1][3]));
 }
 
 static bool ps2_shader_alpha_is_tex0_mul_input1(const struct CCFeatures *f)
@@ -141,8 +152,8 @@ static bool ps2_shader_alpha_is_tex0_mul_input1(const struct CCFeatures *f)
 
     const uint8_t a = f->c[0][1][0];
     const uint8_t c = f->c[0][1][2];
-    return (a == SHADER_TEXEL0A && c == SHADER_INPUT_1) ||
-           (a == SHADER_INPUT_1 && c == SHADER_TEXEL0A);
+    return (ps2_shader_item_is_tex0_alpha(a) && c == SHADER_INPUT_1) ||
+           (a == SHADER_INPUT_1 && ps2_shader_item_is_tex0_alpha(c));
 }
 
 static bool ps2_shader_is_untextured_input1(const struct CCFeatures *f)
