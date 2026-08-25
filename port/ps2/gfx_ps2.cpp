@@ -35,6 +35,7 @@
 
 #define PS2_GFX_MAX_SHADERS 32
 #define PS2_GFX_TRANSLATE_VERTS 96
+#define PS2_GFX_ALPHA_THRESHOLD 8u
 
 /* GS packed-register IDs consumed by the packet-ready core boundary. */
 #define PS2_GS_REG_RGBAQ 0x01u
@@ -106,12 +107,13 @@ static bool ps2_shader_common_supported(const struct CCFeatures *f)
     /*
      * These options need explicit GS state or an additional rendering pass.
      * Reject them until that mapping exists instead of accepting a visually
-     * plausible but semantically wrong approximation.
+     * plausible but semantically wrong approximation. Alpha threshold is the
+     * exception: Fast3D defines it as alpha >= 8/256 and GS TEST maps it exactly.
      */
     return !f->opt_fog && !f->opt_texture_edge && !f->opt_noise &&
-           !f->opt_2cyc && !f->opt_alpha_threshold && !f->opt_invisible &&
-           !f->opt_grayscale && !f->opt_blur && !f->used_textures[1] &&
-           f->num_inputs <= 1;
+           !f->opt_2cyc && !f->opt_invisible && !f->opt_grayscale &&
+           !f->opt_blur && (!f->opt_alpha_threshold || f->opt_alpha) &&
+           !f->used_textures[1] && f->num_inputs <= 1;
 }
 
 static bool ps2_shader_alpha_is_input1(const struct CCFeatures *f)
@@ -215,13 +217,17 @@ static void ps2_unload_shader(struct ShaderProgram *old_prg)
 static void ps2_load_shader(struct ShaderProgram *new_prg)
 {
     s_shader = new_prg;
+
+    const bool threshold = new_prg && new_prg->supported &&
+                           new_prg->features.opt_alpha_threshold;
+    ps2GsCoreSetAlphaTest(threshold, threshold ? PS2_GFX_ALPHA_THRESHOLD : 0u);
 }
 
 static struct ShaderProgram *ps2_create_and_load_new_shader(uint64_t shader_id0, uint32_t shader_id1)
 {
     struct ShaderProgram *existing = ps2_lookup_shader(shader_id0, shader_id1);
     if (existing) {
-        s_shader = existing;
+        ps2_load_shader(existing);
         return existing;
     }
 
@@ -241,7 +247,7 @@ static struct ShaderProgram *ps2_create_and_load_new_shader(uint64_t shader_id0,
 
             ps2_log_shader_recipe(i, prg);
 
-            s_shader = prg;
+            ps2_load_shader(prg);
             return prg;
         }
     }
@@ -594,6 +600,7 @@ static void ps2_init(void)
     s_filter_mode = FILTER_LINEAR;
     s_mipmap_filter = MIPMAP_DISABLED;
     s_anisotropy = 1;
+    ps2GsCoreSetAlphaTest(false, 0u);
     ps2_reset_viewport();
 
     sysLogPrintf(LOG_NOTE,
