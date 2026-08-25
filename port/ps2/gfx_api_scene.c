@@ -2,10 +2,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "controls_ps2.h"
 #include "gfx_cc.h"
 #include "gfx_ps2.h"
 #include "gfx_window_ps2.h"
 #include "gs_core.h"
+#include "pad_ps2.h"
 #include "system.h"
 #include "log_ps2.h"
 
@@ -18,7 +20,7 @@
 #define API_SCENE_DRAW_VERTEX_COUNT \
     (API_SCENE_FACE_COUNT * API_SCENE_TRIANGLES_PER_FACE * API_SCENE_VERTICES_PER_TRIANGLE)
 #define API_SCENE_TEXTURED_STRIDE 9
-#define API_SCENE_STATUS_VERTEX_COUNT 6
+#define API_SCENE_STATUS_VERTEX_COUNT 12
 #define API_SCENE_UNTEXTURED_STRIDE 7
 
 struct api_scene_vec3 {
@@ -112,18 +114,20 @@ static struct api_scene_clip_vertex projectVertex(
     float cosY,
     float sinX,
     float cosX,
-    float aspect)
+    float aspect,
+    float offsetX,
+    float cameraDistance)
 {
-    const float rx = source->x * cosY + source->z * sinY;
+    const float rx = source->x * cosY + source->z * sinY + offsetX;
     const float rz0 = -source->x * sinY + source->z * cosY;
     const float ry = source->y * cosX - rz0 * sinX;
     const float rz = source->y * sinX + rz0 * cosX;
-    const float cameraZ = rz + 4.6f;
+    const float cameraZ = rz + cameraDistance;
 
     const float focalY = 2.36f;
     const float focalX = focalY / aspect;
     const float nearZ = 2.5f;
-    const float farZ = 7.0f;
+    const float farZ = 7.5f;
     const float depth01 = clampfLocal((cameraZ - nearZ) / (farZ - nearZ), 0.0f, 1.0f);
 
     struct api_scene_clip_vertex out;
@@ -156,13 +160,21 @@ static void writeTexturedVertex(
     *dst = p;
 }
 
-static void buildCubeVbo(float sinY, float cosY, float sinX, float cosX, float aspect)
+static void buildCubeVbo(
+    float sinY,
+    float cosY,
+    float sinX,
+    float cosX,
+    float aspect,
+    float offsetX,
+    float cameraDistance)
 {
     struct api_scene_clip_vertex projected[API_SCENE_VERTEX_COUNT];
     float *dst = sCubeVbo;
 
     for (int i = 0; i < API_SCENE_VERTEX_COUNT; ++i) {
-        projected[i] = projectVertex(&kCubeVertices[i], sinY, cosY, sinX, cosX, aspect);
+        projected[i] = projectVertex(
+            &kCubeVertices[i], sinY, cosY, sinX, cosX, aspect, offsetX, cameraDistance);
     }
 
     for (int faceIndex = 0; faceIndex < API_SCENE_FACE_COUNT; ++faceIndex) {
@@ -195,29 +207,62 @@ static void writeUntexturedVertex(float **dst, float x, float y, float z, float 
     *dst = p;
 }
 
-static void buildStatusVbo(int romStatus)
+static void writeStatusQuad(
+    float **dst, float y0, float y1, float r, float g, float b)
 {
-    float r = 0.95f;
-    float g = 0.65f;
-    float b = 0.15f;
+    writeUntexturedVertex(dst, -0.78f, y0, 0.96f, r, g, b);
+    writeUntexturedVertex(dst,  0.78f, y0, 0.96f, r, g, b);
+    writeUntexturedVertex(dst,  0.78f, y1, 0.96f, r, g, b);
+    writeUntexturedVertex(dst, -0.78f, y0, 0.96f, r, g, b);
+    writeUntexturedVertex(dst,  0.78f, y1, 0.96f, r, g, b);
+    writeUntexturedVertex(dst, -0.78f, y1, 0.96f, r, g, b);
+}
+
+static void buildStatusVbo(int romStatus, const struct Ps2ShooterControls *controls)
+{
     float *dst = sStatusVbo;
+    float romR = 0.95f;
+    float romG = 0.65f;
+    float romB = 0.15f;
 
     if (romStatus > 0) {
-        r = 0.25f;
-        g = 0.95f;
-        b = 0.50f;
+        romR = 0.25f;
+        romG = 0.95f;
+        romB = 0.50f;
     } else if (romStatus < 0) {
-        r = 1.0f;
-        g = 0.25f;
-        b = 0.25f;
+        romR = 1.0f;
+        romG = 0.25f;
+        romB = 0.25f;
     }
 
-    writeUntexturedVertex(&dst, -0.78f, -0.82f, 0.96f, r, g, b);
-    writeUntexturedVertex(&dst,  0.78f, -0.82f, 0.96f, r, g, b);
-    writeUntexturedVertex(&dst,  0.78f, -0.77f, 0.96f, r, g, b);
-    writeUntexturedVertex(&dst, -0.78f, -0.82f, 0.96f, r, g, b);
-    writeUntexturedVertex(&dst,  0.78f, -0.77f, 0.96f, r, g, b);
-    writeUntexturedVertex(&dst, -0.78f, -0.77f, 0.96f, r, g, b);
+    writeStatusQuad(&dst, -0.84f, -0.79f, romR, romG, romB);
+
+    float inputR = 0.18f;
+    float inputG = 0.18f;
+    float inputB = 0.22f;
+    if (controls && controls->connected) {
+        inputR = 0.20f;
+        inputG = 0.80f;
+        inputB = 0.95f;
+
+        if (controls->held & PS2_ACTION_AIM) {
+            inputR = 0.30f;
+            inputG = 0.50f;
+            inputB = 1.0f;
+        }
+        if (controls->held & PS2_ACTION_ALT_FIRE) {
+            inputR = 0.95f;
+            inputG = 0.25f;
+            inputB = 0.85f;
+        }
+        if (controls->held & PS2_ACTION_FIRE) {
+            inputR = 1.0f;
+            inputG = 0.18f;
+            inputB = 0.12f;
+        }
+    }
+
+    writeStatusQuad(&dst, -0.73f, -0.68f, inputR, inputG, inputB);
 }
 
 static void advanceRotation(float *sinValue, float *cosValue, float sinStep, float cosStep)
@@ -227,6 +272,20 @@ static void advanceRotation(float *sinValue, float *cosValue, float sinStep, flo
 
     *sinValue = oldSin * cosStep + oldCos * sinStep;
     *cosValue = oldCos * cosStep - oldSin * sinStep;
+}
+
+static void advanceRotationDelta(float *sinValue, float *cosValue, float delta)
+{
+    delta = clampfLocal(delta, -0.04f, 0.04f);
+    const float sinStep = delta;
+    const float cosStep = 1.0f - 0.5f * delta * delta;
+    advanceRotation(sinValue, cosValue, sinStep, cosStep);
+
+    /* Cheap near-unit renormalisation. One Newton step is enough for tiny deltas. */
+    const float length2 = *sinValue * *sinValue + *cosValue * *cosValue;
+    const float correction = 1.5f - 0.5f * length2;
+    *sinValue *= correction;
+    *cosValue *= correction;
 }
 
 bool ps2GfxApiSceneRun(int romStatus)
@@ -298,14 +357,14 @@ bool ps2GfxApiSceneRun(int romStatus)
     api->set_scissor(0, 0, width, height);
     api->set_use_alpha(false, false);
 
-    buildStatusVbo(romStatus);
-
     sysLogPrintf(LOG_NOTE,
         "GfxAPI scene: texture=%u shader_tex=%016llx shader_color=%016llx triangles=%d",
         textureId,
         (unsigned long long)texturedShaderId,
         (unsigned long long)untexturedShaderId,
         API_SCENE_DRAW_VERTEX_COUNT / 3);
+    sysLogPrintf(LOG_NOTE,
+        "GfxAPI scene: DS2 smoke right=rotate left=move/zoom R1=fire+rumble L1=precision Cross=reset");
     sysLogPrintf(LOG_NOTE,
         "GfxAPI scene: entering clip-space VBO -> Fast3D adapter -> GS core frame loop");
     ps2LogCheckpoint();
@@ -318,6 +377,8 @@ bool ps2GfxApiSceneRun(int romStatus)
     float cosY = 1.0f;
     float sinX = 0.0f;
     float cosX = 1.0f;
+    float offsetX = 0.0f;
+    float cameraDistance = 4.6f;
     const float aspect = (float)width / (float)height;
 
     for (;;) {
@@ -326,14 +387,55 @@ bool ps2GfxApiSceneRun(int romStatus)
             continue;
         }
 
-        buildCubeVbo(sinY, cosY, sinX, cosX, aspect);
+        /*
+         * Input is sampled at the beginning of the frame and consumed by this
+         * frame's render state. Do not add a render-ahead queue to a controller
+         * correctness test unless a later measured scheduler requires one.
+         */
+        ps2ShooterControlsUpdate();
+        const struct Ps2ShooterControls *controls = ps2ShooterControlsGet(0);
+
+        if (controls && controls->connected) {
+            if (controls->pressed & PS2_ACTION_USE) {
+                sinY = 0.0f;
+                cosY = 1.0f;
+                sinX = 0.0f;
+                cosX = 1.0f;
+                offsetX = 0.0f;
+                cameraDistance = 4.6f;
+            }
+
+            const float lookScale = (controls->held & PS2_ACTION_AIM) ? 0.010f : 0.024f;
+            advanceRotationDelta(&sinY, &cosY, controls->look_x * lookScale);
+            advanceRotationDelta(&sinX, &cosX, controls->look_y * lookScale);
+
+            offsetX = clampfLocal(offsetX + controls->move_x * 0.025f, -1.4f, 1.4f);
+            cameraDistance = clampfLocal(
+                cameraDistance - controls->move_y * 0.035f, 3.8f, 6.5f);
+
+            uint8_t rumble = 0;
+            if (controls->held & PS2_ACTION_ALT_FIRE) {
+                rumble = 180;
+            }
+            if (controls->held & PS2_ACTION_FIRE) {
+                rumble = 96;
+            }
+            ps2PadSetRumble(0, 0, rumble);
+        } else {
+            /* Preserve the old unattended graphics smoke when no pad is present. */
+            advanceRotation(&sinY, &cosY, sinStepY, cosStepY);
+            advanceRotation(&sinX, &cosX, sinStepX, cosStepX);
+        }
+
+        buildStatusVbo(romStatus, controls);
+        buildCubeVbo(sinY, cosY, sinX, cosX, aspect, offsetX, cameraDistance);
 
         api->start_frame();
         api->clear_framebuffer(true, true);
 
         api->load_shader(untexturedShader);
         api->draw_triangles(sStatusVbo,
-            sizeof(sStatusVbo) / sizeof(sStatusVbo[0]), 2);
+            sizeof(sStatusVbo) / sizeof(sStatusVbo[0]), API_SCENE_STATUS_VERTEX_COUNT / 3);
 
         api->load_shader(texturedShader);
         api->draw_triangles(sCubeVbo,
@@ -343,8 +445,5 @@ bool ps2GfxApiSceneRun(int romStatus)
         wapi->swap_buffers_begin();
         api->finish_render();
         wapi->swap_buffers_end();
-
-        advanceRotation(&sinY, &cosY, sinStepY, cosStepY);
-        advanceRotation(&sinX, &cosX, sinStepX, cosStepX);
     }
 }
