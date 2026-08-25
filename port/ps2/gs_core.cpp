@@ -1,4 +1,5 @@
 #include <stdbool.h>
+#include <stdint.h>
 
 #include <dmaKit.h>
 #include <gsKit.h>
@@ -127,4 +128,78 @@ extern "C" void ps2GsCoreClear(bool clear_color, bool clear_depth)
      * pass requires them. Do not silently fake one half of the operation.
      */
     gsKit_clear(s_gs, GS_SETREG_RGBAQ(0x00, 0x00, 0x00, 0x80, 0x00));
+}
+
+extern "C" void ps2GsCoreSetScissor(int x, int y, int width, int height)
+{
+    if (!s_gs || width <= 0 || height <= 0) {
+        return;
+    }
+
+    int x0 = x;
+    int y0 = y;
+    int x1 = x + width - 1;
+    int y1 = y + height - 1;
+
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 >= s_gs->Width) x1 = s_gs->Width - 1;
+    if (y1 >= s_gs->Height) y1 = s_gs->Height - 1;
+
+    if (x0 <= x1 && y0 <= y1) {
+        gsKit_set_scissor(s_gs, GS_SETREG_SCISSOR(x0, x1, y0, y1));
+    }
+}
+
+static void ps2GsCoreEmitZbufWriteMask(bool depth_update)
+{
+    if (!s_gs || !s_gs->ZBuffering) {
+        return;
+    }
+
+    u64 *p = (u64 *)gsKit_heap_alloc(s_gs, 1, 16, GIF_AD);
+    *p++ = GIF_TAG_AD(1);
+    *p++ = GIF_AD;
+    *p++ = GS_SETREG_ZBUF(s_gs->ZBuffer / 8192, s_gs->PSMZ, depth_update ? 0 : 1);
+    *p++ = GS_ZBUF_1 + s_gs->PrimContext;
+}
+
+extern "C" void ps2GsCoreSetDepthMode(bool depth_test, bool depth_update, bool depth_compare)
+{
+    if (!s_gs) {
+        return;
+    }
+
+    if (depth_test && depth_compare) {
+        gsKit_set_test(s_gs, GS_ZTEST_ON);
+    } else {
+        gsKit_set_test(s_gs, GS_ZTEST_OFF);
+    }
+
+    ps2GsCoreEmitZbufWriteMask(depth_update);
+}
+
+extern "C" void ps2GsCoreSetAlphaBlend(bool enable)
+{
+    if (!s_gs) {
+        return;
+    }
+
+    s_gs->PrimAlphaEnable = enable ? GS_SETTING_ON : GS_SETTING_OFF;
+    if (enable) {
+        /* Standard source-alpha over destination baseline. */
+        gsKit_set_primalpha(s_gs, GS_SETREG_ALPHA(0, 1, 0, 1, 0), 0);
+    }
+}
+
+extern "C" void ps2GsCoreSetTextureClamp(uint32_t cms, uint32_t cmt)
+{
+    if (!s_gs) {
+        return;
+    }
+
+    /* N64 G_TX_CLAMP is bit 1; mirror semantics remain a Fast3D TODO. */
+    s_gs->Clamp->WMS = (cms & 2u) ? GS_CMODE_CLAMP : GS_CMODE_REPEAT;
+    s_gs->Clamp->WMT = (cmt & 2u) ? GS_CMODE_CLAMP : GS_CMODE_REPEAT;
+    gsKit_set_clamp(s_gs, GS_CMODE_RESET);
 }
