@@ -5,6 +5,8 @@ on:
     branches: [ "ps2" ]
     paths:
       - "port/ps2/**"
+      - "port/src/romsource.c"
+      - "port/include/romsource.h"
       - "port/include/system.h"
       - "include/**"
       - ".github/workflows/ps2-bootstrap.yml"
@@ -12,6 +14,8 @@ on:
     branches: [ "ps2" ]
     paths:
       - "port/ps2/**"
+      - "port/src/romsource.c"
+      - "port/include/romsource.h"
       - "port/include/system.h"
       - "include/**"
       - ".github/workflows/ps2-bootstrap.yml"

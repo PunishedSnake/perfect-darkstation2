@@ -18,6 +18,7 @@ get_filename_component(PD_ROOT "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
 add_executable(pd_ps2_bootstrap
   bootstrap.c
   system_ps2.c
+  "${PD_ROOT}/port/src/romsource.c"
 )
 
 target_include_directories(pd_ps2_bootstrap PRIVATE
