@@ -47,6 +47,7 @@ endif()
 set(PD_PS2_COMMON_INCLUDE_DIRS
   "${PD_ROOT}/include"
   "${PD_ROOT}/include/PR"
+  "${PD_ROOT}/src/include"
   "${PD_ROOT}/port/include"
   "${PD_ROOT}/port/fast3d"
 )
