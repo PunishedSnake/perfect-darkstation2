@@ -29,6 +29,9 @@ static struct Ps2GsTextureSlot s_textures[PS2_GS_MAX_TEXTURES];
 static bool s_frame_building;
 static bool s_depth_update = true;
 static bool s_native_submit_failed;
+static uint8_t s_fog_r;
+static uint8_t s_fog_g;
+static uint8_t s_fog_b;
 
 static_assert(sizeof(Ps2GsColorVertex) == sizeof(GSPRIMPOINT),
     "packet-ready color vertex must match current gsKit A+D source layout");
@@ -110,6 +113,20 @@ static void ps2GsCoreEmitAlpha(void)
 
     ps2GsCoreWriteReg(&p[0], s_gs->PABE, GS_PABE);
     ps2GsCoreWriteReg(&p[1], s_gs->PrimAlpha, GS_ALPHA_1 + s_gs->PrimContext);
+}
+
+static void ps2GsCoreEmitFogColor(void)
+{
+    if (!s_gs->PrimFogEnable) {
+        return;
+    }
+
+    struct Ps2GsPackedReg *p = ps2GsCoreReserve(1);
+    if (p) {
+        ps2GsCoreWriteReg(p,
+            (uint64_t)s_fog_r | ((uint64_t)s_fog_g << 8) | ((uint64_t)s_fog_b << 16),
+            GS_FOGCOL);
+    }
 }
 
 static void ps2GsCoreEmitClamp(void)
@@ -209,10 +226,14 @@ extern "C" bool ps2GsCoreInit(const struct Ps2GsCreateInfo *info)
     s_frame_building = false;
     s_depth_update = true;
     s_native_submit_failed = false;
+    s_fog_r = 0;
+    s_fog_g = 0;
+    s_fog_b = 0;
     memset(s_textures, 0, sizeof(s_textures));
 
     /* Match the previous gsKit Z-test baseline without queuing a gsKit packet. */
     s_gs->Test->ZTST = config->z_buffering ? 2 : 1;
+    s_gs->PrimFogEnable = GS_SETTING_OFF;
 
     if (!ps2GsNativeQueueInit(PS2_GS_NATIVE_QUEUE_QW)) {
         sysLogPrintf(LOG_ERROR, "GS core: native PATH3 queue initialisation failed");
@@ -314,6 +335,7 @@ extern "C" void ps2GsCoreBeginFrame(void)
     ps2GsCoreEmitZbufWriteMask();
     ps2GsCoreEmitClamp();
     ps2GsCoreEmitAlpha();
+    ps2GsCoreEmitFogColor();
 }
 
 extern "C" void ps2GsCoreSubmit(void)
@@ -359,8 +381,8 @@ extern "C" void ps2GsCoreClear(bool clear_color, bool clear_depth)
      * Preserve the previous gsKit clear contract for the correctness baseline:
      * either requested clear draws the black full-screen sprite sequence while
      * Z comparison is forced ALWAYS, then restores the current TEST register.
-     * Split color/depth clears remain a later API extension once Perfect Dark
-     * demonstrates a real pass that needs them.
+     * Fog is explicitly disabled for the clear primitive so persistent material
+     * state from the previous frame cannot tint the render target.
      */
     const uint32_t slices = ((uint32_t)s_gs->Width + 63u) / 64u;
     const uint32_t register_count = 4u + slices * 2u;
@@ -378,7 +400,7 @@ extern "C" void ps2GsCoreClear(bool clear_color, bool clear_depth)
             GS_PRIM_PRIM_SPRITE,
             0,
             0,
-            s_gs->PrimFogEnable,
+            0,
             s_gs->PrimAlphaEnable,
             s_gs->PrimAAEnable,
             0,
@@ -477,6 +499,22 @@ extern "C" void ps2GsCoreSetAlphaTest(bool enable, uint8_t reference)
 
     if (s_frame_building) {
         ps2GsCoreEmitTest();
+    }
+}
+
+extern "C" void ps2GsCoreSetFog(bool enable, uint8_t r, uint8_t g, uint8_t b)
+{
+    if (!s_gs) {
+        return;
+    }
+
+    s_gs->PrimFogEnable = enable ? GS_SETTING_ON : GS_SETTING_OFF;
+    s_fog_r = r;
+    s_fog_g = g;
+    s_fog_b = b;
+
+    if (enable && s_frame_building) {
+        ps2GsCoreEmitFogColor();
     }
 }
 
