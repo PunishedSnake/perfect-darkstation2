@@ -9,6 +9,7 @@
 #include "gfx_cc.h"
 #include "gfx_rendering_api.h"
 #include "gfx_ps2.h"
+#include "gs_core.h"
 #include "system.h"
 
 /*
@@ -595,16 +596,12 @@ static void ps2_on_resize(void)
 
 static void ps2_start_frame(void)
 {
-    if (s_gs) {
-        gsKit_set_scissor(s_gs, GS_SCISSOR_RESET);
-    }
+    ps2GsCoreBeginFrame();
 }
 
 static void ps2_end_frame(void)
 {
-    if (s_gs) {
-        gsKit_queue_exec(s_gs);
-    }
+    ps2GsCoreSubmit();
 }
 
 static void ps2_finish_render(void)
@@ -648,16 +645,7 @@ static void ps2_copy_framebuffer(int fb_dst, int fb_src, int left, int top, bool
 
 static void ps2_clear_framebuffer(bool clear_color, bool clear_depth)
 {
-    if (!s_gs || (!clear_color && !clear_depth)) {
-        return;
-    }
-
-    /*
-     * Bring-up baseline clears color and Z together. Split color/depth clears
-     * need an explicit GS packet and will be added when a real PD pass asks for
-     * them; silently faking one without the other would hide a correctness bug.
-     */
-    gsKit_clear(s_gs, GS_SETREG_RGBAQ(0x00, 0x00, 0x00, 0x80, 0x00));
+    ps2GsCoreClear(clear_color, clear_depth);
 }
 
 static void ps2_resolve_msaa_color_buffer(int fb_id_target, int fb_id_source)
