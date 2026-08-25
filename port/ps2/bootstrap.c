@@ -6,7 +6,7 @@
 #include "system.h"
 
 #define BOOTSTRAP_HEAP_SMOKE_SIZE 4096u
-#define DEFAULT_ROM_PATH "host:pd.ntsc-final.z64"
+#define DEFAULT_ROM_NAME "pd.ntsc-final.z64"
 
 bool ps2VideoDiagRun(int rom_status);
 int ps2RomProbe(const char *path);
@@ -47,6 +47,20 @@ static void bootstrapTestRomSource(void)
     puts("ROM source memory smoke: ok");
 }
 
+static const char *bootstrapResolveRomPath(char *path, u32 pathLen)
+{
+    const char *explicitPath = sysArgGetString("--rom-file");
+
+    if (explicitPath && explicitPath[0]) {
+        return explicitPath;
+    }
+
+    char base[768];
+    sysGetExecutablePath(base, sizeof(base));
+    snprintf(path, pathLen, "%s/%s", base, DEFAULT_ROM_NAME);
+    return path;
+}
+
 int main(int argc, char **argv)
 {
     sysInitArgs(argc, (const char **)argv);
@@ -74,10 +88,9 @@ int main(int argc, char **argv)
     puts("heap smoke: ok");
     bootstrapTestRomSource();
 
-    const char *romPath = argc > 1 ? argv[1] : DEFAULT_ROM_PATH;
-    if (argc <= 1) {
-        printf("ROM probe: no argv path, trying %s\n", DEFAULT_ROM_PATH);
-    }
+    char autoRomPath[1024];
+    const char *romPath = bootstrapResolveRomPath(autoRomPath, sizeof(autoRomPath));
+    printf("ROM probe path: %s\n", romPath);
 
     const int rom_status = ps2RomProbe(romPath);
 
