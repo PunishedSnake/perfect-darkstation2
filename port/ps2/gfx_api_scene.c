@@ -2,11 +2,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include <gsKit.h>
-
 #include "gfx_cc.h"
 #include "gfx_ps2.h"
 #include "gfx_window_ps2.h"
+#include "gs_core.h"
 #include "system.h"
 #include "log_ps2.h"
 
@@ -70,7 +69,7 @@ static const struct api_scene_face kCubeFaces[API_SCENE_FACE_COUNT] = {
  * This is device/transport alignment for one immutable GIF texture source,
  * not an allocator policy for arbitrary game data.
  */
-static u32 sCheckerTexture[API_SCENE_TEXTURE_W * API_SCENE_TEXTURE_H]
+static uint32_t sCheckerTexture[API_SCENE_TEXTURE_W * API_SCENE_TEXTURE_H]
     __attribute__((aligned(64)));
 
 /*
@@ -92,7 +91,7 @@ static void buildCheckerTexture(void)
         for (int x = 0; x < API_SCENE_TEXTURE_W; ++x) {
             const int checker = ((x >> 3) ^ (y >> 3)) & 1;
             const int cross = (x == API_SCENE_TEXTURE_W / 2) || (y == API_SCENE_TEXTURE_H / 2);
-            u32 pixel;
+            uint32_t pixel;
 
             if (cross) {
                 pixel = 0x8028d8ffu;
@@ -121,11 +120,6 @@ static struct api_scene_clip_vertex projectVertex(
     const float rz = source->y * sinX + rz0 * cosX;
     const float cameraZ = rz + 4.6f;
 
-    /*
-     * gfx_ps2 consumes current Fast3D's clip-space contract. W is therefore
-     * real camera depth, not an already-divided screen coordinate. The backend
-     * performs XY/W and emits Q=1/W for GS STQ interpolation.
-     */
     const float focalY = 2.36f;
     const float focalX = focalY / aspect;
     const float nearZ = 2.5f;
@@ -153,11 +147,8 @@ static void writeTexturedVertex(
     *p++ = vertex->y;
     *p++ = vertex->z;
     *p++ = vertex->w;
-
-    /* Current gfx_pc.cpp hands normalized UV to GfxRenderingAPI. */
     *p++ = u;
     *p++ = v;
-
     *p++ = (float)face->r / 128.0f;
     *p++ = (float)face->g / 128.0f;
     *p++ = (float)face->b / 128.0f;
@@ -221,7 +212,6 @@ static void buildStatusVbo(int romStatus)
         b = 0.25f;
     }
 
-    /* Two triangles, far in depth, rendered through the untextured shader. */
     writeUntexturedVertex(&dst, -0.78f, -0.82f, 0.96f, r, g, b);
     writeUntexturedVertex(&dst,  0.78f, -0.82f, 0.96f, r, g, b);
     writeUntexturedVertex(&dst,  0.78f, -0.77f, 0.96f, r, g, b);
@@ -239,9 +229,15 @@ static void advanceRotation(float *sinValue, float *cosValue, float sinStep, flo
     *cosValue = oldCos * cosStep - oldSin * sinStep;
 }
 
-bool ps2GfxApiSceneRun(GSGLOBAL *gs, int romStatus)
+bool ps2GfxApiSceneRun(int romStatus)
 {
-    if (!gs) {
+    if (!ps2GsCoreIsReady()) {
+        return false;
+    }
+
+    const int width = ps2GsCoreGetWidth();
+    const int height = ps2GsCoreGetHeight();
+    if (width <= 0 || height <= 0) {
         return false;
     }
 
@@ -254,8 +250,8 @@ bool ps2GfxApiSceneRun(GSGLOBAL *gs, int romStatus)
         ((uint64_t)SHADER_INPUT_1 << 12);
     const struct GfxWindowInitSettings windowSettings = {
         "Perfect DarkStation 2",
-        (uint32_t)gs->Width,
-        (uint32_t)gs->Height,
+        (uint32_t)width,
+        (uint32_t)height,
         0,
         0,
         true,
@@ -266,11 +262,9 @@ bool ps2GfxApiSceneRun(GSGLOBAL *gs, int romStatus)
     };
 
     sysLogPrintf(LOG_NOTE,
-        "GfxAPI scene: bind current GS and initialise Perfect Dark graphics backends");
+        "GfxAPI scene: initialise Fast3D PS2 backend against GS core");
     ps2LogCheckpoint();
 
-    gfxPs2BindGs(gs);
-    gfxPs2WindowBindGs(gs);
     wapi->init(&windowSettings);
     api->init();
 
@@ -300,8 +294,8 @@ bool ps2GfxApiSceneRun(GSGLOBAL *gs, int romStatus)
 
     api->set_depth_range(0.0f, 1.0f);
     api->set_depth_mode(true, true, true, false, 0);
-    api->set_viewport(0, 0, gs->Width, gs->Height);
-    api->set_scissor(0, 0, gs->Width, gs->Height);
+    api->set_viewport(0, 0, width, height);
+    api->set_scissor(0, 0, width, height);
     api->set_use_alpha(false, false);
 
     buildStatusVbo(romStatus);
@@ -313,7 +307,7 @@ bool ps2GfxApiSceneRun(GSGLOBAL *gs, int romStatus)
         (unsigned long long)untexturedShaderId,
         API_SCENE_DRAW_VERTEX_COUNT / 3);
     sysLogPrintf(LOG_NOTE,
-        "GfxAPI scene: entering clip-space VBO -> GfxRenderingAPI -> GfxWindowManagerAPI frame loop");
+        "GfxAPI scene: entering clip-space VBO -> Fast3D adapter -> GS core frame loop");
     ps2LogCheckpoint();
 
     const float sinStepY = 0.011999712f;
@@ -324,7 +318,7 @@ bool ps2GfxApiSceneRun(GSGLOBAL *gs, int romStatus)
     float cosY = 1.0f;
     float sinX = 0.0f;
     float cosX = 1.0f;
-    const float aspect = (float)gs->Width / (float)gs->Height;
+    const float aspect = (float)width / (float)height;
 
     for (;;) {
         wapi->handle_events();
