@@ -44,7 +44,9 @@ enum {
 struct ColorCombinerKey {
     uint64_t combine_mode;
     uint64_t options;
+#ifdef __cplusplus
     auto operator<=>(const ColorCombinerKey&) const = default;
+#endif
 };
 
 #define SHADER_MAX_TEXTURES 2
