@@ -6,6 +6,7 @@
 #include <strings.h>
 
 #include <kernel.h>
+#include <delaythread.h>
 #include <timer.h>
 
 #include <PR/ultratypes.h>
@@ -222,13 +223,13 @@ void sysSleep(const s64 hns)
         return;
     }
 
-    /* hns is 100 ns. DelayThread accepts microseconds. */
+    /* hns is 100 ns. Current PS2SDK DelayThread accepts signed microseconds. */
     u64 usec = ((u64)hns + 9ULL) / 10ULL;
 
     while (usec) {
-        const u32 chunk = usec > UINT_MAX ? UINT_MAX : (u32)usec;
+        const s32 chunk = usec > (u64)INT_MAX ? INT_MAX : (s32)usec;
         DelayThread(chunk);
-        usec -= chunk;
+        usec -= (u32)chunk;
     }
 }
 
