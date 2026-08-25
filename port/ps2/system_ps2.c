@@ -11,14 +11,24 @@
 
 #include <PR/ultratypes.h>
 #include "system.h"
+#include "log_ps2.h"
 
 #define USEC_IN_SEC 1000000ULL
-#define LOG_FNAME "pd.log"
+#define LOG_FNAME "pdps2.log"
+#define LOG_STAGE_BUFFER_SIZE 8192u
+#define LOG_FLUSH_THRESHOLD 6144u
+
+#ifndef PD_PS2_GIT_COMMIT
+#define PD_PS2_GIT_COMMIT "unknown"
+#endif
 
 static s32 sysArgc;
 static const char **sysArgv;
 static u64 startUsec;
 static char logPath[1024];
+static FILE *logFile;
+static char logStageBuffer[LOG_STAGE_BUFFER_SIZE];
+static u32 logStageUsed;
 
 static u64 timerUsec(void)
 {
@@ -65,6 +75,43 @@ static void pathBaseFromArgv0(char *outPath, u32 outLen)
     }
 }
 
+static void sysLogDisableFileSink(const char *reason)
+{
+    if (logFile) {
+        fclose(logFile);
+        logFile = NULL;
+    }
+
+    if (reason && reason[0]) {
+        fprintf(stderr, "LOGGER: file sink disabled: %s\n", reason);
+    }
+
+    logPath[0] = '\0';
+    logStageUsed = 0;
+}
+
+static void sysLogFlushInternal(void)
+{
+    if (!logFile || logStageUsed == 0) {
+        return;
+    }
+
+    const size_t written = fwrite(logStageBuffer, 1, logStageUsed, logFile);
+    if (written != logStageUsed || fflush(logFile) != 0) {
+        sysLogDisableFileSink("write/flush failed");
+        return;
+    }
+
+    logStageUsed = 0;
+}
+
+void ps2LogFlush(void)
+{
+    sysLogFlushInternal();
+    fflush(stdout);
+    fflush(stderr);
+}
+
 static void sysLogSetPath(const char *fname)
 {
     char base[768];
@@ -72,11 +119,41 @@ static void sysLogSetPath(const char *fname)
 
     snprintf(logPath, sizeof(logPath), "%s/%s", base, fname);
 
-    FILE *f = fopen(logPath, "wb");
-    if (f) {
-        fclose(f);
-    } else {
+    logFile = fopen(logPath, "wb");
+    if (!logFile) {
         logPath[0] = '\0';
+    }
+}
+
+static void sysLogStageLine(const char *line, u32 length)
+{
+    if (!logFile || !line || length == 0) {
+        return;
+    }
+
+    if (length > LOG_STAGE_BUFFER_SIZE) {
+        sysLogFlushInternal();
+        if (!logFile) {
+            return;
+        }
+        if (fwrite(line, 1, length, logFile) != length || fflush(logFile) != 0) {
+            sysLogDisableFileSink("oversized write failed");
+        }
+        return;
+    }
+
+    if (logStageUsed + length > LOG_STAGE_BUFFER_SIZE) {
+        sysLogFlushInternal();
+        if (!logFile) {
+            return;
+        }
+    }
+
+    memcpy(logStageBuffer + logStageUsed, line, length);
+    logStageUsed += length;
+
+    if (logStageUsed >= LOG_FLUSH_THRESHOLD) {
+        sysLogFlushInternal();
     }
 }
 
@@ -90,9 +167,24 @@ void sysInit(void)
 {
     startUsec = timerUsec();
 
-    if (sysArgCheck("--log")) {
+    /*
+     * Bring-up logging is active by default. --no-log is the explicit escape
+     * hatch for timing-sensitive experiments. Console output remains active.
+     */
+    if (!sysArgCheck("--no-log")) {
         sysLogSetPath(LOG_FNAME);
     }
+
+    sysLogPrintf(LOG_NOTE, "Perfect DarkStation 2 logger online");
+    sysLogPrintf(LOG_NOTE, "build commit: %s", PD_PS2_GIT_COMMIT);
+    sysLogPrintf(LOG_NOTE, "compiler: %s", __VERSION__);
+    sysLogPrintf(LOG_NOTE, "file sink: %s", logFile ? logPath : "unavailable/disabled; console only");
+
+    for (s32 i = 0; i < sysArgc; ++i) {
+        sysLogPrintf(LOG_NOTE, "argv[%d]: %s", i, sysArgv[i] ? sysArgv[i] : "(null)");
+    }
+
+    ps2LogFlush();
 }
 
 s32 sysArgCheck(const char *arg)
@@ -139,30 +231,37 @@ u64 sysGetMicroseconds(void)
 
 s32 sysLogIsOpen(void)
 {
-    return logPath[0] != '\0';
+    return logFile != NULL;
 }
 
 void sysLogPrintf(s32 level, const char *fmt, ...)
 {
-    static const char *const prefix[] = { "", "WARNING: ", "ERROR: " };
+    static const char *const label[] = { "INFO", "WARN", "ERROR" };
     const u32 safeLevel =
         (level >= LOG_NOTE && level <= LOG_ERROR) ? (u32)level : LOG_ERROR;
     char msg[1536];
+    char line[1728];
 
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(msg, sizeof(msg), fmt, ap);
     va_end(ap);
 
-    FILE *out = safeLevel == LOG_NOTE ? stdout : stderr;
-    fprintf(out, "%s%s\n", prefix[safeLevel], msg);
+    const int lineLength = snprintf(line, sizeof(line), "[%10llu us] %-5s %s\n",
+        (unsigned long long)sysGetMicroseconds(), label[safeLevel], msg);
+    const u32 safeLength = lineLength > 0
+        ? (u32)((lineLength < (int)sizeof(line)) ? lineLength : (int)sizeof(line) - 1)
+        : 0;
 
-    if (logPath[0]) {
-        FILE *f = fopen(logPath, "ab");
-        if (f) {
-            fprintf(f, "%s%s\n", prefix[safeLevel], msg);
-            fclose(f);
-        }
+    FILE *out = safeLevel == LOG_NOTE ? stdout : stderr;
+    if (safeLength) {
+        fwrite(line, 1, safeLength, out);
+        sysLogStageLine(line, safeLength);
+    }
+
+    /* Warnings/errors are rare and diagnostic value beats deferred durability. */
+    if (safeLevel >= LOG_WARNING) {
+        ps2LogFlush();
     }
 }
 
@@ -176,8 +275,13 @@ void sysFatalError(const char *fmt, ...)
     va_end(ap);
 
     sysLogPrintf(LOG_ERROR, "FATAL: %s", msg);
-    fflush(stdout);
-    fflush(stderr);
+    ps2LogFlush();
+
+    if (logFile) {
+        fclose(logFile);
+        logFile = NULL;
+    }
+
     exit(1);
 }
 
@@ -249,4 +353,5 @@ void crashInit(void)
 
 void crashShutdown(void)
 {
+    ps2LogFlush();
 }
