@@ -28,6 +28,10 @@
  * adapter sees it. Alpha variants are accepted only when their alpha-cycle
  * equation maps exactly to the same GS fixed-function operation.
  *
+ * Fog maps to the GS native FOGCOL + per-vertex XYZF2 path. Fast3D's factor is
+ * the fog contribution, while GS F is the source-color contribution, so the
+ * conversion is F = 255 * (1 - factor).
+ *
  * Unsupported combiners are retained in the shader table so shader_get_info()
  * still reports the exact upstream VBO layout, but draw submission rejects the
  * unsupported recipe rather than silently rendering a wrong approximation.
@@ -40,6 +44,7 @@
 /* GS packed-register IDs consumed by the packet-ready core boundary. */
 #define PS2_GS_REG_RGBAQ 0x01u
 #define PS2_GS_REG_ST    0x02u
+#define PS2_GS_REG_XYZF2 0x04u
 #define PS2_GS_REG_XYZ2  0x05u
 
 struct ShaderProgram {
@@ -107,12 +112,12 @@ static bool ps2_shader_common_supported(const struct CCFeatures *f)
     /*
      * These options need explicit GS state or an additional rendering pass.
      * Reject them until that mapping exists instead of accepting a visually
-     * plausible but semantically wrong approximation. Alpha threshold is the
-     * exception: Fast3D defines it as alpha >= 8/256 and GS TEST maps it exactly.
+     * plausible but semantically wrong approximation. Alpha threshold and fog
+     * both have exact fixed-function GS mappings and are allowed here.
      */
-    return !f->opt_fog && !f->opt_texture_edge && !f->opt_noise &&
-           !f->opt_2cyc && !f->opt_invisible && !f->opt_grayscale &&
-           !f->opt_blur && (!f->opt_alpha_threshold || f->opt_alpha) &&
+    return !f->opt_texture_edge && !f->opt_noise && !f->opt_2cyc &&
+           !f->opt_invisible && !f->opt_grayscale && !f->opt_blur &&
+           (!f->opt_alpha_threshold || f->opt_alpha) &&
            !f->used_textures[1] && f->num_inputs <= 1;
 }
 
@@ -221,6 +226,9 @@ static void ps2_load_shader(struct ShaderProgram *new_prg)
     const bool threshold = new_prg && new_prg->supported &&
                            new_prg->features.opt_alpha_threshold;
     ps2GsCoreSetAlphaTest(threshold, threshold ? PS2_GFX_ALPHA_THRESHOLD : 0u);
+
+    const bool fog = new_prg && new_prg->supported && new_prg->features.opt_fog;
+    ps2GsCoreSetFog(fog, 0u, 0u, 0u);
 }
 
 static struct ShaderProgram *ps2_create_and_load_new_shader(uint64_t shader_id0, uint32_t shader_id1)
@@ -374,13 +382,33 @@ static float ps2_clampf(float v, float lo, float hi)
     return v < lo ? lo : (v > hi ? hi : v);
 }
 
-static uint8_t ps2_color_component(float v)
+static uint8_t ps2_u8_component(float v)
 {
-    /* GS colour modulation uses 0x80 as unity. */
+    int out = (int)(ps2_clampf(v, 0.0f, 1.0f) * 255.0f + 0.5f);
+    if (out < 0) out = 0;
+    if (out > 255) out = 255;
+    return (uint8_t)out;
+}
+
+static uint8_t ps2_modulate_component(float v)
+{
+    /* GS texture MODULATE uses 0x80 as a 1.0 fragment multiplier. */
     int out = (int)(ps2_clampf(v, 0.0f, 1.0f) * 128.0f + 0.5f);
     if (out < 0) out = 0;
     if (out > 128) out = 128;
     return (uint8_t)out;
+}
+
+static uint8_t ps2_alpha_component(float v)
+{
+    /* RGBAQ alpha is fixed-point with 0x80 representing 1.0. */
+    return ps2_modulate_component(v);
+}
+
+static uint8_t ps2_fog_coefficient(float fast3d_factor)
+{
+    const float source_weight = 1.0f - ps2_clampf(fast3d_factor, 0.0f, 1.0f);
+    return ps2_u8_component(source_weight);
 }
 
 static uint32_t ps2_float_bits(float value)
@@ -430,6 +458,20 @@ static struct Ps2GsPackedReg ps2_pack_xyz2(float x, float y, int z)
                 ((uint64_t)(fy & 0xffffu) << 16) |
                 ((uint64_t)(uint32_t)z << 32);
     out.reg = PS2_GS_REG_XYZ2;
+    return out;
+}
+
+static struct Ps2GsPackedReg ps2_pack_xyzf2(float x, float y, int z, uint8_t fog)
+{
+    const uint32_t fx = (uint32_t)ps2_fixed_xy(x, ps2GsCoreGetOffsetX());
+    const uint32_t fy = (uint32_t)ps2_fixed_xy(y, ps2GsCoreGetOffsetY());
+
+    struct Ps2GsPackedReg out;
+    out.value = (uint64_t)(fx & 0xffffu) |
+                ((uint64_t)(fy & 0xffffu) << 16) |
+                ((uint64_t)((uint32_t)z & 0x00ffffffu) << 32) |
+                ((uint64_t)fog << 56);
+    out.reg = PS2_GS_REG_XYZF2;
     return out;
 }
 
@@ -494,6 +536,7 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
         return;
     }
 
+    bool fog_color_emitted = false;
     size_t base_vertex = 0;
     while (base_vertex < vertex_count) {
         size_t batch_vertices = vertex_count - base_vertex;
@@ -524,7 +567,26 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
                 if (s_shader->features.clamp[t][0]) ++pos;
                 if (s_shader->features.clamp[t][1]) ++pos;
             }
-            if (s_shader->features.opt_fog) pos += 4;
+
+            float fog_r = 0.0f;
+            float fog_g = 0.0f;
+            float fog_b = 0.0f;
+            float fog_factor = 0.0f;
+            if (s_shader->features.opt_fog) {
+                fog_r = src[pos++];
+                fog_g = src[pos++];
+                fog_b = src[pos++];
+                fog_factor = src[pos++];
+
+                if (!fog_color_emitted) {
+                    ps2GsCoreSetFog(true,
+                        ps2_u8_component(fog_r),
+                        ps2_u8_component(fog_g),
+                        ps2_u8_component(fog_b));
+                    fog_color_emitted = true;
+                }
+            }
+
             if (s_shader->features.opt_grayscale) pos += 4;
 
             float r = 1.0f;
@@ -543,18 +605,26 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
             const float sx = (float)s_viewport.x + (ndc_x * 0.5f + 0.5f) * (float)s_viewport.width;
             const float sy = (float)s_viewport.y + (0.5f - ndc_y * 0.5f) * (float)s_viewport.height;
             const int iz = ps2_map_clip_depth(clip_z, clip_w);
-            const uint8_t cr = ps2_color_component(r);
-            const uint8_t cg = ps2_color_component(g);
-            const uint8_t cb = ps2_color_component(b);
-            const uint8_t ca = s_use_alpha ? ps2_color_component(a) : 0x80;
+            const uint8_t cr = s_shader->textured ? ps2_modulate_component(r) : ps2_u8_component(r);
+            const uint8_t cg = s_shader->textured ? ps2_modulate_component(g) : ps2_u8_component(g);
+            const uint8_t cb = s_shader->textured ? ps2_modulate_component(b) : ps2_u8_component(b);
+            const uint8_t ca = s_use_alpha ? ps2_alpha_component(a) : 0x80;
+
+            struct Ps2GsPackedReg packed_position;
+            if (s_shader->features.opt_fog) {
+                packed_position = ps2_pack_xyzf2(
+                    sx, sy, iz, ps2_fog_coefficient(fog_factor));
+            } else {
+                packed_position = ps2_pack_xyz2(sx, sy, iz);
+            }
 
             if (s_shader->textured) {
                 s_stq_vertices[i].rgbaq = ps2_pack_rgbaq(cr, cg, cb, ca, inv_w);
                 s_stq_vertices[i].st = ps2_pack_st(tex_u[0] * inv_w, tex_v[0] * inv_w);
-                s_stq_vertices[i].xyz2 = ps2_pack_xyz2(sx, sy, iz);
+                s_stq_vertices[i].xyz2 = packed_position;
             } else {
                 s_color_vertices[i].rgbaq = ps2_pack_rgbaq(cr, cg, cb, ca, 0.0f);
-                s_color_vertices[i].xyz2 = ps2_pack_xyz2(sx, sy, iz);
+                s_color_vertices[i].xyz2 = packed_position;
             }
         }
 
@@ -601,10 +671,11 @@ static void ps2_init(void)
     s_mipmap_filter = MIPMAP_DISABLED;
     s_anisotropy = 1;
     ps2GsCoreSetAlphaTest(false, 0u);
+    ps2GsCoreSetFog(false, 0u, 0u, 0u);
     ps2_reset_viewport();
 
     sysLogPrintf(LOG_NOTE,
-        "GfxPS2 init: shaders=%d translate_batch=%d GS packet vertices owned by adapter",
+        "GfxPS2 init: shaders=%d translate_batch=%d native fog/alpha-test enabled",
         PS2_GFX_MAX_SHADERS, PS2_GFX_TRANSLATE_VERTS);
 }
 
