@@ -2,6 +2,7 @@
 #define PERFECT_DARK_PS2_GS_CORE_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #include <gsKit.h>
 
@@ -38,8 +39,12 @@ void ps2GsCoreBeginFrame(void);
 void ps2GsCoreSubmit(void);
 void ps2GsCorePresent(void);
 
-/* Baseline render-target operation used while Fast3D state is migrated. */
+/* Render-target and GS state owned below the Fast3D compatibility adapter. */
 void ps2GsCoreClear(bool clear_color, bool clear_depth);
+void ps2GsCoreSetScissor(int x, int y, int width, int height);
+void ps2GsCoreSetDepthMode(bool depth_test, bool depth_update, bool depth_compare);
+void ps2GsCoreSetAlphaBlend(bool enable);
+void ps2GsCoreSetTextureClamp(uint32_t cms, uint32_t cmt);
 
 #ifdef __cplusplus
 }
