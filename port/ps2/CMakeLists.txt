@@ -70,6 +70,7 @@ add_executable(pd_ps2_bootstrap
   rom_probe.c
   "${PD_ROOT}/port/src/romsource.c"
   "${PD_ROOT}/port/fast3d/gfx_cc.cpp"
+  "${PD_ROOT}/port/fast3d/gfx_pc.cpp"
 )
 
 target_include_directories(pd_ps2_bootstrap PRIVATE
@@ -101,27 +102,10 @@ set_target_properties(pd_ps2_bootstrap PROPERTIES
   SUFFIX ".elf"
 )
 
-# Compile the real current Fast3D translator under the EE compiler even before
-# we link the complete game runtime. This is an ABI/source-contract gate: it
-# exposes desktop-only assumptions in gfx_pc.cpp without dragging unrelated
-# subsystems into the hardware bring-up executable.
-add_library(pd_ps2_fast3d_contract OBJECT
-  "${PD_ROOT}/port/fast3d/gfx_pc.cpp"
-)
-
-target_include_directories(pd_ps2_fast3d_contract PRIVATE
-  ${PD_PS2_COMMON_INCLUDE_DIRS}
-)
-
-target_compile_options(pd_ps2_fast3d_contract PRIVATE
-  ${PD_PS2_CORRECTNESS_FLAGS}
-  -fno-exceptions
-  -fno-rtti
-)
-
-target_compile_definitions(pd_ps2_fast3d_contract PRIVATE
-  PLATFORM_PS2=1
-)
+# The real current Fast3D translator is now linked into the bring-up ELF, not
+# merely compiled as an isolated object. The diagnostic scene still drives the
+# rendering API directly, so this remains a link/source-contract gate until the
+# next stage routes a bounded synthetic display list through gfx_run().
 
 message(STATUS "Perfect Dark PS2 bootstrap root: ${PD_ROOT}")
 message(STATUS "Perfect Dark PS2 bootstrap gsKit: ${GSKIT}")
