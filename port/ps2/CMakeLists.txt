@@ -15,9 +15,19 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 get_filename_component(PD_ROOT "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
 
+if(NOT DEFINED ENV{GSKIT})
+  message(FATAL_ERROR "GSKIT environment variable is required for the PS2 diagnostic renderer")
+endif()
+set(GSKIT "$ENV{GSKIT}")
+
+if(NOT EXISTS "${GSKIT}/include/gsKit.h")
+  message(FATAL_ERROR "Current gsKit headers not found under ${GSKIT}/include")
+endif()
+
 add_executable(pd_ps2_bootstrap
   bootstrap.c
   system_ps2.c
+  video_diag.c
   "${PD_ROOT}/port/src/romsource.c"
 )
 
@@ -25,6 +35,7 @@ target_include_directories(pd_ps2_bootstrap PRIVATE
   "${PD_ROOT}/include"
   "${PD_ROOT}/include/PR"
   "${PD_ROOT}/port/include"
+  "${GSKIT}/include"
 )
 
 # Bootstrap is a correctness target. Current PS2SDK injects -O2 globally,
@@ -39,7 +50,10 @@ target_compile_options(pd_ps2_bootstrap PRIVATE
 )
 
 target_compile_definitions(pd_ps2_bootstrap PRIVATE PLATFORM_PS2=1)
-target_link_libraries(pd_ps2_bootstrap PRIVATE kernel)
+target_link_directories(pd_ps2_bootstrap PRIVATE "${GSKIT}/lib")
+
+# Match current gsKit's own sample link order: gsKit first, dmaKit second.
+target_link_libraries(pd_ps2_bootstrap PRIVATE gskit dmakit kernel)
 
 set_target_properties(pd_ps2_bootstrap PROPERTIES
   OUTPUT_NAME "pd-ps2-bootstrap"
@@ -47,3 +61,4 @@ set_target_properties(pd_ps2_bootstrap PROPERTIES
 )
 
 message(STATUS "Perfect Dark PS2 bootstrap root: ${PD_ROOT}")
+message(STATUS "Perfect Dark PS2 bootstrap gsKit: ${GSKIT}")
