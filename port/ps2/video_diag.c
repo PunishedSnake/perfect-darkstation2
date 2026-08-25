@@ -6,15 +6,16 @@
 #include "system.h"
 #include "log_ps2.h"
 
-bool ps2RendererSceneRun(GSGLOBAL *gs, int romStatus);
+bool ps2GfxApiSceneRun(GSGLOBAL *gs, int romStatus);
 
 /*
- * Bring-up renderer only.
+ * PS2 graphics bring-up owner.
  *
- * This deliberately uses the current gsKit/dmaKit API instead of growing a
- * second graphics abstraction before the real GfxRenderingAPI backend exists.
- * Stage 0 proved framebuffer/GIF presentation. Stage 1 now enables a real
- * Z-buffer and hands the initialized GS to a textured 3D scene.
+ * Stage 0 proved framebuffer/GIF presentation and Stage 1 proved direct GS
+ * textured 3D, reciprocal Z16 and STQ on real hardware. The current stage
+ * keeps low-level GS/dmaKit initialisation here, then hands the live GSGLOBAL
+ * to the actual Perfect Dark GfxRenderingAPI backend. This isolates the next
+ * correctness boundary without inventing a second renderer abstraction.
  */
 bool ps2VideoDiagRun(int rom_status)
 {
@@ -29,8 +30,8 @@ bool ps2VideoDiagRun(int rom_status)
 
     /*
      * CT16 keeps the double-buffered scanout footprint modest. Z16 is enough
-     * for this bounded diagnostic scene and makes the depth-buffer contract
-     * explicit without spending another 32-bit framebuffer-sized region.
+     * for the current bounded correctness scene. The full renderer will get a
+     * measured VRAM residency plan before choosing final framebuffer formats.
      */
     gs->PSM = GS_PSM_CT16;
     gs->PSMZ = GS_PSMZ_16;
@@ -60,5 +61,5 @@ bool ps2VideoDiagRun(int rom_status)
         gs->ScreenBuffer[0], gs->ScreenBuffer[1], gs->ZBuffer, gs->CurrentPointer);
     ps2LogCheckpoint();
 
-    return ps2RendererSceneRun(gs, rom_status);
+    return ps2GfxApiSceneRun(gs, rom_status);
 }
