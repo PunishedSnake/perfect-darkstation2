@@ -28,6 +28,7 @@ static GSGLOBAL *s_gs;
 static struct Ps2GsTextureSlot s_textures[PS2_GS_MAX_TEXTURES];
 static bool s_frame_building;
 static bool s_depth_update = true;
+static bool s_texture_alpha;
 static bool s_native_submit_failed;
 static uint8_t s_fog_r;
 static uint8_t s_fog_g;
@@ -225,6 +226,7 @@ extern "C" bool ps2GsCoreInit(const struct Ps2GsCreateInfo *info)
     s_gs = gs;
     s_frame_building = false;
     s_depth_update = true;
+    s_texture_alpha = false;
     s_native_submit_failed = false;
     s_fog_r = 0;
     s_fog_g = 0;
@@ -518,6 +520,11 @@ extern "C" void ps2GsCoreSetFog(bool enable, uint8_t r, uint8_t g, uint8_t b)
     }
 }
 
+extern "C" void ps2GsCoreSetTextureAlpha(bool enable)
+{
+    s_texture_alpha = enable;
+}
+
 extern "C" void ps2GsCoreSetTextureClamp(uint32_t cms, uint32_t cmt)
 {
     if (!s_gs) {
@@ -692,7 +699,7 @@ extern "C" void ps2GsCoreDrawTexturedTriangles(Ps2GsTextureHandle handle,
             tex->PSM,
             tw,
             th,
-            s_gs->PrimAlphaEnable,
+            s_texture_alpha ? 1 : 0,
             0,
             0,
             0,
