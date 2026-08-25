@@ -17,8 +17,9 @@
  *
  * The adapter accepts the clip-space VBO contract produced by current
  * port/fast3d/gfx_pc.cpp and translates the supported material subset into
- * GS-ready vertices and texture selections. Device lifetime, frame ownership
- * and GS register state live below this file in gs_core.
+ * GS-ready vertices plus opaque GS texture handles. Device lifetime, frame
+ * ownership, GS register state, texture residency and primitive submission live
+ * below this file in gs_core.
  *
  * Current supported material recipes:
  *   - INPUT1 (untextured vertex colour)
@@ -30,7 +31,6 @@
  */
 
 #define PS2_GFX_MAX_SHADERS 32
-#define PS2_GFX_MAX_TEXTURES 64
 #define PS2_GFX_TRANSLATE_VERTS 96
 
 struct ShaderProgram {
@@ -42,12 +42,6 @@ struct ShaderProgram {
     struct CCFeatures features;
 };
 
-struct Ps2TextureSlot {
-    bool used;
-    bool uploaded;
-    GSTEXTURE texture;
-};
-
 struct Ps2Viewport {
     int x;
     int y;
@@ -56,14 +50,14 @@ struct Ps2Viewport {
 };
 
 /*
- * Transitional escape hatch. Texture residency and GS-ready vertex packing are
- * the remaining reasons this Fast3D adapter still needs a GSGLOBAL pointer.
+ * Transitional escape hatch. GS-ready vertex packing is now the only reason
+ * this Fast3D adapter still needs a GSGLOBAL pointer. Once those records become
+ * project-owned packet data, gfx_ps2 will no longer depend on gsKit types.
  */
 static GSGLOBAL *s_gs;
 static struct ShaderProgram s_shaders[PS2_GFX_MAX_SHADERS];
-static struct Ps2TextureSlot s_textures[PS2_GFX_MAX_TEXTURES];
 static struct ShaderProgram *s_shader;
-static uint32_t s_selected_texture[2];
+static Ps2GsTextureHandle s_selected_texture[2];
 static int s_active_texture_tile;
 static struct Ps2Viewport s_viewport;
 static float s_depth_near = 0.0f;
@@ -218,47 +212,28 @@ static void ps2_clear_shaders(void)
 
 static uint32_t ps2_new_texture(void)
 {
-    for (uint32_t i = 0; i < PS2_GFX_MAX_TEXTURES; ++i) {
-        if (!s_textures[i].used) {
-            memset(&s_textures[i], 0, sizeof(s_textures[i]));
-            s_textures[i].used = true;
-            return i + 1;
-        }
-    }
-
-    sysLogPrintf(LOG_ERROR, "GfxPS2 texture table exhausted (%d)", PS2_GFX_MAX_TEXTURES);
-    return 0;
-}
-
-static struct Ps2TextureSlot *ps2_texture_slot(uint32_t texture_id)
-{
-    if (texture_id == 0 || texture_id > PS2_GFX_MAX_TEXTURES) {
-        return NULL;
-    }
-
-    struct Ps2TextureSlot *slot = &s_textures[texture_id - 1];
-    return slot->used ? slot : NULL;
+    return (uint32_t)ps2GsCoreCreateTexture();
 }
 
 static void ps2_select_texture(int tile, uint32_t texture_id, bool linear_filter)
 {
-    if (tile < 0 || tile > 1 || !ps2_texture_slot(texture_id)) {
+    if (tile < 0 || tile > 1 || texture_id > UINT16_MAX) {
         return;
     }
 
-    s_selected_texture[tile] = texture_id;
+    Ps2GsTextureHandle handle = (Ps2GsTextureHandle)texture_id;
+    if (!ps2GsCoreTextureExists(handle)) {
+        return;
+    }
+
+    s_selected_texture[tile] = handle;
     s_active_texture_tile = tile;
-    s_textures[texture_id - 1].texture.Filter = linear_filter ? GS_FILTER_LINEAR : GS_FILTER_NEAREST;
+    ps2GsCoreSetTextureFilter(handle, linear_filter);
 }
 
 static void ps2_upload_texture(const uint8_t *rgba32_buf, uint32_t width, uint32_t height, bool gen_mipmaps)
 {
-    if (!s_gs || s_active_texture_tile < 0 || s_active_texture_tile > 1) {
-        return;
-    }
-
-    struct Ps2TextureSlot *slot = ps2_texture_slot(s_selected_texture[s_active_texture_tile]);
-    if (!slot || !rgba32_buf || width == 0 || height == 0 || width > 1024 || height > 1024) {
+    if (s_active_texture_tile < 0 || s_active_texture_tile > 1) {
         return;
     }
 
@@ -267,40 +242,8 @@ static void ps2_upload_texture(const uint8_t *rgba32_buf, uint32_t width, uint32
         s_warned_mipmap = true;
     }
 
-    GSTEXTURE *tex = &slot->texture;
-    const u32 bytes = gsKit_texture_size((int)width, (int)height, GS_PSM_CT32);
-
-    /*
-     * CURRENT IMPLEMENTATION: gsKit's allocator is monotonic. Reallocating an
-     * existing texture with a different extent would leak GS-local memory, so
-     * reject that transition until gs_core owns residency/eviction explicitly.
-     */
-    if (slot->uploaded && (tex->Width != width || tex->Height != height)) {
-        sysLogPrintf(LOG_WARNING,
-            "GfxPS2 texture resize rejected id=%u old=%ux%u new=%ux%u",
-            s_selected_texture[s_active_texture_tile], tex->Width, tex->Height, width, height);
-        return;
-    }
-
-    if (!slot->uploaded) {
-        memset(tex, 0, sizeof(*tex));
-        tex->Width = width;
-        tex->Height = height;
-        tex->PSM = GS_PSM_CT32;
-        tex->Filter = GS_FILTER_NEAREST;
-        tex->Vram = gsKit_vram_alloc(s_gs, bytes, GSKIT_ALLOC_USERBUFFER);
-        if (tex->Vram == GSKIT_ALLOC_ERROR) {
-            sysLogPrintf(LOG_ERROR,
-                "GfxPS2 GS VRAM allocation failed id=%u size=%u",
-                s_selected_texture[s_active_texture_tile], bytes);
-            return;
-        }
-        slot->uploaded = true;
-    }
-
-    tex->Mem = (u32 *)(uintptr_t)rgba32_buf;
-    gsKit_texture_upload(s_gs, tex);
-    tex->Mem = NULL;
+    ps2GsCoreUploadTextureRgba32(
+        s_selected_texture[s_active_texture_tile], rgba32_buf, width, height);
 }
 
 static void ps2_set_sampler_parameters(int sampler, bool linear_filter, uint32_t cms, uint32_t cmt, bool mipmaps)
@@ -309,11 +252,7 @@ static void ps2_set_sampler_parameters(int sampler, bool linear_filter, uint32_t
         return;
     }
 
-    struct Ps2TextureSlot *slot = ps2_texture_slot(s_selected_texture[sampler]);
-    if (slot) {
-        slot->texture.Filter = linear_filter ? GS_FILTER_LINEAR : GS_FILTER_NEAREST;
-    }
-
+    ps2GsCoreSetTextureFilter(s_selected_texture[sampler], linear_filter);
     ps2GsCoreSetTextureClamp(cms, cmt);
 
     if (mipmaps && !s_warned_mipmap) {
@@ -423,12 +362,8 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
         return;
     }
 
-    struct Ps2TextureSlot *texture_slot = NULL;
-    if (s_shader->textured) {
-        texture_slot = ps2_texture_slot(s_selected_texture[0]);
-        if (!texture_slot || !texture_slot->uploaded) {
-            return;
-        }
+    if (s_shader->textured && !ps2GsCoreTextureReady(s_selected_texture[0])) {
+        return;
     }
 
     size_t base_vertex = 0;
@@ -496,13 +431,10 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
         }
 
         if (s_shader->textured) {
-            GSTEXTURE *tex = &texture_slot->texture;
-            gsKit_set_texfilter(s_gs, tex->Filter);
-            gsKit_prim_list_triangle_goraud_texture_stq_3d(
-                s_gs, tex, (int)batch_vertices, s_stq_vertices);
+            ps2GsCoreDrawTexturedTriangles(
+                s_selected_texture[0], s_stq_vertices, (uint32_t)batch_vertices);
         } else {
-            gsKit_prim_list_triangle_gouraud_3d(
-                s_gs, (int)batch_vertices, s_color_vertices);
+            ps2GsCoreDrawColorTriangles(s_color_vertices, (uint32_t)batch_vertices);
         }
 
         base_vertex += batch_vertices;
@@ -512,9 +444,8 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
 static void ps2_init(void)
 {
     ps2_clear_shaders();
-    memset(s_textures, 0, sizeof(s_textures));
-    s_selected_texture[0] = 0;
-    s_selected_texture[1] = 0;
+    s_selected_texture[0] = PS2_GS_TEXTURE_INVALID;
+    s_selected_texture[1] = PS2_GS_TEXTURE_INVALID;
     s_active_texture_tile = 0;
     s_depth_near = 0.0f;
     s_depth_far = 1.0f;
@@ -534,8 +465,8 @@ static void ps2_init(void)
     }
 
     sysLogPrintf(LOG_NOTE,
-        "GfxPS2 init: fixed shader=%d texture=%d translate_batch=%d",
-        PS2_GFX_MAX_SHADERS, PS2_GFX_MAX_TEXTURES, PS2_GFX_TRANSLATE_VERTS);
+        "GfxPS2 init: shaders=%d translate_batch=%d GS textures owned by core",
+        PS2_GFX_MAX_SHADERS, PS2_GFX_TRANSLATE_VERTS);
 }
 
 static void ps2_on_resize(void)
@@ -620,10 +551,8 @@ static void ps2_select_texture_fb(int fb_id)
 
 static void ps2_delete_texture(uint32_t tex_id)
 {
-    struct Ps2TextureSlot *slot = ps2_texture_slot(tex_id);
-    if (slot) {
-        /* VRAM is monotonic in this baseline; only retire the logical ID. */
-        slot->used = false;
+    if (tex_id <= UINT16_MAX) {
+        ps2GsCoreReleaseTexture((Ps2GsTextureHandle)tex_id);
     }
 }
 
