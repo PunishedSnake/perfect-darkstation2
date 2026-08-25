@@ -59,8 +59,8 @@ static void pathBaseFromArgv0(char *outPath, u32 outLen)
 
         /*
          * PS2 device paths can arrive as host:foo.elf, mass:foo.elf, etc.
-         * Preserve the device prefix so callers can safely append /data or
-         * a log filename. Exact argv[0] behaviour remains loader-dependent.
+         * Preserve the device prefix so callers can safely append a filename.
+         * Exact argv[0] behaviour remains loader-dependent.
          */
         char *deviceColon = strchr(outPath, ':');
         if (deviceColon) {
@@ -78,8 +78,9 @@ static void pathBaseFromArgv0(char *outPath, u32 outLen)
 static void sysLogDisableFileSink(const char *reason)
 {
     if (logFile) {
-        fclose(logFile);
+        FILE *closing = logFile;
         logFile = NULL;
+        fclose(closing);
     }
 
     if (reason && reason[0]) {
@@ -112,6 +113,46 @@ void ps2LogFlush(void)
     fflush(stderr);
 }
 
+void ps2LogCheckpoint(void)
+{
+    char reopenPath[sizeof(logPath)];
+
+    /*
+     * CURRENT PS2SDK: fsync() returns ENOSYS. More importantly for mass:, a
+     * stdio flush may not publish the final file size/directory metadata while
+     * the underlying descriptor stays open. A bring-up checkpoint therefore
+     * deliberately closes the descriptor and reopens it in append mode.
+     *
+     * This is intentionally coarse-grained. Do not use it in a frame hot path.
+     */
+    ps2LogFlush();
+
+    if (!logFile || !logPath[0]) {
+        return;
+    }
+
+    strncpy(reopenPath, logPath, sizeof(reopenPath) - 1);
+    reopenPath[sizeof(reopenPath) - 1] = '\0';
+
+    FILE *closing = logFile;
+    logFile = NULL;
+
+    if (fclose(closing) != 0) {
+        fprintf(stderr, "LOGGER: durable checkpoint close failed: %s\n", reopenPath);
+        logPath[0] = '\0';
+        logStageUsed = 0;
+        return;
+    }
+
+    logFile = fopen(reopenPath, "ab");
+    if (!logFile) {
+        fprintf(stderr, "LOGGER: checkpoint persisted but reopen failed: %s\n", reopenPath);
+        logPath[0] = '\0';
+        logStageUsed = 0;
+        return;
+    }
+}
+
 static void sysLogSetPath(const char *fname)
 {
     char base[768];
@@ -119,6 +160,7 @@ static void sysLogSetPath(const char *fname)
 
     snprintf(logPath, sizeof(logPath), "%s/%s", base, fname);
 
+    /* Start each run with a fresh log. The first checkpoint reopens as append. */
     logFile = fopen(logPath, "wb");
     if (!logFile) {
         logPath[0] = '\0';
@@ -184,7 +226,8 @@ void sysInit(void)
         sysLogPrintf(LOG_NOTE, "argv[%d]: %s", i, sysArgv[i] ? sysArgv[i] : "(null)");
     }
 
-    ps2LogFlush();
+    /* Publish the initial file length immediately on filesystem-backed runs. */
+    ps2LogCheckpoint();
 }
 
 s32 sysArgCheck(const char *arg)
@@ -259,9 +302,9 @@ void sysLogPrintf(s32 level, const char *fmt, ...)
         sysLogStageLine(line, safeLength);
     }
 
-    /* Warnings/errors are rare and diagnostic value beats deferred durability. */
+    /* Warnings/errors are rare; persist them rather than only flushing stdio. */
     if (safeLevel >= LOG_WARNING) {
-        ps2LogFlush();
+        ps2LogCheckpoint();
     }
 }
 
@@ -275,11 +318,12 @@ void sysFatalError(const char *fmt, ...)
     va_end(ap);
 
     sysLogPrintf(LOG_ERROR, "FATAL: %s", msg);
-    ps2LogFlush();
+    ps2LogCheckpoint();
 
     if (logFile) {
-        fclose(logFile);
+        FILE *closing = logFile;
         logFile = NULL;
+        fclose(closing);
     }
 
     exit(1);
@@ -353,5 +397,11 @@ void crashInit(void)
 
 void crashShutdown(void)
 {
-    ps2LogFlush();
+    ps2LogCheckpoint();
+
+    if (logFile) {
+        FILE *closing = logFile;
+        logFile = NULL;
+        fclose(closing);
+    }
 }
