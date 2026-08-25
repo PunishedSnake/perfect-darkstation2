@@ -185,6 +185,7 @@ add_library(pd_ps2_game_bridge OBJECT
   "${PD_ROOT}/port/src/config.c"
   "${PD_ROOT}/port/src/pdmain.c"
   "${PD_ROOT}/port/src/pdsched.c"
+  video_ps2.c
 )
 add_dependencies(pd_ps2_game_bridge pd_ps2_asset_headers)
 
