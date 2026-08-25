@@ -27,6 +27,9 @@ struct Ps2GsCreateInfo {
     bool dithering;
 };
 
+typedef uint16_t Ps2GsTextureHandle;
+#define PS2_GS_TEXTURE_INVALID ((Ps2GsTextureHandle)0)
+
 bool ps2GsCoreInit(const struct Ps2GsCreateInfo *info);
 GSGLOBAL *ps2GsCoreGetLegacyGlobal(void);
 
@@ -45,6 +48,32 @@ void ps2GsCoreSetScissor(int x, int y, int width, int height);
 void ps2GsCoreSetDepthMode(bool depth_test, bool depth_update, bool depth_compare);
 void ps2GsCoreSetAlphaBlend(bool enable);
 void ps2GsCoreSetTextureClamp(uint32_t cms, uint32_t cmt);
+
+/*
+ * Texture residency baseline.
+ *
+ * Handles are logical GS resources. The current implementation uses gsKit's
+ * monotonic VRAM allocator and synchronous upload path internally. That is a
+ * bring-up transport policy, not part of the Fast3D contract, and can later be
+ * replaced by an explicit residency cache plus batched DMA without changing
+ * callers.
+ */
+Ps2GsTextureHandle ps2GsCoreCreateTexture(void);
+bool ps2GsCoreTextureExists(Ps2GsTextureHandle handle);
+bool ps2GsCoreTextureReady(Ps2GsTextureHandle handle);
+bool ps2GsCoreUploadTextureRgba32(Ps2GsTextureHandle handle,
+    const uint8_t *rgba32, uint32_t width, uint32_t height);
+void ps2GsCoreSetTextureFilter(Ps2GsTextureHandle handle, bool linear_filter);
+void ps2GsCoreReleaseTexture(Ps2GsTextureHandle handle);
+
+/*
+ * Transitional GS-ready draw boundary. These packed vertex types still come
+ * from gsKit; the next transport stage will replace them with project-owned
+ * packet-ready records before direct GIF/DMAC submission is introduced.
+ */
+void ps2GsCoreDrawColorTriangles(const GSPRIMPOINT *vertices, uint32_t vertex_count);
+void ps2GsCoreDrawTexturedTriangles(Ps2GsTextureHandle texture,
+    const GSPRIMSTQPOINT *vertices, uint32_t vertex_count);
 
 #ifdef __cplusplus
 }
