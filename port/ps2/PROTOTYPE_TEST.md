@@ -31,6 +31,42 @@ The bootstrap derives the ROM path from the launched ELF path. A different path 
 --rom-file <device:path/to/pd.ntsc-final.z64>
 ```
 
+## Active logger
+
+Bring-up logging is enabled by default. The bootstrap tries to create:
+
+```text
+pdps2.log
+```
+
+next to the launched ELF. Console output remains enabled in parallel for loaders such as ps2link.
+
+The text logger records:
+
+- monotonic EE timestamp in microseconds,
+- level (`INFO`, `WARN`, `ERROR`),
+- source git commit baked into the build,
+- compiler version,
+- launch arguments,
+- resolved ROM path and source size,
+- ROM/header/RZIP/file-table milestones,
+- compressed and decompressed byte counts,
+- data-segment correctness hash,
+- total ROM-probe duration,
+- GS bring-up milestones and resolved display dimensions.
+
+Normal INFO lines are staged in a fixed 8 KiB buffer and written at coarse checkpoints instead of opening and closing the file for every log line. Warnings and errors force a flush. A fatal error also flushes before exit. This logger is intended for bring-up and correctness diagnostics; the later frame profiler will use a separate preallocated binary trace ring so formatted text does not enter hot paths.
+
+For a timing experiment where even this diagnostic I/O is unwanted, disable the file sink explicitly:
+
+```text
+--no-log
+```
+
+stdout/stderr remain available.
+
+If the filesystem/device does not permit creation of `pdps2.log`, the bootstrap falls back to console-only logging rather than failing the prototype.
+
 ## Expected visible result
 
 The diagnostic frame contains three horizontal status bars and a Gouraud triangle.
@@ -40,7 +76,7 @@ The diagnostic frame contains three horizontal status bars and a Gouraud triangl
 - third bar green: ROM header, bounded RZIP streaming and file-table sanity all passed,
 - third bar red: ROM data path failed.
 
-The console log additionally reports the decompressed data-segment size, exact compressed bytes consumed by zlib, first file extent and an FNV-1a hash of the decompressed data segment.
+The active log additionally reports the decompressed data-segment size, exact compressed bytes consumed by zlib, first file extent and an FNV-1a hash of the decompressed data segment.
 
 ## Real-hardware record
 
@@ -53,7 +89,7 @@ For every timing or stability result, record at least:
 - active IRX modules where known,
 - ROM path/device,
 - whether all three bars reached the expected state,
-- relevant console log,
+- `pdps2.log` when the file sink is available,
 - repeated-run count,
 - p50 / p95 / p99 / max for measured loading work once timing collection is added,
 - any failure or deadline miss count,
