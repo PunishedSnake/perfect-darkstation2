@@ -6,6 +6,7 @@
 
 #include "gfx_cc.h"
 #include "gfx_ps2.h"
+#include "gfx_window_ps2.h"
 #include "system.h"
 #include "log_ps2.h"
 
@@ -245,17 +246,32 @@ bool ps2GfxApiSceneRun(GSGLOBAL *gs, int romStatus)
     }
 
     struct GfxRenderingAPI *api = &gfx_ps2_api;
+    struct GfxWindowManagerAPI *wapi = &gfx_window_ps2_api;
     const uint64_t texturedShaderId =
         ((uint64_t)SHADER_TEXEL0 << 0) |
         ((uint64_t)SHADER_INPUT_1 << 8);
     const uint64_t untexturedShaderId =
         ((uint64_t)SHADER_INPUT_1 << 12);
+    const struct GfxWindowInitSettings windowSettings = {
+        "Perfect DarkStation 2",
+        (uint32_t)gs->Width,
+        (uint32_t)gs->Height,
+        0,
+        0,
+        true,
+        true,
+        true,
+        false,
+        false,
+    };
 
     sysLogPrintf(LOG_NOTE,
-        "GfxAPI scene: bind current GS and initialise Perfect Dark rendering API baseline");
+        "GfxAPI scene: bind current GS and initialise Perfect Dark graphics backends");
     ps2LogCheckpoint();
 
     gfxPs2BindGs(gs);
+    gfxPs2WindowBindGs(gs);
+    wapi->init(&windowSettings);
     api->init();
 
     struct ShaderProgram *texturedShader =
@@ -297,7 +313,7 @@ bool ps2GfxApiSceneRun(GSGLOBAL *gs, int romStatus)
         (unsigned long long)untexturedShaderId,
         API_SCENE_DRAW_VERTEX_COUNT / 3);
     sysLogPrintf(LOG_NOTE,
-        "GfxAPI scene: entering clip-space VBO -> GfxRenderingAPI -> STQ/Z16 frame loop");
+        "GfxAPI scene: entering clip-space VBO -> GfxRenderingAPI -> GfxWindowManagerAPI frame loop");
     ps2LogCheckpoint();
 
     const float sinStepY = 0.011999712f;
@@ -311,6 +327,11 @@ bool ps2GfxApiSceneRun(GSGLOBAL *gs, int romStatus)
     const float aspect = (float)gs->Width / (float)gs->Height;
 
     for (;;) {
+        wapi->handle_events();
+        if (!wapi->start_frame()) {
+            continue;
+        }
+
         buildCubeVbo(sinY, cosY, sinX, cosX, aspect);
 
         api->start_frame();
@@ -325,9 +346,9 @@ bool ps2GfxApiSceneRun(GSGLOBAL *gs, int romStatus)
             sizeof(sCubeVbo) / sizeof(sCubeVbo[0]), API_SCENE_DRAW_VERTEX_COUNT / 3);
 
         api->end_frame();
-
-        /* Presentation remains the window-manager owner's responsibility. */
-        gsKit_sync_flip(gs);
+        wapi->swap_buffers_begin();
+        api->finish_render();
+        wapi->swap_buffers_end();
 
         advanceRotation(&sinY, &cosY, sinStepY, cosStepY);
         advanceRotation(&sinX, &cosX, sinStepX, cosStepX);
