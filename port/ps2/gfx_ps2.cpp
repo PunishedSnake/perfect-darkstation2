@@ -13,12 +13,12 @@
 #include "system.h"
 
 /*
- * Minimal Perfect Dark GfxRenderingAPI backend for PS2 bring-up.
+ * Perfect Dark Fast3D compatibility adapter for PS2.
  *
- * This is deliberately a correctness baseline, not a general OpenGL emulator.
- * The backend accepts the clip-space VBO contract produced by current
- * port/fast3d/gfx_pc.cpp and translates a small, explicit material subset to
- * native GS state and triangle lists.
+ * The adapter accepts the clip-space VBO contract produced by current
+ * port/fast3d/gfx_pc.cpp and translates the supported material subset into
+ * GS-ready vertices and texture selections. Device lifetime, frame ownership
+ * and GS register state live below this file in gs_core.
  *
  * Current supported material recipes:
  *   - INPUT1 (untextured vertex colour)
@@ -55,6 +55,10 @@ struct Ps2Viewport {
     int height;
 };
 
+/*
+ * Transitional escape hatch. Texture residency and GS-ready vertex packing are
+ * the remaining reasons this Fast3D adapter still needs a GSGLOBAL pointer.
+ */
 static GSGLOBAL *s_gs;
 static struct ShaderProgram s_shaders[PS2_GFX_MAX_SHADERS];
 static struct Ps2TextureSlot s_textures[PS2_GFX_MAX_TEXTURES];
@@ -267,9 +271,9 @@ static void ps2_upload_texture(const uint8_t *rgba32_buf, uint32_t width, uint32
     const u32 bytes = gsKit_texture_size((int)width, (int)height, GS_PSM_CT32);
 
     /*
-     * gsKit's allocator is monotonic. Reallocating an existing texture with a
-     * different extent would leak GS-local memory, so reject that transition
-     * until the real residency manager owns eviction/reuse explicitly.
+     * CURRENT IMPLEMENTATION: gsKit's allocator is monotonic. Reallocating an
+     * existing texture with a different extent would leak GS-local memory, so
+     * reject that transition until gs_core owns residency/eviction explicitly.
      */
     if (slot->uploaded && (tex->Width != width || tex->Height != height)) {
         sysLogPrintf(LOG_WARNING,
@@ -301,7 +305,7 @@ static void ps2_upload_texture(const uint8_t *rgba32_buf, uint32_t width, uint32
 
 static void ps2_set_sampler_parameters(int sampler, bool linear_filter, uint32_t cms, uint32_t cmt, bool mipmaps)
 {
-    if (!s_gs || sampler < 0 || sampler > 1) {
+    if (sampler < 0 || sampler > 1) {
         return;
     }
 
@@ -310,10 +314,7 @@ static void ps2_set_sampler_parameters(int sampler, bool linear_filter, uint32_t
         slot->texture.Filter = linear_filter ? GS_FILTER_LINEAR : GS_FILTER_NEAREST;
     }
 
-    /* N64 G_TX_CLAMP is bit 1; mirror semantics are not mapped yet. */
-    s_gs->Clamp->WMS = (cms & 2u) ? GS_CMODE_CLAMP : GS_CMODE_REPEAT;
-    s_gs->Clamp->WMT = (cmt & 2u) ? GS_CMODE_CLAMP : GS_CMODE_REPEAT;
-    gsKit_set_clamp(s_gs, GS_CMODE_RESET);
+    ps2GsCoreSetTextureClamp(cms, cmt);
 
     if (mipmaps && !s_warned_mipmap) {
         sysLogPrintf(LOG_WARNING, "GfxPS2 mipmap sampling requested but not implemented");
@@ -321,36 +322,14 @@ static void ps2_set_sampler_parameters(int sampler, bool linear_filter, uint32_t
     }
 }
 
-static void ps2_emit_zbuf_write_mask(bool depth_update)
-{
-    if (!s_gs || !s_gs->ZBuffering) {
-        return;
-    }
-
-    u64 *p = (u64 *)gsKit_heap_alloc(s_gs, 1, 16, GIF_AD);
-    *p++ = GIF_TAG_AD(1);
-    *p++ = GIF_AD;
-    *p++ = GS_SETREG_ZBUF(s_gs->ZBuffer / 8192, s_gs->PSMZ, depth_update ? 0 : 1);
-    *p++ = GS_ZBUF_1 + s_gs->PrimContext;
-}
-
 static void ps2_set_depth_mode(bool depth_test, bool depth_update, bool depth_compare,
                                bool depth_source_prim, uint16_t zmode)
 {
     (void)zmode;
-    if (!s_gs) {
-        return;
-    }
 
     s_depth_test = depth_test;
     s_depth_update = depth_update;
-
-    if (depth_test && depth_compare) {
-        gsKit_set_test(s_gs, GS_ZTEST_ON);
-    } else {
-        gsKit_set_test(s_gs, GS_ZTEST_OFF);
-    }
-    ps2_emit_zbuf_write_mask(depth_update);
+    ps2GsCoreSetDepthMode(depth_test, depth_update, depth_compare);
 
     if (depth_source_prim && !s_warned_depth_prim) {
         sysLogPrintf(LOG_WARNING,
@@ -375,39 +354,14 @@ static void ps2_set_viewport(int x, int y, int width, int height)
 
 static void ps2_set_scissor(int x, int y, int width, int height)
 {
-    if (!s_gs || width <= 0 || height <= 0) {
-        return;
-    }
-
-    int x0 = x;
-    int y0 = y;
-    int x1 = x + width - 1;
-    int y1 = y + height - 1;
-
-    if (x0 < 0) x0 = 0;
-    if (y0 < 0) y0 = 0;
-    if (x1 >= s_gs->Width) x1 = s_gs->Width - 1;
-    if (y1 >= s_gs->Height) y1 = s_gs->Height - 1;
-
-    if (x0 <= x1 && y0 <= y1) {
-        gsKit_set_scissor(s_gs, GS_SETREG_SCISSOR(x0, x1, y0, y1));
-    }
+    ps2GsCoreSetScissor(x, y, width, height);
 }
 
 static void ps2_set_use_alpha(bool use_alpha, bool modulate)
 {
     s_use_alpha = use_alpha;
     s_modulate = modulate;
-
-    if (!s_gs) {
-        return;
-    }
-
-    s_gs->PrimAlphaEnable = use_alpha ? GS_SETTING_ON : GS_SETTING_OFF;
-    if (use_alpha) {
-        /* Standard source-alpha over destination baseline. */
-        gsKit_set_primalpha(s_gs, GS_SETREG_ALPHA(0, 1, 0, 1, 0), 0);
-    }
+    ps2GsCoreSetAlphaBlend(use_alpha);
 }
 
 static float ps2_clampf(float v, float lo, float hi)
