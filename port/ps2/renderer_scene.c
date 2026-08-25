@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include <gsKit.h>
+#include <gsInline.h>
 
 #include "system.h"
 #include "log_ps2.h"
@@ -10,17 +11,22 @@
 #define SCENE_TEXTURE_H 64
 #define SCENE_VERTEX_COUNT 8
 #define SCENE_FACE_COUNT 6
+#define SCENE_TRIANGLES_PER_FACE 2
+#define SCENE_VERTICES_PER_TRIANGLE 3
+#define SCENE_DRAW_VERTEX_COUNT \
+    (SCENE_FACE_COUNT * SCENE_TRIANGLES_PER_FACE * SCENE_VERTICES_PER_TRIANGLE)
 
 /*
  * Renderer bring-up stage 1.
  *
- * This is intentionally a small GS baseline rather than the final Perfect Dark
- * backend. It proves the contracts we need before wiring Fast3D into the PS2:
+ * This remains deliberately smaller than the final Perfect Dark backend. It
+ * proves the contracts we need before wiring Fast3D into the PS2 renderer:
  *
  *   - a resident texture uploaded once before the frame loop,
  *   - a real Z buffer and depth-tested overlapping geometry,
+ *   - perspective-correct STQ texture coordinates,
  *   - CPU-produced dynamic screen-space vertices,
- *   - repeated draw submission through gsKit's oneshot queue,
+ *   - one explicit triangle-list submission for the cube,
  *   - no allocation or texture upload in the frame loop.
  *
  * VIF/VU/MMI are deliberately absent. They only become candidates after a
@@ -36,12 +42,15 @@ struct scene_vec3 {
 struct scene_screen_vertex {
     float x;
     float y;
+    float q;
     int z;
 };
 
 struct scene_face {
     unsigned char index[4];
-    u64 color;
+    unsigned char r;
+    unsigned char g;
+    unsigned char b;
 };
 
 static const struct scene_vec3 kCubeVertices[SCENE_VERTEX_COUNT] = {
@@ -56,16 +65,21 @@ static const struct scene_vec3 kCubeVertices[SCENE_VERTEX_COUNT] = {
 };
 
 /*
- * Faces intentionally stay in a fixed order. Correct visibility therefore
- * depends on the Z buffer rather than painter sorting.
+ * Face vertices are stored around each perimeter. The draw path below expands
+ * each face explicitly to triangles (a,b,c) + (a,c,d). Do not hand perimeter
+ * order directly to gsKit's quad helper: current gsKit implements that helper
+ * as a triangle strip, which has different vertex-order semantics.
+ *
+ * GS texture modulation treats 0x80 as unity. Tints stay at or below 0x80 so
+ * the checker remains diagnostic instead of saturating into white.
  */
 static const struct scene_face kCubeFaces[SCENE_FACE_COUNT] = {
-    { { 0, 1, 2, 3 }, GS_SETREG_RGBAQ(0x80, 0x90, 0xff, 0x80, 0x00) },
-    { { 5, 4, 7, 6 }, GS_SETREG_RGBAQ(0xff, 0x78, 0x78, 0x80, 0x00) },
-    { { 4, 0, 3, 7 }, GS_SETREG_RGBAQ(0x78, 0xe0, 0x9a, 0x80, 0x00) },
-    { { 1, 5, 6, 2 }, GS_SETREG_RGBAQ(0xff, 0xc8, 0x68, 0x80, 0x00) },
-    { { 3, 2, 6, 7 }, GS_SETREG_RGBAQ(0xc5, 0x8c, 0xff, 0x80, 0x00) },
-    { { 4, 5, 1, 0 }, GS_SETREG_RGBAQ(0x6f, 0xd7, 0xe8, 0x80, 0x00) },
+    { { 0, 1, 2, 3 }, 0x68, 0x70, 0x80 },
+    { { 5, 4, 7, 6 }, 0x80, 0x58, 0x58 },
+    { { 4, 0, 3, 7 }, 0x58, 0x80, 0x64 },
+    { { 1, 5, 6, 2 }, 0x80, 0x70, 0x48 },
+    { { 3, 2, 6, 7 }, 0x70, 0x58, 0x80 },
+    { { 4, 5, 1, 0 }, 0x50, 0x78, 0x80 },
 };
 
 /*
@@ -88,7 +102,7 @@ static void buildCheckerTexture(void)
                 /* RGBA8888 in EE memory: R is the least-significant byte. */
                 pixel = 0x8028d8ffu;
             } else if (checker) {
-                pixel = 0x80e8e8e8u;
+                pixel = 0x80d8d8d8u;
             } else {
                 pixel = 0x80302a28u;
             }
@@ -127,12 +141,37 @@ static bool initSceneTexture(GSGLOBAL *gs, GSTEXTURE *texture)
 
     /* Immutable scene texture: upload once, then consume from GS local memory. */
     gsKit_texture_upload(gs, texture);
-    gsKit_set_clamp(gs, GS_CMODE_REPEAT);
+    gsKit_set_clamp(gs, GS_CMODE_CLAMP);
     gsKit_set_texfilter(gs, GS_FILTER_NEAREST);
 
     sysLogPrintf(LOG_NOTE, "Renderer scene: procedural texture upload complete");
     ps2LogCheckpoint();
     return true;
+}
+
+static int mapDepthToZ16(float q)
+{
+    /*
+     * The rotating unit cube is translated to camera Z=4.6. Its actual depth
+     * remains comfortably inside this conservative 2.5..7.0 range.
+     *
+     * Current gsKit GS_ZTEST_ON uses ZTST=GEQUAL, and gsKit_clear writes Z=0.
+     * Reciprocal depth therefore maps nearer geometry to larger integer Z.
+     * Use almost the complete Z16 range instead of an arbitrary small slice.
+     */
+    const float nearZ = 2.5f;
+    const float farZ = 7.0f;
+    const float nearQ = 1.0f / nearZ;
+    const float farQ = 1.0f / farZ;
+    float depth = (q - farQ) / (nearQ - farQ);
+
+    if (depth < 0.0f) {
+        depth = 0.0f;
+    } else if (depth > 1.0f) {
+        depth = 1.0f;
+    }
+
+    return 1 + (int)(depth * 65534.0f);
 }
 
 static struct scene_screen_vertex projectVertex(
@@ -151,23 +190,13 @@ static struct scene_screen_vertex projectVertex(
     const float ry = source->y * cosX - rz0 * sinX;
     const float rz = source->y * sinX + rz0 * cosX;
     const float cameraZ = rz + 4.6f;
-    const float invZ = 1.0f / cameraZ;
+    const float q = 1.0f / cameraZ;
 
     struct scene_screen_vertex out;
-    out.x = centerX + rx * focal * invZ;
-    out.y = centerY - ry * focal * invZ;
-
-    /*
-     * gsKit's current GS_ZTEST_ON selects GEQUAL and gsKit_clear writes Z=0.
-     * Reciprocal depth therefore maps nearer vertices to larger Z values.
-     */
-    out.z = (int)(60000.0f * invZ);
-    if (out.z < 1) {
-        out.z = 1;
-    } else if (out.z > 65535) {
-        out.z = 65535;
-    }
-
+    out.x = centerX + rx * focal * q;
+    out.y = centerY - ry * focal * q;
+    out.q = q;
+    out.z = mapDepthToZ16(q);
     return out;
 }
 
@@ -180,6 +209,27 @@ static void advanceRotation(float *sinValue, float *cosValue, float sinStep, flo
     *cosValue = oldCos * cosStep - oldSin * sinStep;
 }
 
+static GSPRIMSTQPOINT makeTexturedVertex(
+    GSGLOBAL *gs,
+    const struct scene_screen_vertex *vertex,
+    float u,
+    float v,
+    const struct scene_face *face)
+{
+    GSPRIMSTQPOINT out;
+    const float q = vertex->q;
+
+    /*
+     * GS perspective-correct texturing uses S,T,Q with FST=0. Current PS2SDK
+     * draw3d follows the same contract: Q=1/w, S=u*Q, T=v*Q. The GS then
+     * performs the perspective divide during texture interpolation.
+     */
+    out.rgbaq = color_to_RGBAQ(face->r, face->g, face->b, 0x80, q);
+    out.stq = vertex_to_STQ(u * q, v * q);
+    out.xyz2 = vertex_to_XYZ2(gs, vertex->x, vertex->y, vertex->z);
+    return out;
+}
+
 static void drawCube(
     GSGLOBAL *gs,
     GSTEXTURE *texture,
@@ -189,6 +239,9 @@ static void drawCube(
     float cosX)
 {
     struct scene_screen_vertex projected[SCENE_VERTEX_COUNT];
+    GSPRIMSTQPOINT drawVertices[SCENE_DRAW_VERTEX_COUNT];
+    int drawIndex = 0;
+
     const float centerX = (float)gs->Width * 0.50f;
     const float centerY = (float)gs->Height * 0.49f;
     const float focal = (float)gs->Height * 1.18f;
@@ -199,11 +252,6 @@ static void drawCube(
             centerX, centerY, focal);
     }
 
-    const float u0 = 0.0f;
-    const float v0 = 0.0f;
-    const float u1 = (float)(SCENE_TEXTURE_W - 1);
-    const float v1 = (float)(SCENE_TEXTURE_H - 1);
-
     for (int faceIndex = 0; faceIndex < SCENE_FACE_COUNT; ++faceIndex) {
         const struct scene_face *face = &kCubeFaces[faceIndex];
         const struct scene_screen_vertex *a = &projected[face->index[0]];
@@ -211,14 +259,19 @@ static void drawCube(
         const struct scene_screen_vertex *c = &projected[face->index[2]];
         const struct scene_screen_vertex *d = &projected[face->index[3]];
 
-        gsKit_prim_quad_goraud_texture_3d(
-            gs, texture,
-            a->x, a->y, a->z, u0, v1,
-            b->x, b->y, b->z, u1, v1,
-            c->x, c->y, c->z, u1, v0,
-            d->x, d->y, d->z, u0, v0,
-            face->color, face->color, face->color, face->color);
+        /* Triangle 1: a,b,c. */
+        drawVertices[drawIndex++] = makeTexturedVertex(gs, a, 0.0f, 1.0f, face);
+        drawVertices[drawIndex++] = makeTexturedVertex(gs, b, 1.0f, 1.0f, face);
+        drawVertices[drawIndex++] = makeTexturedVertex(gs, c, 1.0f, 0.0f, face);
+
+        /* Triangle 2: a,c,d. Shares exactly the same face plane and UV seam. */
+        drawVertices[drawIndex++] = makeTexturedVertex(gs, a, 0.0f, 1.0f, face);
+        drawVertices[drawIndex++] = makeTexturedVertex(gs, c, 1.0f, 0.0f, face);
+        drawVertices[drawIndex++] = makeTexturedVertex(gs, d, 0.0f, 0.0f, face);
     }
+
+    gsKit_prim_list_triangle_goraud_texture_stq_3d(
+        gs, texture, SCENE_DRAW_VERTEX_COUNT, drawVertices);
 }
 
 static void drawBackdrop(GSGLOBAL *gs, int romStatus)
@@ -250,7 +303,7 @@ bool ps2RendererSceneRun(GSGLOBAL *gs, int romStatus)
     }
 
     sysLogPrintf(LOG_NOTE,
-        "Renderer scene: begin depth-tested textured cube; no per-frame allocation/upload");
+        "Renderer scene: begin explicit triangles + STQ + reciprocal Z16; no per-frame allocation/upload");
     ps2LogCheckpoint();
 
     if (!initSceneTexture(gs, &texture)) {
@@ -272,7 +325,9 @@ bool ps2RendererSceneRun(GSGLOBAL *gs, int romStatus)
     float cosX = 1.0f;
 
     sysLogPrintf(LOG_NOTE,
-        "Renderer scene: entering frame loop Z16 + CT16 framebuffer + CT32 resident texture");
+        "Renderer scene: entering frame loop CT16 + Z16 GEQUAL + CT32 resident texture + STQ");
+    sysLogPrintf(LOG_NOTE,
+        "Renderer scene: depth range cameraZ=2.5..7.0 mapped to Z16=1..65535");
     ps2LogCheckpoint();
 
     const u64 background = GS_SETREG_RGBAQ(0x05, 0x08, 0x12, 0x80, 0x00);
