@@ -46,6 +46,7 @@ add_executable(pd_ps2_bootstrap
   bootstrap.c
   system_ps2.c
   video_diag.c
+  renderer_scene.c
   rom_probe.c
   "${PD_ROOT}/port/src/romsource.c"
 )
