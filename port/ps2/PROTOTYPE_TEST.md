@@ -31,42 +31,6 @@ The bootstrap derives the ROM path from the launched ELF path. A different path 
 --rom-file <device:path/to/pd.ntsc-final.z64>
 ```
 
-## Active logger
-
-Bring-up logging is enabled by default. The bootstrap tries to create:
-
-```text
-pdps2.log
-```
-
-next to the launched ELF. Console output remains enabled in parallel for loaders such as ps2link.
-
-The text logger records:
-
-- monotonic EE timestamp in microseconds,
-- level (`INFO`, `WARN`, `ERROR`),
-- source git commit baked into the build,
-- compiler version,
-- launch arguments,
-- resolved ROM path and source size,
-- ROM/header/RZIP/file-table milestones,
-- compressed and decompressed byte counts,
-- data-segment correctness hash,
-- total ROM-probe duration,
-- GS bring-up milestones and resolved display dimensions.
-
-Normal INFO lines are staged in a fixed 8 KiB buffer and written at coarse checkpoints instead of opening and closing the file for every log line. Warnings and errors force a flush. A fatal error also flushes before exit. This logger is intended for bring-up and correctness diagnostics; the later frame profiler will use a separate preallocated binary trace ring so formatted text does not enter hot paths.
-
-For a timing experiment where even this diagnostic I/O is unwanted, disable the file sink explicitly:
-
-```text
---no-log
-```
-
-stdout/stderr remain available.
-
-If the filesystem/device does not permit creation of `pdps2.log`, the bootstrap falls back to console-only logging rather than failing the prototype.
-
 ## Expected visible result
 
 The diagnostic frame contains three horizontal status bars and a Gouraud triangle.
@@ -76,7 +40,41 @@ The diagnostic frame contains three horizontal status bars and a Gouraud triangl
 - third bar green: ROM header, bounded RZIP streaming and file-table sanity all passed,
 - third bar red: ROM data path failed.
 
-The active log additionally reports the decompressed data-segment size, exact compressed bytes consumed by zlib, first file extent and an FNV-1a hash of the decompressed data segment.
+The console/file log additionally reports the decompressed data-segment size, exact compressed bytes consumed by zlib, first file extent and an FNV-1a hash of the decompressed data segment.
+
+## Active bring-up logger
+
+Bring-up logging is enabled by default. The prototype mirrors human-readable logs to stdout/stderr and to `pdps2.log` beside the ELF when a writable filesystem sink is available.
+
+Current PS2SDK does not implement `fsync()`. On filesystem-backed launchers such as `mass:`, flushing a still-open stdio stream is therefore not a sufficient durability contract for an ongoing logger. The PS2 backend uses coarse durable checkpoints that:
+
+1. flush the static 8 KiB staging buffer,
+2. close the log file so the filesystem can publish file-size/directory metadata,
+3. reopen it in append mode for subsequent entries.
+
+These close/reopen checkpoints are intentionally limited to bring-up boundaries such as ROM probe transitions and GS initialisation. They must not be moved into frame or other hot paths. `--no-log` disables the file sink for timing-sensitive experiments while console output remains available.
+
+## Real-hardware observations
+
+### 2026-08-25: first visual bring-up PASS
+
+A real PlayStation 2 produced the expected diagnostic frame with:
+
+- first status bar green,
+- second status bar blue,
+- third status bar green,
+- visible Gouraud triangle and white marker.
+
+This is direct hardware evidence that the current EE/system bootstrap, bounded ROM source, NTSC-final header validation, streamed RZIP 1173 data-segment decode, file-table sanity check, GIF path and GS diagnostic renderer all reached their expected state in one execution.
+
+The first logger implementation created `pdps2.log` but left the file at 0 bytes while the diagnostic remained in its infinite GS loop. This reproduced the known PS2SDK/filesystem issue where an ongoing file may not publish its final size while it remains open and `fsync()` is unavailable. The logger was subsequently changed to use explicit close/reopen durable checkpoints. A second real-hardware run is required to confirm that fix.
+
+Metadata not recorded for this first run and therefore intentionally not inferred:
+
+- SCPH model / hardware revision,
+- exact launcher and device stack,
+- active IRX set,
+- measured ROM-probe timing distribution.
 
 ## Real-hardware record
 
@@ -89,7 +87,7 @@ For every timing or stability result, record at least:
 - active IRX modules where known,
 - ROM path/device,
 - whether all three bars reached the expected state,
-- `pdps2.log` when the file sink is available,
+- relevant console/file log,
 - repeated-run count,
 - p50 / p95 / p99 / max for measured loading work once timing collection is added,
 - any failure or deadline miss count,
