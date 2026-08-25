@@ -41,10 +41,9 @@ typedef uint16_t Ps2GsTextureHandle;
  * Packet-ready register record.
  *
  * `value` is the 64-bit GS register payload and `reg` is the GIF register id.
- * Two records below deliberately match the current gsKit REGLIST source
- * layouts, allowing the compatibility transport to memcpy them without a
- * second per-vertex repack. A later native GIF builder can consume the exact
- * same representation directly.
+ * The vertex records are final A+D records. `xyz2` may carry either XYZ2 or
+ * XYZF2 because the register selector is part of the record itself; this keeps
+ * fog from expanding the per-vertex transport representation.
  */
 struct Ps2GsPackedReg {
     uint64_t value;
@@ -83,6 +82,7 @@ void ps2GsCoreSetScissor(int x, int y, int width, int height);
 void ps2GsCoreSetDepthMode(bool depth_test, bool depth_update, bool depth_compare);
 void ps2GsCoreSetAlphaBlend(bool enable);
 void ps2GsCoreSetAlphaTest(bool enable, uint8_t reference);
+void ps2GsCoreSetFog(bool enable, uint8_t r, uint8_t g, uint8_t b);
 void ps2GsCoreSetTextureClamp(uint32_t cms, uint32_t cmt);
 
 /*
