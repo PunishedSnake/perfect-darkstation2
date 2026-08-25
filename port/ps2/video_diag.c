@@ -7,15 +7,21 @@
 #include "log_ps2.h"
 
 bool ps2GfxApiSceneRun(GSGLOBAL *gs, int romStatus);
+bool ps2Fast3dSceneRun(GSGLOBAL *gs, int romStatus);
 
 /*
  * PS2 graphics bring-up owner.
  *
- * Stage 0 proved framebuffer/GIF presentation and Stage 1 proved direct GS
- * textured 3D, reciprocal Z16 and STQ on real hardware. The current stage
- * keeps low-level GS/dmaKit initialisation here, then hands the live GSGLOBAL
- * to the actual Perfect Dark GfxRenderingAPI backend. This isolates the next
- * correctness boundary without inventing a second renderer abstraction.
+ * Stage 0 proved framebuffer/GIF presentation, Stage 1 proved direct GS
+ * textured 3D, reciprocal Z16 and STQ on real hardware, and Stage 2 proved the
+ * actual Perfect Dark GfxRenderingAPI backend. The active stage now preserves
+ * the same low-level GS/dmaKit setup but sends a bounded synthetic N64 GBI
+ * display list through the real Fast3D translator before it reaches the PS2
+ * rendering and window APIs.
+ *
+ * ps2GfxApiSceneRun remains linked as the lower-level A/B baseline so a future
+ * hardware regression can distinguish translator failures from backend/GS
+ * failures without reviving a second renderer abstraction.
  */
 bool ps2VideoDiagRun(int rom_status)
 {
@@ -59,7 +65,8 @@ bool ps2VideoDiagRun(int rom_status)
     sysLogPrintf(LOG_NOTE,
         "GS diagnostic: VRAM screen0=%08x screen1=%08x zbuffer=%08x next=%08x",
         gs->ScreenBuffer[0], gs->ScreenBuffer[1], gs->ZBuffer, gs->CurrentPointer);
+    sysLogPrintf(LOG_NOTE, "GS diagnostic: handing live GS to real Fast3D display-list path");
     ps2LogCheckpoint();
 
-    return ps2GfxApiSceneRun(gs, rom_status);
+    return ps2Fast3dSceneRun(gs, rom_status);
 }
