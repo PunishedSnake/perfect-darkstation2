@@ -4,6 +4,7 @@
 
 #include "romsource.h"
 #include "system.h"
+#include "log_ps2.h"
 
 #define PD_ROM_SIZE (32u * 1024u * 1024u)
 #define PD_ROM_DATA_OFS 0x39850u
@@ -109,6 +110,10 @@ static int inflateDataSegment(struct romsource *source)
         goto cleanup;
     }
 
+    sysLogPrintf(LOG_NOTE, "ROM probe: entering bounded inflate loop at ROM offset %08x",
+        PD_ROM_DATA_OFS + PD_RZIP_HEADER_SIZE);
+    ps2LogFlush();
+
     nextOffset = PD_ROM_DATA_OFS + PD_RZIP_HEADER_SIZE;
 
     for (;;) {
@@ -201,6 +206,7 @@ int ps2RomProbe(const char *path)
     }
 
     sysLogPrintf(LOG_NOTE, "ROM probe: opening %s", path);
+    ps2LogFlush();
 
     if (!romSourceOpenFile(&source, path)) {
         sysLogPrintf(LOG_ERROR, "ROM probe: open failed: %s", path);
