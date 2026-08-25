@@ -65,6 +65,7 @@ add_executable(pd_ps2_bootstrap
   system_ps2.c
   video_diag.c
   gfx_api_scene.c
+  gfx_fast3d_scene.c
   gfx_ps2.cpp
   gfx_window_ps2.c
   rom_probe.c
@@ -102,10 +103,9 @@ set_target_properties(pd_ps2_bootstrap PROPERTIES
   SUFFIX ".elf"
 )
 
-# The real current Fast3D translator is now linked into the bring-up ELF, not
-# merely compiled as an isolated object. The diagnostic scene still drives the
-# rendering API directly, so this remains a link/source-contract gate until the
-# next stage routes a bounded synthetic display list through gfx_run().
+# The current Fast3D translator is linked into the bring-up ELF and the active
+# diagnostic now sends a bounded synthetic GBI display list through gfx_run().
+# gfx_api_scene.c remains built as the lower-level GfxRenderingAPI A/B baseline.
 
 message(STATUS "Perfect Dark PS2 bootstrap root: ${PD_ROOT}")
 message(STATUS "Perfect Dark PS2 bootstrap gsKit: ${GSKIT}")
