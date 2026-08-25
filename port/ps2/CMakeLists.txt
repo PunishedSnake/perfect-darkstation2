@@ -78,10 +78,9 @@ set(PD_PS2_GAME_DEFINITIONS
   VERSION=2
 )
 
-# The upstream game compile depends on generated enum headers even when no
-# asset binary is linked yet. Generate only the top-level headers required by
-# constants.h first; grow this list from concrete compiler evidence rather than
-# making the PS2 bootstrap run the entire desktop asset pipeline pre-emptively.
+# The game compile depends on generated enum headers even before any binary
+# asset payload is linked. Keep this headers-only: it exercises the real source
+# contract without introducing runtime asset transport or copies prematurely.
 function(pd_ps2_generate_asset_header json_name tool_name header_name)
   set(input "${PD_PS2_ASSET_DIR}/${json_name}")
   set(output "${PD_PS2_GENERATED_DIR}/${header_name}")
@@ -89,7 +88,7 @@ function(pd_ps2_generate_asset_header json_name tool_name header_name)
     OUTPUT "${output}"
     COMMAND "${CMAKE_COMMAND}" -E env "ROMID=${PD_PS2_ROMID}"
       "${PD_PS2_PYTHON3}" "${PD_ROOT}/tools/assetmgr/${tool_name}"
-      "${input}" --headers-only "--romid=${PD_PS2_ROMID}"
+      "${input}" ${ARGN} --headers-only "--romid=${PD_PS2_ROMID}"
     DEPENDS
       "${input}"
       "${PD_ROOT}/tools/assetmgr/${tool_name}"
@@ -104,6 +103,14 @@ set(PD_PS2_GENERATED_HEADERS "")
 pd_ps2_generate_asset_header("animations.json" "mkanims" "animations.h")
 pd_ps2_generate_asset_header("sequences.json" "mksequences" "sequences.h")
 pd_ps2_generate_asset_header("textures.json" "mktextures" "textures.h")
+
+file(GLOB PD_PS2_LANG_JSON CONFIGURE_DEPENDS "${PD_PS2_ASSET_DIR}/lang/*.json")
+foreach(lang_json IN LISTS PD_PS2_LANG_JSON)
+  get_filename_component(lang_name "${lang_json}" NAME_WE)
+  pd_ps2_generate_asset_header(
+    "lang/${lang_name}.json" "mklang" "lang/${lang_name}.h" "en")
+endforeach()
+
 add_custom_target(pd_ps2_asset_headers DEPENDS ${PD_PS2_GENERATED_HEADERS})
 
 add_executable(pd_ps2_bootstrap
