@@ -2,8 +2,6 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#include <gsKit.h>
-
 #include "gfx_window_ps2.h"
 #include "gs_core.h"
 #include "system.h"
@@ -18,80 +16,53 @@
  *
  * Whole-system rule: swap_buffers_begin() never waits. Presentation waits only
  * in swap_buffers_end(), after Fast3D has submitted the frame and called its
- * rendering backend finish hook. The actual GS presentation primitive lives in
- * gs_core so the window contract does not depend on gsKit transport details.
+ * rendering backend finish hook. Device state lives exclusively in gs_core.
  */
 
-static GSGLOBAL *s_window_gs;
 static int s_target_fps = 60;
 static void (*s_fullscreen_changed_cb)(bool);
 
-void gfxPs2WindowBindGs(GSGLOBAL *gs)
-{
-    s_window_gs = gs;
-}
-
 static int ps2_window_refresh_rate(void)
 {
-    if (!s_window_gs) {
-        return s_target_fps > 0 ? s_target_fps : 60;
-    }
-
-    switch (s_window_gs->Mode) {
-        case GS_MODE_PAL:
-        case GS_MODE_DTV_576P:
-        case GS_MODE_DVD_PAL:
-            return 50;
-        case GS_MODE_VGA_640_72:
-        case GS_MODE_VGA_800_72:
-            return 72;
-        case GS_MODE_VGA_640_75:
-        case GS_MODE_VGA_800_75:
-        case GS_MODE_VGA_1024_75:
-        case GS_MODE_VGA_1280_75:
-            return 75;
-        case GS_MODE_VGA_640_85:
-        case GS_MODE_VGA_800_85:
-        case GS_MODE_VGA_1024_85:
-            return 85;
-        default:
-            return 60;
-    }
+    const int refresh = ps2GsCoreGetRefreshRate();
+    return refresh > 0 ? refresh : (s_target_fps > 0 ? s_target_fps : 60);
 }
 
 static void ps2_window_init(const struct GfxWindowInitSettings *settings)
 {
-    if (!s_window_gs) {
-        sysLogPrintf(LOG_ERROR, "GfxWapiPS2 init: GS is not bound");
+    if (!ps2GsCoreIsReady()) {
+        sysLogPrintf(LOG_ERROR, "GfxWapiPS2 init: GS core is not ready");
         return;
     }
 
+    const int width = ps2GsCoreGetWidth();
+    const int height = ps2GsCoreGetHeight();
+
     if (settings &&
-        (settings->width != (uint32_t)s_window_gs->Width ||
-         settings->height != (uint32_t)s_window_gs->Height)) {
+        (settings->width != (uint32_t)width || settings->height != (uint32_t)height)) {
         sysLogPrintf(LOG_WARNING,
             "GfxWapiPS2 init: requested %ux%u but active GS is %dx%d; keeping active display",
-            settings->width, settings->height, s_window_gs->Width, s_window_gs->Height);
+            settings->width, settings->height, width, height);
     }
 
     s_target_fps = ps2_window_refresh_rate();
     sysLogPrintf(LOG_NOTE,
         "GfxWapiPS2 init: fixed display %dx%d mode=0x%x refresh=%d",
-        s_window_gs->Width, s_window_gs->Height, s_window_gs->Mode, s_target_fps);
+        width, height, ps2GsCoreGetMode(), s_target_fps);
 }
 
 static void ps2_window_close(void)
 {
-    /* GS lifetime is owned by gs_core during bring-up. */
+    /* GS lifetime is owned by gs_core. */
 }
 
 static int ps2_get_display_mode(int modenum, int *out_w, int *out_h)
 {
-    if (modenum != 0 || !s_window_gs) {
+    if (modenum != 0 || !ps2GsCoreIsReady()) {
         return 0;
     }
-    if (out_w) *out_w = s_window_gs->Width;
-    if (out_h) *out_h = s_window_gs->Height;
+    if (out_w) *out_w = ps2GsCoreGetWidth();
+    if (out_h) *out_h = ps2GsCoreGetHeight();
     return 1;
 }
 
@@ -102,7 +73,7 @@ static int ps2_get_current_display_mode(int *out_w, int *out_h)
 
 static int ps2_get_num_display_modes(void)
 {
-    return s_window_gs ? 1 : 0;
+    return ps2GsCoreIsReady() ? 1 : 0;
 }
 
 static int32_t ps2_get_fullscreen_state(void)
@@ -176,8 +147,8 @@ static void ps2_set_dimensions(uint32_t width, uint32_t height, int32_t posX, in
 
 static void ps2_get_dimensions(uint32_t *width, uint32_t *height, int32_t *posX, int32_t *posY)
 {
-    if (width) *width = s_window_gs ? (uint32_t)s_window_gs->Width : 0;
-    if (height) *height = s_window_gs ? (uint32_t)s_window_gs->Height : 0;
+    if (width) *width = ps2GsCoreIsReady() ? (uint32_t)ps2GsCoreGetWidth() : 0;
+    if (height) *height = ps2GsCoreIsReady() ? (uint32_t)ps2GsCoreGetHeight() : 0;
     if (posX) *posX = 0;
     if (posY) *posY = 0;
 }
@@ -197,7 +168,7 @@ static void ps2_handle_events(void)
 
 static bool ps2_start_frame(void)
 {
-    return s_window_gs != NULL;
+    return ps2GsCoreIsReady();
 }
 
 static void ps2_swap_buffers_begin(void)
@@ -207,7 +178,7 @@ static void ps2_swap_buffers_begin(void)
 
 static void ps2_swap_buffers_end(void)
 {
-    if (s_window_gs) {
+    if (ps2GsCoreIsReady()) {
         ps2GsCorePresent();
     }
 }
