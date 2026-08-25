@@ -5,18 +5,22 @@ on:
     branches: [ "ps2" ]
     paths:
       - "port/ps2/**"
+      - "port/fast3d/**"
       - "port/src/romsource.c"
       - "port/include/romsource.h"
       - "port/include/system.h"
+      - "src/include/**"
       - "include/**"
       - ".github/workflows/ps2-bootstrap.yml"
   pull_request:
     branches: [ "ps2" ]
     paths:
       - "port/ps2/**"
+      - "port/fast3d/**"
       - "port/src/romsource.c"
       - "port/include/romsource.h"
       - "port/include/system.h"
+      - "src/include/**"
       - "include/**"
       - ".github/workflows/ps2-bootstrap.yml"
   workflow_dispatch:
