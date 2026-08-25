@@ -28,6 +28,7 @@ add_executable(pd_ps2_bootstrap
   bootstrap.c
   system_ps2.c
   video_diag.c
+  rom_probe.c
   "${PD_ROOT}/port/src/romsource.c"
 )
 
@@ -52,8 +53,9 @@ target_compile_options(pd_ps2_bootstrap PRIVATE
 target_compile_definitions(pd_ps2_bootstrap PRIVATE PLATFORM_PS2=1)
 target_link_directories(pd_ps2_bootstrap PRIVATE "${GSKIT}/lib")
 
-# Match current gsKit's own sample link order: gsKit first, dmaKit second.
-target_link_libraries(pd_ps2_bootstrap PRIVATE gskit dmakit kernel)
+# Current ps2sdk-ports installs EE zlib into PS2SDK/ports. Keep it behind the
+# bootstrap only until the full build has a platform dependency layer.
+target_link_libraries(pd_ps2_bootstrap PRIVATE gskit dmakit z kernel)
 
 set_target_properties(pd_ps2_bootstrap PROPERTIES
   OUTPUT_NAME "pd-ps2-bootstrap"
