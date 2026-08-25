@@ -2,7 +2,15 @@
 #define _IN_PLATFORM_H
 
 // detect OS
-#if defined(_WIN32)
+#if defined(PLATFORM_PS2) || defined(__PS2__)
+	/*
+	 * PS2SDK/newlib is its own platform contract. Do not label the target as
+	 * generic POSIX: doing so would opt unrelated code into desktop assumptions
+	 * about files, threads, sockets and process APIs that are not guaranteed by
+	 * the current PS2 software stack.
+	 */
+	#define PLATFORM_PS2 1
+#elif defined(_WIN32)
 	#define PLATFORM_WIN32 1
 #elif defined(__SWITCH__)
 	#define PLATFORM_POSIX 1
@@ -20,7 +28,14 @@
 #endif
 
 // detect arch
-#if defined(__x86_64__) || defined(_M_X64)
+#if defined(PLATFORM_PS2) || defined(__PS2__)
+	/*
+	 * The EE compiler targets the 64-bit R5900 core with the PS2 n32 ABI.
+	 * Pointers remain 32-bit, so PLATFORM_64BIT must stay unset here.
+	 */
+	#define PLATFORM_MIPS 1
+	#define PLATFORM_R5900 1
+#elif defined(__x86_64__) || defined(_M_X64)
 	#define PLATFORM_X86_64 1
 	#define PLATFORM_64BIT 1
 #elif defined(__i386__) || defined(_X86_) || defined(_M_IX86)
