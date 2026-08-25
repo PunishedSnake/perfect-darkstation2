@@ -3,6 +3,7 @@
 
 #include <dmaKit.h>
 #include <gsKit.h>
+#include <gsInline.h>
 
 #include "gs_core.h"
 #include "log_ps2.h"
