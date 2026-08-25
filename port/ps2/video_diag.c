@@ -17,7 +17,7 @@
 bool ps2VideoDiagRun(int rom_status)
 {
     sysLogPrintf(LOG_NOTE, "GS diagnostic: gsKit_init_global");
-    ps2LogFlush();
+    ps2LogCheckpoint();
     GSGLOBAL *gs = gsKit_init_global();
 
     if (!gs) {
@@ -35,20 +35,25 @@ bool ps2VideoDiagRun(int rom_status)
     gs->Dithering = GS_SETTING_ON;
 
     sysLogPrintf(LOG_NOTE, "GS diagnostic: initialising dmaKit GIF channel");
-    ps2LogFlush();
+    ps2LogCheckpoint();
     dmaKit_init(D_CTRL_RELE_OFF, D_CTRL_MFD_OFF, D_CTRL_STS_UNSPEC,
         D_CTRL_STD_OFF, D_CTRL_RCYC_8, 1 << DMA_CHANNEL_GIF);
     dmaKit_chan_init(DMA_CHANNEL_GIF);
 
     sysLogPrintf(LOG_NOTE, "GS diagnostic: initialising screen");
-    ps2LogFlush();
+    ps2LogCheckpoint();
     gsKit_init_screen(gs);
     gsKit_mode_switch(gs, GS_ONESHOT);
     gsKit_set_test(gs, GS_ZTEST_OFF);
 
     sysLogPrintf(LOG_NOTE, "GS diagnostic: ready width=%d height=%d PSM=CT16 zbuffer=off rom_status=%d",
         gs->Width, gs->Height, rom_status);
-    ps2LogFlush();
+
+    /*
+     * The diagnostic frame loop intentionally never returns. Publish this
+     * final bring-up state by closing/reopening the log before entering it.
+     */
+    ps2LogCheckpoint();
 
     const u64 background = GS_SETREG_RGBAQ(0x08, 0x0c, 0x18, 0x00, 0x00);
     const u64 panel = GS_SETREG_RGBAQ(0x20, 0x2a, 0x42, 0x00, 0x00);
