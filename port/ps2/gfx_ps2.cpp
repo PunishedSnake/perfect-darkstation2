@@ -18,15 +18,27 @@
  * ownership, GS register state, texture residency and primitive submission live
  * below this file in gs_core.
  *
- * Current fixed-function material recipes:
+ * One-cycle color and alpha equations are classified independently. gfx_pc.cpp
+ * already resolves SHADE/PRIMITIVE/ENVIRONMENT/etc. into compact INPUTn VBO
+ * channels, so INPUT1 is intentionally semantic-agnostic here. This lets a
+ * single RGBAQ record carry RGB from one N64 source and alpha from another.
+ *
+ * Current exact fixed-function color recipes:
  *   - INPUT1
  *   - TEXEL0
  *   - TEXEL0 * INPUT1
  *
- * INPUT1 is intentionally semantic-agnostic here. gfx_pc.cpp has already
- * resolved SHADE/PRIMITIVE/ENVIRONMENT/etc. into the VBO input before this
- * adapter sees it. Alpha variants are accepted only when their alpha-cycle
- * equation maps exactly to the same GS fixed-function operation.
+ * Current exact alpha recipes:
+ *   - opaque/one/zero
+ *   - INPUT1
+ *   - TEXEL0
+ *   - TEXEL0 * INPUT1
+ *
+ * GS texture MODULATE uses 0x80 as unity and multiplies with >>7. Fast3D's
+ * RGBA8 texture upload keeps texel alpha in 0..255, while GS fragment alpha uses
+ * the native 0..0x80 range. When texture alpha participates (TCC=RGBA), fragment
+ * alpha is therefore scaled to 0..0x40 so the MODULATE result returns to the
+ * GS-native 0..0x80 range without repacking every texture at upload time.
  *
  * Fog maps to the GS native FOGCOL + per-vertex XYZF2 path. Fast3D's factor is
  * the fog contribution, while GS F is the source-color contribution, so the
@@ -39,7 +51,8 @@
 
 #define PS2_GFX_MAX_SHADERS 32
 #define PS2_GFX_TRANSLATE_VERTS 96
-#define PS2_GFX_ALPHA_THRESHOLD 8u
+/* Fast3D threshold is 8/256. GS alpha unity is 0x80, hence reference 4. */
+#define PS2_GFX_ALPHA_THRESHOLD 4u
 
 /* GS packed-register IDs consumed by the packet-ready core boundary. */
 #define PS2_GS_REG_RGBAQ 0x01u
@@ -47,11 +60,31 @@
 #define PS2_GS_REG_XYZF2 0x04u
 #define PS2_GS_REG_XYZ2  0x05u
 
+enum Ps2ColorRecipe {
+    PS2_COLOR_UNSUPPORTED = 0,
+    PS2_COLOR_INPUT1,
+    PS2_COLOR_TEX0,
+    PS2_COLOR_TEX0_MUL_INPUT1,
+};
+
+enum Ps2AlphaRecipe {
+    PS2_ALPHA_UNSUPPORTED = 0,
+    PS2_ALPHA_OPAQUE,
+    PS2_ALPHA_ZERO,
+    PS2_ALPHA_ONE,
+    PS2_ALPHA_INPUT1,
+    PS2_ALPHA_TEX0,
+    PS2_ALPHA_TEX0_MUL_INPUT1,
+};
+
 struct ShaderProgram {
     bool used;
     bool supported;
     bool textured;
+    bool texture_alpha;
     bool warned_rejected_draw;
+    enum Ps2ColorRecipe color_recipe;
+    enum Ps2AlphaRecipe alpha_recipe;
     uint64_t shader_id0;
     uint32_t shader_id1;
     struct CCFeatures features;
@@ -73,7 +106,6 @@ static float s_depth_near = 0.0f;
 static float s_depth_far = 1.0f;
 static bool s_depth_test = true;
 static bool s_depth_update = true;
-static bool s_use_alpha;
 static bool s_modulate;
 static enum FilteringMode s_filter_mode = FILTER_LINEAR;
 static enum MipmapFilteringMode s_mipmap_filter = MIPMAP_DISABLED;
@@ -113,7 +145,7 @@ static bool ps2_shader_common_supported(const struct CCFeatures *f)
      * These options need explicit GS state or an additional rendering pass.
      * Reject them until that mapping exists instead of accepting a visually
      * plausible but semantically wrong approximation. Alpha threshold and fog
-     * both have exact fixed-function GS mappings and are allowed here.
+     * both have fixed-function GS mappings and are allowed here.
      */
     return !f->opt_texture_edge && !f->opt_noise && !f->opt_2cyc &&
            !f->opt_invisible && !f->opt_grayscale && !f->opt_blur &&
@@ -132,58 +164,117 @@ static bool ps2_shader_item_is_tex0_alpha(uint8_t item)
     return item == SHADER_TEXEL0 || item == SHADER_TEXEL0A;
 }
 
-static bool ps2_shader_alpha_is_input1(const struct CCFeatures *f)
+static enum Ps2ColorRecipe ps2_classify_color_recipe(const struct CCFeatures *f)
 {
-    return !f->opt_alpha ||
-           (f->do_single[0][1] && f->c[0][1][3] == SHADER_INPUT_1);
-}
-
-static bool ps2_shader_alpha_is_tex0(const struct CCFeatures *f)
-{
-    return !f->opt_alpha ||
-           (f->do_single[0][1] && ps2_shader_item_is_tex0_alpha(f->c[0][1][3]));
-}
-
-static bool ps2_shader_alpha_is_tex0_mul_input1(const struct CCFeatures *f)
-{
-    if (!f->opt_alpha || !f->do_multiply[0][1]) {
-        return !f->opt_alpha;
+    if (f->do_single[0][0]) {
+        if (f->c[0][0][3] == SHADER_INPUT_1) {
+            return PS2_COLOR_INPUT1;
+        }
+        if (f->c[0][0][3] == SHADER_TEXEL0) {
+            return PS2_COLOR_TEX0;
+        }
     }
 
-    const uint8_t a = f->c[0][1][0];
-    const uint8_t c = f->c[0][1][2];
-    return (ps2_shader_item_is_tex0_alpha(a) && c == SHADER_INPUT_1) ||
-           (a == SHADER_INPUT_1 && ps2_shader_item_is_tex0_alpha(c));
+    if (f->do_multiply[0][0]) {
+        const uint8_t a = f->c[0][0][0];
+        const uint8_t c = f->c[0][0][2];
+        if ((a == SHADER_TEXEL0 && c == SHADER_INPUT_1) ||
+            (a == SHADER_INPUT_1 && c == SHADER_TEXEL0)) {
+            return PS2_COLOR_TEX0_MUL_INPUT1;
+        }
+    }
+
+    return PS2_COLOR_UNSUPPORTED;
 }
 
-static bool ps2_shader_is_untextured_input1(const struct CCFeatures *f)
+static enum Ps2AlphaRecipe ps2_classify_alpha_recipe(const struct CCFeatures *f)
 {
-    return ps2_shader_common_supported(f) && !f->used_textures[0] &&
-           f->num_inputs == 1 && f->do_single[0][0] &&
-           f->c[0][0][3] == SHADER_INPUT_1 &&
-           ps2_shader_alpha_is_input1(f);
+    if (!f->opt_alpha) {
+        return PS2_ALPHA_OPAQUE;
+    }
+
+    if (f->do_single[0][1]) {
+        const uint8_t d = f->c[0][1][3];
+        if (d == SHADER_0) {
+            return PS2_ALPHA_ZERO;
+        }
+        if (d == SHADER_1) {
+            return PS2_ALPHA_ONE;
+        }
+        if (d == SHADER_INPUT_1) {
+            return PS2_ALPHA_INPUT1;
+        }
+        if (ps2_shader_item_is_tex0_alpha(d)) {
+            return PS2_ALPHA_TEX0;
+        }
+    }
+
+    if (f->do_multiply[0][1]) {
+        const uint8_t a = f->c[0][1][0];
+        const uint8_t c = f->c[0][1][2];
+        if ((ps2_shader_item_is_tex0_alpha(a) && c == SHADER_INPUT_1) ||
+            (a == SHADER_INPUT_1 && ps2_shader_item_is_tex0_alpha(c))) {
+            return PS2_ALPHA_TEX0_MUL_INPUT1;
+        }
+    }
+
+    return PS2_ALPHA_UNSUPPORTED;
 }
 
-static bool ps2_shader_is_tex0(const struct CCFeatures *f)
+static bool ps2_color_recipe_textured(enum Ps2ColorRecipe recipe)
 {
-    return ps2_shader_common_supported(f) && f->used_textures[0] &&
-           f->num_inputs == 0 && f->do_single[0][0] &&
-           f->c[0][0][3] == SHADER_TEXEL0 &&
-           ps2_shader_alpha_is_tex0(f);
+    return recipe == PS2_COLOR_TEX0 || recipe == PS2_COLOR_TEX0_MUL_INPUT1;
 }
 
-static bool ps2_shader_is_tex0_mul_input1(const struct CCFeatures *f)
+static bool ps2_color_recipe_uses_input1(enum Ps2ColorRecipe recipe)
 {
-    if (!ps2_shader_common_supported(f) || !f->used_textures[0] ||
-        f->num_inputs != 1 || !f->do_multiply[0][0] ||
-        !ps2_shader_alpha_is_tex0_mul_input1(f)) {
+    return recipe == PS2_COLOR_INPUT1 || recipe == PS2_COLOR_TEX0_MUL_INPUT1;
+}
+
+static bool ps2_alpha_recipe_textured(enum Ps2AlphaRecipe recipe)
+{
+    return recipe == PS2_ALPHA_TEX0 || recipe == PS2_ALPHA_TEX0_MUL_INPUT1;
+}
+
+static bool ps2_alpha_recipe_uses_input1(enum Ps2AlphaRecipe recipe)
+{
+    return recipe == PS2_ALPHA_INPUT1 || recipe == PS2_ALPHA_TEX0_MUL_INPUT1;
+}
+
+static bool ps2_shader_recipe_supported(struct ShaderProgram *prg)
+{
+    const struct CCFeatures *f = &prg->features;
+    if (!ps2_shader_common_supported(f) ||
+        prg->color_recipe == PS2_COLOR_UNSUPPORTED ||
+        prg->alpha_recipe == PS2_ALPHA_UNSUPPORTED) {
         return false;
     }
 
-    const uint8_t a = f->c[0][0][0];
-    const uint8_t c = f->c[0][0][2];
-    return (a == SHADER_TEXEL0 && c == SHADER_INPUT_1) ||
-           (a == SHADER_INPUT_1 && c == SHADER_TEXEL0);
+    const bool color_textured = ps2_color_recipe_textured(prg->color_recipe);
+    const bool alpha_textured = ps2_alpha_recipe_textured(prg->alpha_recipe);
+    const bool uses_input1 = ps2_color_recipe_uses_input1(prg->color_recipe) ||
+                             ps2_alpha_recipe_uses_input1(prg->alpha_recipe);
+
+    /*
+     * GS MODULATE applies the texture function to RGB and alpha together. A
+     * texture used only by the alpha equation while RGB is untextured would
+     * therefore alter RGB and needs another mapping/pass; reject it for now.
+     */
+    if (alpha_textured && !color_textured) {
+        return false;
+    }
+
+    if (f->used_textures[0] != color_textured) {
+        return false;
+    }
+
+    if (uses_input1 ? (f->num_inputs != 1) : (f->num_inputs != 0)) {
+        return false;
+    }
+
+    prg->textured = color_textured;
+    prg->texture_alpha = alpha_textured;
+    return true;
 }
 
 static void ps2_log_shader_recipe(int slot, const struct ShaderProgram *prg)
@@ -192,7 +283,7 @@ static void ps2_log_shader_recipe(int slot, const struct ShaderProgram *prg)
 
     sysLogPrintf(prg->supported ? LOG_NOTE : LOG_WARNING,
         "GfxPS2 shader %02d id=%016llx/%08x supported=%d tex=%d%d inputs=%d "
-        "rgb=[%u,%u,%u,%u] a=[%u,%u,%u,%u] "
+        "recipe=%d/%d tcc=%d rgb=[%u,%u,%u,%u] a=[%u,%u,%u,%u] "
         "opts=a%d f%d e%d n%d 2c%d at%d inv%d g%d b%d",
         slot,
         (unsigned long long)prg->shader_id0,
@@ -201,6 +292,9 @@ static void ps2_log_shader_recipe(int slot, const struct ShaderProgram *prg)
         f->used_textures[0] ? 1 : 0,
         f->used_textures[1] ? 1 : 0,
         f->num_inputs,
+        (int)prg->color_recipe,
+        (int)prg->alpha_recipe,
+        prg->texture_alpha ? 1 : 0,
         f->c[0][0][0], f->c[0][0][1], f->c[0][0][2], f->c[0][0][3],
         f->c[0][1][0], f->c[0][1][1], f->c[0][1][2], f->c[0][1][3],
         f->opt_alpha ? 1 : 0,
@@ -240,6 +334,9 @@ static void ps2_load_shader(struct ShaderProgram *new_prg)
 
     const bool fog = new_prg && new_prg->supported && new_prg->features.opt_fog;
     ps2GsCoreSetFog(fog, 0u, 0u, 0u);
+
+    const bool texture_alpha = new_prg && new_prg->supported && new_prg->texture_alpha;
+    ps2GsCoreSetTextureAlpha(texture_alpha);
 }
 
 static struct ShaderProgram *ps2_create_and_load_new_shader(uint64_t shader_id0, uint32_t shader_id1)
@@ -258,11 +355,9 @@ static struct ShaderProgram *ps2_create_and_load_new_shader(uint64_t shader_id0,
             prg->shader_id0 = shader_id0;
             prg->shader_id1 = shader_id1;
             gfx_cc_get_features(shader_id0, shader_id1, &prg->features);
-
-            const bool tex0 = ps2_shader_is_tex0(&prg->features);
-            const bool tex0_mul_input1 = ps2_shader_is_tex0_mul_input1(&prg->features);
-            prg->textured = tex0 || tex0_mul_input1;
-            prg->supported = prg->textured || ps2_shader_is_untextured_input1(&prg->features);
+            prg->color_recipe = ps2_classify_color_recipe(&prg->features);
+            prg->alpha_recipe = ps2_classify_alpha_recipe(&prg->features);
+            prg->supported = ps2_shader_recipe_supported(prg);
 
             ps2_log_shader_recipe(i, prg);
 
@@ -327,6 +422,11 @@ static void ps2_upload_texture(const uint8_t *rgba32_buf, uint32_t width, uint32
         s_warned_mipmap = true;
     }
 
+    /*
+     * Keep Fast3D's RGBA8 texture representation untouched. Texture alpha is
+     * normalized at the GS texture-function boundary by fragment-alpha scale,
+     * avoiding a full texture copy/repack on the upload critical path.
+     */
     ps2GsCoreUploadTextureRgba32(
         s_selected_texture[s_active_texture_tile], rgba32_buf, width, height);
 }
@@ -383,7 +483,6 @@ static void ps2_set_scissor(int x, int y, int width, int height)
 
 static void ps2_set_use_alpha(bool use_alpha, bool modulate)
 {
-    s_use_alpha = use_alpha;
     s_modulate = modulate;
     ps2GsCoreSetAlphaBlend(use_alpha);
 }
@@ -410,10 +509,17 @@ static uint8_t ps2_modulate_component(float v)
     return (uint8_t)out;
 }
 
-static uint8_t ps2_alpha_component(float v)
+static uint8_t ps2_texture_alpha_fragment_component(float v)
 {
-    /* RGBAQ alpha is fixed-point with 0x80 representing 1.0. */
-    return ps2_modulate_component(v);
+    /*
+     * Fast3D texture alpha arrives in 0..255. GS MODULATE computes At*Af>>7,
+     * so Af=0x40 represents the compensation needed to map texel 0xff to the
+     * GS-native opaque alpha neighbourhood without an upload-side repack.
+     */
+    int out = (int)(ps2_clampf(v, 0.0f, 1.0f) * 64.0f + 0.5f);
+    if (out < 0) out = 0;
+    if (out > 64) out = 64;
+    return (uint8_t)out;
 }
 
 static uint8_t ps2_fog_coefficient(float fast3d_factor)
@@ -600,26 +706,64 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
 
             if (s_shader->features.opt_grayscale) pos += 4;
 
-            float r = 1.0f;
-            float g = 1.0f;
-            float b = 1.0f;
-            float a = 1.0f;
+            float input_r = 1.0f;
+            float input_g = 1.0f;
+            float input_b = 1.0f;
+            float input_a = 1.0f;
             if (s_shader->features.num_inputs > 0) {
-                r = src[pos++];
-                g = src[pos++];
-                b = src[pos++];
+                input_r = src[pos++];
+                input_g = src[pos++];
+                input_b = src[pos++];
                 if (s_shader->features.opt_alpha) {
-                    a = src[pos++];
+                    input_a = src[pos++];
                 }
             }
 
             const float sx = (float)s_viewport.x + (ndc_x * 0.5f + 0.5f) * (float)s_viewport.width;
             const float sy = (float)s_viewport.y + (0.5f - ndc_y * 0.5f) * (float)s_viewport.height;
             const int iz = ps2_map_clip_depth(clip_z, clip_w);
-            const uint8_t cr = s_shader->textured ? ps2_modulate_component(r) : ps2_u8_component(r);
-            const uint8_t cg = s_shader->textured ? ps2_modulate_component(g) : ps2_u8_component(g);
-            const uint8_t cb = s_shader->textured ? ps2_modulate_component(b) : ps2_u8_component(b);
-            const uint8_t ca = s_use_alpha ? ps2_alpha_component(a) : 0x80;
+
+            uint8_t cr = 0;
+            uint8_t cg = 0;
+            uint8_t cb = 0;
+            switch (s_shader->color_recipe) {
+                case PS2_COLOR_INPUT1:
+                    cr = ps2_u8_component(input_r);
+                    cg = ps2_u8_component(input_g);
+                    cb = ps2_u8_component(input_b);
+                    break;
+                case PS2_COLOR_TEX0:
+                    cr = cg = cb = 0x80;
+                    break;
+                case PS2_COLOR_TEX0_MUL_INPUT1:
+                    cr = ps2_modulate_component(input_r);
+                    cg = ps2_modulate_component(input_g);
+                    cb = ps2_modulate_component(input_b);
+                    break;
+                default:
+                    break;
+            }
+
+            uint8_t ca = 0x80;
+            switch (s_shader->alpha_recipe) {
+                case PS2_ALPHA_ZERO:
+                    ca = 0x00;
+                    break;
+                case PS2_ALPHA_INPUT1:
+                    ca = ps2_modulate_component(input_a);
+                    break;
+                case PS2_ALPHA_TEX0:
+                    ca = 0x40;
+                    break;
+                case PS2_ALPHA_TEX0_MUL_INPUT1:
+                    ca = ps2_texture_alpha_fragment_component(input_a);
+                    break;
+                case PS2_ALPHA_OPAQUE:
+                case PS2_ALPHA_ONE:
+                default:
+                    ca = 0x80;
+                    break;
+            }
 
             struct Ps2GsPackedReg packed_position;
             if (s_shader->features.opt_fog) {
@@ -676,17 +820,17 @@ static void ps2_init(void)
     s_depth_far = 1.0f;
     s_depth_test = true;
     s_depth_update = true;
-    s_use_alpha = false;
     s_modulate = false;
     s_filter_mode = FILTER_LINEAR;
     s_mipmap_filter = MIPMAP_DISABLED;
     s_anisotropy = 1;
     ps2GsCoreSetAlphaTest(false, 0u);
     ps2GsCoreSetFog(false, 0u, 0u, 0u);
+    ps2GsCoreSetTextureAlpha(false);
     ps2_reset_viewport();
 
     sysLogPrintf(LOG_NOTE,
-        "GfxPS2 init: shaders=%d translate_batch=%d native fog/alpha-test enabled",
+        "GfxPS2 init: shaders=%d translate_batch=%d native fog/alpha-test one-cycle recipes",
         PS2_GFX_MAX_SHADERS, PS2_GFX_TRANSLATE_VERTS);
 }
 
