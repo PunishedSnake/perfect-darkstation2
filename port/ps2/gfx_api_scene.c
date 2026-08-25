@@ -19,7 +19,8 @@
 #define API_SCENE_VERTICES_PER_TRIANGLE 3
 #define API_SCENE_DRAW_VERTEX_COUNT \
     (API_SCENE_FACE_COUNT * API_SCENE_TRIANGLES_PER_FACE * API_SCENE_VERTICES_PER_TRIANGLE)
-#define API_SCENE_TEXTURED_STRIDE 9
+/* clip4 + tex2 + INPUT1 rgba4, matching Fast3D MODULATEIA VBO layout */
+#define API_SCENE_TEXTURED_STRIDE 10
 #define API_SCENE_STATUS_VERTEX_COUNT 12
 #define API_SCENE_UNTEXTURED_STRIDE 7
 
@@ -95,12 +96,17 @@ static void buildCheckerTexture(void)
             const int cross = (x == API_SCENE_TEXTURE_W / 2) || (y == API_SCENE_TEXTURE_H / 2);
             uint32_t pixel;
 
+            /*
+             * RGBA8 source contract: opaque texels use alpha 0xff, transparent
+             * texels 0x00. The backend must normalize this through GS TCC and
+             * reject the transparent checker cells via native TEST/AREF.
+             */
             if (cross) {
-                pixel = 0x8028d8ffu;
+                pixel = 0xff28d8ffu;
             } else if (checker) {
-                pixel = 0x80d8d8d8u;
+                pixel = 0xffd8d8d8u;
             } else {
-                pixel = 0x80302a28u;
+                pixel = 0x00302a28u;
             }
 
             sCheckerTexture[y * API_SCENE_TEXTURE_W + x] = pixel;
@@ -156,6 +162,7 @@ static void writeTexturedVertex(
     *p++ = (float)face->r / 128.0f;
     *p++ = (float)face->g / 128.0f;
     *p++ = (float)face->b / 128.0f;
+    *p++ = 1.0f;
 
     *dst = p;
 }
@@ -302,9 +309,14 @@ bool ps2GfxApiSceneRun(int romStatus)
 
     struct GfxRenderingAPI *api = &gfx_ps2_api;
     struct GfxWindowManagerAPI *wapi = &gfx_window_ps2_api;
+    /* G_CC_MODULATEIA: RGB=TEXEL0*INPUT1, A=TEXEL0*INPUT1. */
     const uint64_t texturedShaderId =
         ((uint64_t)SHADER_TEXEL0 << 0) |
-        ((uint64_t)SHADER_INPUT_1 << 8);
+        ((uint64_t)SHADER_INPUT_1 << 8) |
+        ((uint64_t)SHADER_TEXEL0 << 16) |
+        ((uint64_t)SHADER_INPUT_1 << 24);
+    const uint32_t texturedShaderOptions =
+        SHADER_OPT_ALPHA | SHADER_OPT_ALPHA_THRESHOLD;
     const uint64_t untexturedShaderId =
         ((uint64_t)SHADER_INPUT_1 << 12);
     const struct GfxWindowInitSettings windowSettings = {
@@ -328,7 +340,7 @@ bool ps2GfxApiSceneRun(int romStatus)
     api->init();
 
     struct ShaderProgram *texturedShader =
-        api->create_and_load_new_shader(texturedShaderId, 0);
+        api->create_and_load_new_shader(texturedShaderId, texturedShaderOptions);
     struct ShaderProgram *untexturedShader =
         api->create_and_load_new_shader(untexturedShaderId, 0);
 
@@ -355,14 +367,17 @@ bool ps2GfxApiSceneRun(int romStatus)
     api->set_depth_mode(true, true, true, false, 0);
     api->set_viewport(0, 0, width, height);
     api->set_scissor(0, 0, width, height);
-    api->set_use_alpha(false, false);
+    api->set_use_alpha(true, false);
 
     sysLogPrintf(LOG_NOTE,
-        "GfxAPI scene: texture=%u shader_tex=%016llx shader_color=%016llx triangles=%d",
+        "GfxAPI scene: texture=%u shader_tex=%016llx/%08x shader_color=%016llx triangles=%d",
         textureId,
         (unsigned long long)texturedShaderId,
+        (unsigned int)texturedShaderOptions,
         (unsigned long long)untexturedShaderId,
         API_SCENE_DRAW_VERTEX_COUNT / 3);
+    sysLogPrintf(LOG_NOTE,
+        "GfxAPI scene: MODULATEIA alpha-cutout smoke expects transparent checker cells to be discarded");
     sysLogPrintf(LOG_NOTE,
         "GfxAPI scene: DS2 smoke right=rotate left=move/zoom R1=fire+rumble L1=precision Cross=reset");
     sysLogPrintf(LOG_NOTE,
