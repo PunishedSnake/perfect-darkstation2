@@ -18,9 +18,15 @@
  * ownership, GS register state, texture residency and primitive submission live
  * below this file in gs_core.
  *
- * Current supported material recipes:
- *   - INPUT1 (untextured vertex colour)
- *   - TEXEL0 * INPUT1 (one resident texture modulated by vertex colour)
+ * Current fixed-function material recipes:
+ *   - INPUT1
+ *   - TEXEL0
+ *   - TEXEL0 * INPUT1
+ *
+ * INPUT1 is intentionally semantic-agnostic here. gfx_pc.cpp has already
+ * resolved SHADE/PRIMITIVE/ENVIRONMENT/etc. into the VBO input before this
+ * adapter sees it. Alpha variants are accepted only when their alpha-cycle
+ * equation maps exactly to the same GS fixed-function operation.
  *
  * Unsupported combiners are retained in the shader table so shader_get_info()
  * still reports the exact upstream VBO layout, but draw submission rejects the
@@ -39,6 +45,7 @@ struct ShaderProgram {
     bool used;
     bool supported;
     bool textured;
+    bool warned_rejected_draw;
     uint64_t shader_id0;
     uint32_t shader_id1;
     struct CCFeatures features;
@@ -96,24 +103,97 @@ static struct GfxClipParameters ps2_get_clip_parameters(void)
 
 static bool ps2_shader_common_supported(const struct CCFeatures *f)
 {
-    return !f->opt_fog && !f->opt_noise && !f->opt_2cyc &&
+    /*
+     * These options need explicit GS state or an additional rendering pass.
+     * Reject them until that mapping exists instead of accepting a visually
+     * plausible but semantically wrong approximation.
+     */
+    return !f->opt_fog && !f->opt_texture_edge && !f->opt_noise &&
+           !f->opt_2cyc && !f->opt_alpha_threshold && !f->opt_invisible &&
            !f->opt_grayscale && !f->opt_blur && !f->used_textures[1] &&
            f->num_inputs <= 1;
+}
+
+static bool ps2_shader_alpha_is_input1(const struct CCFeatures *f)
+{
+    return !f->opt_alpha ||
+           (f->do_single[0][1] && f->c[0][1][3] == SHADER_INPUT_1);
+}
+
+static bool ps2_shader_alpha_is_tex0(const struct CCFeatures *f)
+{
+    return !f->opt_alpha ||
+           (f->do_single[0][1] && f->c[0][1][3] == SHADER_TEXEL0A);
+}
+
+static bool ps2_shader_alpha_is_tex0_mul_input1(const struct CCFeatures *f)
+{
+    if (!f->opt_alpha || !f->do_multiply[0][1]) {
+        return !f->opt_alpha;
+    }
+
+    const uint8_t a = f->c[0][1][0];
+    const uint8_t c = f->c[0][1][2];
+    return (a == SHADER_TEXEL0A && c == SHADER_INPUT_1) ||
+           (a == SHADER_INPUT_1 && c == SHADER_TEXEL0A);
 }
 
 static bool ps2_shader_is_untextured_input1(const struct CCFeatures *f)
 {
     return ps2_shader_common_supported(f) && !f->used_textures[0] &&
            f->num_inputs == 1 && f->do_single[0][0] &&
-           f->c[0][0][3] == SHADER_INPUT_1;
+           f->c[0][0][3] == SHADER_INPUT_1 &&
+           ps2_shader_alpha_is_input1(f);
+}
+
+static bool ps2_shader_is_tex0(const struct CCFeatures *f)
+{
+    return ps2_shader_common_supported(f) && f->used_textures[0] &&
+           f->num_inputs == 0 && f->do_single[0][0] &&
+           f->c[0][0][3] == SHADER_TEXEL0 &&
+           ps2_shader_alpha_is_tex0(f);
 }
 
 static bool ps2_shader_is_tex0_mul_input1(const struct CCFeatures *f)
 {
-    return ps2_shader_common_supported(f) && f->used_textures[0] &&
-           f->num_inputs == 1 && f->do_multiply[0][0] &&
-           f->c[0][0][0] == SHADER_TEXEL0 &&
-           f->c[0][0][2] == SHADER_INPUT_1;
+    if (!ps2_shader_common_supported(f) || !f->used_textures[0] ||
+        f->num_inputs != 1 || !f->do_multiply[0][0] ||
+        !ps2_shader_alpha_is_tex0_mul_input1(f)) {
+        return false;
+    }
+
+    const uint8_t a = f->c[0][0][0];
+    const uint8_t c = f->c[0][0][2];
+    return (a == SHADER_TEXEL0 && c == SHADER_INPUT_1) ||
+           (a == SHADER_INPUT_1 && c == SHADER_TEXEL0);
+}
+
+static void ps2_log_shader_recipe(int slot, const struct ShaderProgram *prg)
+{
+    const struct CCFeatures *f = &prg->features;
+
+    sysLogPrintf(prg->supported ? LOG_NOTE : LOG_WARNING,
+        "GfxPS2 shader %02d id=%016llx/%08x supported=%d tex=%d%d inputs=%d "
+        "rgb=[%u,%u,%u,%u] a=[%u,%u,%u,%u] "
+        "opts=a%d f%d e%d n%d 2c%d at%d inv%d g%d b%d",
+        slot,
+        (unsigned long long)prg->shader_id0,
+        (unsigned int)prg->shader_id1,
+        prg->supported ? 1 : 0,
+        f->used_textures[0] ? 1 : 0,
+        f->used_textures[1] ? 1 : 0,
+        f->num_inputs,
+        f->c[0][0][0], f->c[0][0][1], f->c[0][0][2], f->c[0][0][3],
+        f->c[0][1][0], f->c[0][1][1], f->c[0][1][2], f->c[0][1][3],
+        f->opt_alpha ? 1 : 0,
+        f->opt_fog ? 1 : 0,
+        f->opt_texture_edge ? 1 : 0,
+        f->opt_noise ? 1 : 0,
+        f->opt_2cyc ? 1 : 0,
+        f->opt_alpha_threshold ? 1 : 0,
+        f->opt_invisible ? 1 : 0,
+        f->opt_grayscale ? 1 : 0,
+        f->opt_blur ? 1 : 0);
 }
 
 static struct ShaderProgram *ps2_lookup_shader(uint64_t shader_id0, uint32_t shader_id1)
@@ -153,18 +233,13 @@ static struct ShaderProgram *ps2_create_and_load_new_shader(uint64_t shader_id0,
             prg->shader_id0 = shader_id0;
             prg->shader_id1 = shader_id1;
             gfx_cc_get_features(shader_id0, shader_id1, &prg->features);
-            prg->textured = ps2_shader_is_tex0_mul_input1(&prg->features);
+
+            const bool tex0 = ps2_shader_is_tex0(&prg->features);
+            const bool tex0_mul_input1 = ps2_shader_is_tex0_mul_input1(&prg->features);
+            prg->textured = tex0 || tex0_mul_input1;
             prg->supported = prg->textured || ps2_shader_is_untextured_input1(&prg->features);
 
-            sysLogPrintf(prg->supported ? LOG_NOTE : LOG_WARNING,
-                "GfxPS2 shader %02d id=%016llx/%08x inputs=%d tex=%d%d supported=%d",
-                i,
-                (unsigned long long)shader_id0,
-                (unsigned int)shader_id1,
-                prg->features.num_inputs,
-                prg->features.used_textures[0] ? 1 : 0,
-                prg->features.used_textures[1] ? 1 : 0,
-                prg->supported ? 1 : 0);
+            ps2_log_shader_recipe(i, prg);
 
             s_shader = prg;
             return prg;
@@ -387,7 +462,19 @@ static size_t ps2_vbo_stride(const struct ShaderProgram *prg)
 
 static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_vbo_num_tris)
 {
-    if (!ps2GsCoreIsReady() || !s_shader || !s_shader->supported || !buf_vbo || buf_vbo_num_tris == 0) {
+    if (!ps2GsCoreIsReady() || !s_shader || !buf_vbo || buf_vbo_num_tris == 0) {
+        return;
+    }
+
+    if (!s_shader->supported) {
+        if (!s_shader->warned_rejected_draw) {
+            sysLogPrintf(LOG_WARNING,
+                "GfxPS2 dropping unsupported shader id=%016llx/%08x first_batch_tris=%u",
+                (unsigned long long)s_shader->shader_id0,
+                (unsigned int)s_shader->shader_id1,
+                (unsigned int)buf_vbo_num_tris);
+            s_shader->warned_rejected_draw = true;
+        }
         return;
     }
 
