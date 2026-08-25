@@ -17,6 +17,7 @@
 bool ps2VideoDiagRun(int rom_status)
 {
     sysLogPrintf(LOG_NOTE, "GS diagnostic: gsKit_init_global");
+    ps2LogFlush();
     GSGLOBAL *gs = gsKit_init_global();
 
     if (!gs) {
@@ -34,11 +35,13 @@ bool ps2VideoDiagRun(int rom_status)
     gs->Dithering = GS_SETTING_ON;
 
     sysLogPrintf(LOG_NOTE, "GS diagnostic: initialising dmaKit GIF channel");
+    ps2LogFlush();
     dmaKit_init(D_CTRL_RELE_OFF, D_CTRL_MFD_OFF, D_CTRL_STS_UNSPEC,
         D_CTRL_STD_OFF, D_CTRL_RCYC_8, 1 << DMA_CHANNEL_GIF);
     dmaKit_chan_init(DMA_CHANNEL_GIF);
 
     sysLogPrintf(LOG_NOTE, "GS diagnostic: initialising screen");
+    ps2LogFlush();
     gsKit_init_screen(gs);
     gsKit_mode_switch(gs, GS_ONESHOT);
     gsKit_set_test(gs, GS_ZTEST_OFF);
