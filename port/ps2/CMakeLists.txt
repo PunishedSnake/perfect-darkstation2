@@ -7,10 +7,12 @@ if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
       CACHE FILEPATH "PS2SDK-compatible EE CMake toolchain" FORCE)
 endif()
 
-project(pd_ps2_bootstrap C)
+project(pd_ps2_bootstrap C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_EXTENSIONS OFF)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 get_filename_component(PD_ROOT "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
@@ -47,14 +49,17 @@ add_executable(pd_ps2_bootstrap
   system_ps2.c
   video_diag.c
   renderer_scene.c
+  gfx_ps2.cpp
   rom_probe.c
   "${PD_ROOT}/port/src/romsource.c"
+  "${PD_ROOT}/port/fast3d/gfx_cc.cpp"
 )
 
 target_include_directories(pd_ps2_bootstrap PRIVATE
   "${PD_ROOT}/include"
   "${PD_ROOT}/include/PR"
   "${PD_ROOT}/port/include"
+  "${PD_ROOT}/port/fast3d"
   "${GSKIT}/include"
 )
 
@@ -67,6 +72,8 @@ target_compile_options(pd_ps2_bootstrap PRIVATE
   -fno-strict-aliasing
   -funsigned-char
   -fwrapv
+  $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>
+  $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>
 )
 
 target_compile_definitions(pd_ps2_bootstrap PRIVATE
