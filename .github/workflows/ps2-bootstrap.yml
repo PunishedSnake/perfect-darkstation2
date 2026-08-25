@@ -6,22 +6,24 @@ on:
     paths:
       - "port/ps2/**"
       - "port/fast3d/**"
-      - "port/src/romsource.c"
-      - "port/include/romsource.h"
-      - "port/include/system.h"
+      - "port/src/**"
+      - "port/include/**"
+      - "src/assets/**"
       - "src/include/**"
       - "include/**"
+      - "tools/assetmgr/**"
       - ".github/workflows/ps2-bootstrap.yml"
   pull_request:
     branches: [ "ps2" ]
     paths:
       - "port/ps2/**"
       - "port/fast3d/**"
-      - "port/src/romsource.c"
-      - "port/include/romsource.h"
-      - "port/include/system.h"
+      - "port/src/**"
+      - "port/include/**"
+      - "src/assets/**"
       - "src/include/**"
       - "include/**"
+      - "tools/assetmgr/**"
       - ".github/workflows/ps2-bootstrap.yml"
   workflow_dispatch:
 
@@ -35,7 +37,7 @@ jobs:
 
     steps:
       - name: Install host-side build tools
-        run: apk add --no-cache bash cmake git ninja
+        run: apk add --no-cache bash cmake git ninja python3
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -48,6 +50,7 @@ jobs:
           mips64r5900el-ps2-elf-ld --version | head -n 1
           cmake --version | head -n 1
           ninja --version
+          python3 --version
           sha256sum port/ps2/ps2dev-toolchain.cmake
 
       - name: Configure PS2 bootstrap
