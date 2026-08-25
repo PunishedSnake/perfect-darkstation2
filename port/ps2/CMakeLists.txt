@@ -68,6 +68,8 @@ add_executable(pd_ps2_bootstrap
   gfx_api_scene.c
   gfx_ps2.cpp
   gfx_window_ps2.c
+  pad_ps2.c
+  controls_ps2.c
   rom_probe.c
   "${PD_ROOT}/port/src/romsource.c"
   "${PD_ROOT}/port/fast3d/gfx_cc.cpp"
@@ -96,7 +98,8 @@ target_link_directories(pd_ps2_bootstrap PRIVATE "${GSKIT}/lib")
 
 # Current ps2sdk-ports installs EE zlib into PS2SDK/ports. Keep it behind the
 # bootstrap only until the full build has a platform dependency layer.
-target_link_libraries(pd_ps2_bootstrap PRIVATE gskit dmakit z kernel)
+# libpadx matches the ROM XPADMAN module used by the current PS2SDK padx sample.
+target_link_libraries(pd_ps2_bootstrap PRIVATE gskit dmakit padx z kernel)
 
 set_target_properties(pd_ps2_bootstrap PROPERTIES
   OUTPUT_NAME "pd-ps2-bootstrap"
@@ -105,8 +108,9 @@ set_target_properties(pd_ps2_bootstrap PROPERTIES
 
 # The real Fast3D translator remains linked as the compatibility frontend.
 # gfx_api_scene.c is the current lower-level correctness baseline while GS
-# ownership is moved below gfx_ps2 into gs_core. The synthetic GBI scene stays
-# in the tree as a future regression test, but is not an architectural gate.
+# ownership is moved below gfx_ps2 into gs_core. DualShock 2 input is a separate
+# physical backend plus semantic shooter mapping, ready to be bridged into the
+# full Perfect Dark input API without flattening native dual-analog data first.
 
 message(STATUS "Perfect Dark PS2 bootstrap root: ${PD_ROOT}")
 message(STATUS "Perfect Dark PS2 bootstrap gsKit: ${GSKIT}")
