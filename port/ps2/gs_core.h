@@ -4,22 +4,29 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include <gsKit.h>
-
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/*
- * GS device boundary for the PS2 port.
- *
- * Fast3D is a client of this layer, not its owner. The current implementation
- * still uses gsKit for screen setup, queue storage and presentation while the
- * port is brought up. Callers outside gs_core must not depend on that transport
- * choice. The legacy GSGLOBAL accessor exists only to migrate the existing
- * Fast3D adapter incrementally without changing rendering semantics in one
- * giant patch.
- */
+/* Hardware PSM values used by the current bootstrap. Keep gsKit names/types
+ * out of the public device contract so Fast3D and platform clients do not grow
+ * a dependency on the temporary transport implementation. */
+enum Ps2GsPixelStorageMode {
+    PS2_GS_PSM_CT32 = 0x00,
+    PS2_GS_PSM_CT24 = 0x01,
+    PS2_GS_PSM_CT16 = 0x02,
+    PS2_GS_PSM_CT16S = 0x0a,
+    PS2_GS_PSM_T8 = 0x13,
+    PS2_GS_PSM_T4 = 0x14,
+};
+
+enum Ps2GsDepthStorageMode {
+    PS2_GS_PSMZ_32 = 0x00,
+    PS2_GS_PSMZ_24 = 0x01,
+    PS2_GS_PSMZ_16 = 0x02,
+    PS2_GS_PSMZ_16S = 0x0a,
+};
+
 struct Ps2GsCreateInfo {
     int color_psm;
     int depth_psm;
@@ -30,12 +37,40 @@ struct Ps2GsCreateInfo {
 typedef uint16_t Ps2GsTextureHandle;
 #define PS2_GS_TEXTURE_INVALID ((Ps2GsTextureHandle)0)
 
+/*
+ * Packet-ready register record.
+ *
+ * `value` is the 64-bit GS register payload and `reg` is the GIF register id.
+ * Two records below deliberately match the current gsKit REGLIST source
+ * layouts, allowing the compatibility transport to memcpy them without a
+ * second per-vertex repack. A later native GIF builder can consume the exact
+ * same representation directly.
+ */
+struct Ps2GsPackedReg {
+    uint64_t value;
+    uint64_t reg;
+};
+
+struct Ps2GsColorVertex {
+    struct Ps2GsPackedReg rgbaq;
+    struct Ps2GsPackedReg xyz2;
+};
+
+struct Ps2GsTexturedVertex {
+    struct Ps2GsPackedReg rgbaq;
+    struct Ps2GsPackedReg st;
+    struct Ps2GsPackedReg xyz2;
+};
+
 bool ps2GsCoreInit(const struct Ps2GsCreateInfo *info);
-GSGLOBAL *ps2GsCoreGetLegacyGlobal(void);
+bool ps2GsCoreIsReady(void);
 
 int ps2GsCoreGetWidth(void);
 int ps2GsCoreGetHeight(void);
 int ps2GsCoreGetMode(void);
+int ps2GsCoreGetRefreshRate(void);
+int ps2GsCoreGetOffsetX(void);
+int ps2GsCoreGetOffsetY(void);
 
 /* Frame ownership. Submit does not wait; present owns the VSync dependency. */
 void ps2GsCoreBeginFrame(void);
@@ -66,14 +101,11 @@ bool ps2GsCoreUploadTextureRgba32(Ps2GsTextureHandle handle,
 void ps2GsCoreSetTextureFilter(Ps2GsTextureHandle handle, bool linear_filter);
 void ps2GsCoreReleaseTexture(Ps2GsTextureHandle handle);
 
-/*
- * Transitional GS-ready draw boundary. These packed vertex types still come
- * from gsKit; the next transport stage will replace them with project-owned
- * packet-ready records before direct GIF/DMAC submission is introduced.
- */
-void ps2GsCoreDrawColorTriangles(const GSPRIMPOINT *vertices, uint32_t vertex_count);
+/* Packet-ready primitive submission. No Fast3D or gsKit type crosses here. */
+void ps2GsCoreDrawColorTriangles(const struct Ps2GsColorVertex *vertices,
+    uint32_t vertex_count);
 void ps2GsCoreDrawTexturedTriangles(Ps2GsTextureHandle texture,
-    const GSPRIMSTQPOINT *vertices, uint32_t vertex_count);
+    const struct Ps2GsTexturedVertex *vertices, uint32_t vertex_count);
 
 #ifdef __cplusplus
 }
