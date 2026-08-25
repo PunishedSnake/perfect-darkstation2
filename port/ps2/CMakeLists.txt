@@ -66,6 +66,7 @@ add_executable(pd_ps2_bootstrap
   video_diag.c
   gfx_api_scene.c
   gfx_ps2.cpp
+  gfx_window_ps2.c
   rom_probe.c
   "${PD_ROOT}/port/src/romsource.c"
   "${PD_ROOT}/port/fast3d/gfx_cc.cpp"
