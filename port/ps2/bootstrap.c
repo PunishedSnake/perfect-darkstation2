@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "controls_ps2.h"
 #include "romsource.h"
 #include "system.h"
 #include "log_ps2.h"
@@ -101,6 +102,16 @@ int main(int argc, char **argv)
     sysLogPrintf(LOG_NOTE, "ROM probe status=%d duration=%llu us",
         rom_status, (unsigned long long)(romProbeEnd - romProbeStart));
     ps2LogFlush();
+
+    if (ps2ShooterControlsInit()) {
+        sysLogPrintf(LOG_NOTE,
+            "PAD controls: left=move right=look R1=fire L1=aim R2=alt L2=gadget X=use Square=reload");
+    } else {
+        /* Graphics bring-up remains testable without a controller attached. */
+        sysLogPrintf(LOG_WARNING,
+            "PAD controls: backend unavailable; continuing graphics diagnostic");
+    }
+    ps2LogCheckpoint();
 
     sysLogPrintf(LOG_NOTE, "bootstrap pre-GS checks completed in %llu us",
         (unsigned long long)sysGetMicroseconds());
