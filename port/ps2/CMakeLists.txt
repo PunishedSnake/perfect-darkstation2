@@ -48,6 +48,7 @@ set(PD_PS2_COMMON_INCLUDE_DIRS
   "${PD_ROOT}/include"
   "${PD_ROOT}/include/PR"
   "${PD_ROOT}/src/include"
+  "${PD_ROOT}/src/lib/ultra/audio"
   "${PD_ROOT}/port/include"
   "${PD_ROOT}/port/fast3d"
 )
@@ -58,6 +59,17 @@ set(PD_PS2_CORRECTNESS_FLAGS
   -fno-strict-aliasing
   -funsigned-char
   -fwrapv
+)
+
+set(PD_PS2_GAME_DEFINITIONS
+  PLATFORM_PS2=1
+  MATCHING=0
+  PIRACYCHECKS=0
+  ROM_SIZE=32
+  AVOID_UB=1
+  _LANGUAGE_C=1
+  PAL=0
+  VERSION=2
 )
 
 add_executable(pd_ps2_bootstrap
@@ -107,12 +119,43 @@ set_target_properties(pd_ps2_bootstrap PROPERTIES
   SUFFIX ".elf"
 )
 
+# Compile the first slice of the real game next to the renderer bootstrap.
+#
+# This is deliberately an OBJECT target: the first milestone is to expose EE
+# compiler/platform-contract breakage in the actual game entry/scheduler code
+# without hiding it behind hundreds of unresolved desktop audio/input symbols.
+# The bootstrap remains an independent, runnable A/B correctness baseline.
+add_library(pd_ps2_game_bridge OBJECT
+  "${PD_ROOT}/port/src/main.c"
+  "${PD_ROOT}/port/src/config.c"
+  "${PD_ROOT}/port/src/pdmain.c"
+  "${PD_ROOT}/port/src/pdsched.c"
+)
+
+target_include_directories(pd_ps2_game_bridge PRIVATE
+  ${PD_PS2_COMMON_INCLUDE_DIRS}
+  "${GSKIT}/include"
+)
+
+target_compile_options(pd_ps2_game_bridge PRIVATE
+  ${PD_PS2_CORRECTNESS_FLAGS}
+)
+
+target_compile_definitions(pd_ps2_game_bridge PRIVATE
+  ${PD_PS2_GAME_DEFINITIONS}
+  PD_PS2_GIT_COMMIT="${PD_PS2_GIT_COMMIT}"
+)
+
 # The real Fast3D translator remains linked as the compatibility frontend.
 # gfx_api_scene.c is the current lower-level correctness baseline while GS
 # ownership is moved below gfx_ps2 into gs_core. DualShock 2 input is a separate
 # physical backend plus semantic shooter mapping. gs_native_queue is the first
 # project-owned PATH3 transport layer and is compiled before taking over the
 # active renderer so packet correctness can be gated independently.
+#
+# pd_ps2_game_bridge is the migration seam toward the actual Perfect Dark main
+# loop. Grow it only as each platform dependency gets an explicit PS2 contract;
+# do not paper over missing APIs with generic POSIX assumptions.
 
 message(STATUS "Perfect Dark PS2 bootstrap root: ${PD_ROOT}")
 message(STATUS "Perfect Dark PS2 bootstrap gsKit: ${GSKIT}")
