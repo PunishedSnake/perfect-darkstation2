@@ -118,6 +118,13 @@ foreach(pads_json IN LISTS PD_PS2_PADS_JSON)
     "pads/${pads_name}.json" "mkpads" "pads/${pads_name}.h")
 endforeach()
 
+file(GLOB PD_PS2_TILES_JSON CONFIGURE_DEPENDS "${PD_PS2_ASSET_DIR}/tiles/*.json")
+foreach(tiles_json IN LISTS PD_PS2_TILES_JSON)
+  get_filename_component(tiles_name "${tiles_json}" NAME_WE)
+  pd_ps2_generate_asset_header(
+    "tiles/${tiles_name}.json" "mktiles" "tiles/${tiles_name}.h")
+endforeach()
+
 add_custom_target(pd_ps2_asset_headers DEPENDS ${PD_PS2_GENERATED_HEADERS})
 
 add_executable(pd_ps2_bootstrap
