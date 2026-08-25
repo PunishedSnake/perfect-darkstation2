@@ -4,6 +4,7 @@
 
 #include "romsource.h"
 #include "system.h"
+#include "log_ps2.h"
 
 #define BOOTSTRAP_HEAP_SMOKE_SIZE 4096u
 #define DEFAULT_ROM_NAME "pd.ntsc-final.z64"
@@ -44,7 +45,7 @@ static void bootstrapTestRomSource(void)
     }
 
     romSourceClose(&source);
-    puts("ROM source memory smoke: ok");
+    sysLogPrintf(LOG_NOTE, "ROM source memory smoke: ok");
 }
 
 static const char *bootstrapResolveRomPath(char *path, u32 pathLen)
@@ -66,9 +67,9 @@ int main(int argc, char **argv)
     sysInitArgs(argc, (const char **)argv);
     sysInit();
 
-    puts("Perfect DarkStation 2 bootstrap");
-    puts("platform: r5900-ps2");
-    puts("system backend: ok");
+    sysLogPrintf(LOG_NOTE, "Perfect DarkStation 2 bootstrap");
+    sysLogPrintf(LOG_NOTE, "platform: r5900-ps2");
+    sysLogPrintf(LOG_NOTE, "system backend: ok");
 
     void *p = sysMemZeroAlloc(BOOTSTRAP_HEAP_SMOKE_SIZE);
 
@@ -85,21 +86,29 @@ int main(int argc, char **argv)
     memset(p, 0x5a, BOOTSTRAP_HEAP_SMOKE_SIZE);
     sysMemFree(p);
 
-    puts("heap smoke: ok");
+    sysLogPrintf(LOG_NOTE, "heap smoke: ok");
     bootstrapTestRomSource();
+    ps2LogFlush();
 
     char autoRomPath[1024];
     const char *romPath = bootstrapResolveRomPath(autoRomPath, sizeof(autoRomPath));
-    printf("ROM probe path: %s\n", romPath);
+    sysLogPrintf(LOG_NOTE, "ROM probe path: %s", romPath);
 
+    const u64 romProbeStart = sysGetMicroseconds();
     const int rom_status = ps2RomProbe(romPath);
+    const u64 romProbeEnd = sysGetMicroseconds();
+
+    sysLogPrintf(LOG_NOTE, "ROM probe status=%d duration=%llu us",
+        rom_status, (unsigned long long)(romProbeEnd - romProbeStart));
+    ps2LogFlush();
 
     sysLogPrintf(LOG_NOTE, "bootstrap pre-GS checks completed in %llu us",
         (unsigned long long)sysGetMicroseconds());
 
-    puts("GS diagnostic: starting");
-    puts("bars: green=EE/system, blue=GIF/GS, third=ROM data path");
-    puts("ROM status: green=header+streamed RZIP+file table ok, red=failed");
+    sysLogPrintf(LOG_NOTE, "GS diagnostic: starting");
+    sysLogPrintf(LOG_NOTE, "bars: green=EE/system, blue=GIF/GS, third=ROM data path");
+    sysLogPrintf(LOG_NOTE, "ROM status: green=header+streamed RZIP+file table ok, red=failed");
+    ps2LogFlush();
 
     if (!ps2VideoDiagRun(rom_status)) {
         sysFatalError("GS diagnostic initialisation failed");
