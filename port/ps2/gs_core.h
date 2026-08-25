@@ -83,6 +83,8 @@ void ps2GsCoreSetDepthMode(bool depth_test, bool depth_update, bool depth_compar
 void ps2GsCoreSetAlphaBlend(bool enable);
 void ps2GsCoreSetAlphaTest(bool enable, uint8_t reference);
 void ps2GsCoreSetFog(bool enable, uint8_t r, uint8_t g, uint8_t b);
+/* TEX0.TCC is texture-function state, independent of primitive alpha blending. */
+void ps2GsCoreSetTextureAlpha(bool enable);
 void ps2GsCoreSetTextureClamp(uint32_t cms, uint32_t cmt);
 
 /*
