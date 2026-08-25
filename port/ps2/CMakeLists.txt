@@ -1,16 +1,10 @@
 cmake_minimum_required(VERSION 3.16)
 
-# The current PS2SDK ships its EE CMake toolchain in samples/ps2dev.cmake.
-# Set it before project() so CMake never probes the host compiler first.
+# Keep the bootstrap self-contained. The official PS2DEV image installs the
+# toolchain and PS2SDK, but not PS2SDK's samples/ directory.
 if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
-  if(DEFINED ENV{PS2SDK} AND EXISTS "$ENV{PS2SDK}/samples/ps2dev.cmake")
-    set(CMAKE_TOOLCHAIN_FILE "$ENV{PS2SDK}/samples/ps2dev.cmake"
-        CACHE FILEPATH "PS2SDK EE CMake toolchain" FORCE)
-  else()
-    message(FATAL_ERROR
-      "PS2SDK toolchain not found. Set PS2SDK or pass "
-      "-DCMAKE_TOOLCHAIN_FILE=$PS2SDK/samples/ps2dev.cmake")
-  endif()
+  set(CMAKE_TOOLCHAIN_FILE "${CMAKE_CURRENT_LIST_DIR}/ps2dev-toolchain.cmake"
+      CACHE FILEPATH "PS2SDK-compatible EE CMake toolchain" FORCE)
 endif()
 
 project(pd_ps2_bootstrap C)
@@ -32,9 +26,9 @@ target_include_directories(pd_ps2_bootstrap PRIVATE
   "${PD_ROOT}/port/include"
 )
 
-# Bootstrap is a correctness target. The current PS2SDK toolchain injects -O2,
-# while the Perfect Dark port itself currently carries known -O2 issues.
-# Keep the first EE executable conservative; optimization comes after bring-up.
+# Bootstrap is a correctness target. Current PS2SDK injects -O2 globally,
+# while the Perfect Dark port currently carries known -O2 issues.
+# The target-local -Og deliberately wins here until correctness is established.
 target_compile_options(pd_ps2_bootstrap PRIVATE
   -Og
   -G0
