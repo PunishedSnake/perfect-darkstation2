@@ -21,6 +21,18 @@ struct GfxRdpTmemLiveStats {
     uint32_t malformed_or_unsupported;
     uint32_t fingerprint_exact;
     uint32_t fingerprint_fallback;
+    uint32_t materialize_exact;
+    uint32_t materialize_fallback;
+};
+
+struct GfxRdpTmemLiveTextureView {
+    const uint8_t *texels;
+    uint32_t size_bytes;
+    uint32_t line_size_bytes;
+    const uint16_t *palette;
+    uint16_t palette_first;
+    uint16_t palette_count;
+    uint64_t content_identity;
 };
 
 /*
@@ -28,8 +40,8 @@ struct GfxRdpTmemLiveStats {
  *
  * These hooks intentionally mirror gfx_pc.cpp's existing gfx_dp_* parameter
  * convention so the PS2 integration stays at the exact RDP command execution
- * points. The old source-pointer texture path remains the visible decoder until
- * cache/decode migration is validated independently.
+ * points. Exact shadow views may replace the old source-pointer decoder only
+ * when all consumed texel/TLUT bytes can be reconstructed authoritatively.
  */
 void gfxRdpTmemLiveReset(void);
 
@@ -65,6 +77,17 @@ bool gfxRdpTmemLiveTextureFingerprint(uint8_t tile,
     uint32_t loaded_line_size_bytes, uint32_t loaded_size_bytes,
     uint8_t render_fmt, uint8_t render_siz, uint8_t palette_index,
     uint64_t *fingerprint);
+
+/*
+ * Materialize the exact logical texture view consumed by the compatibility
+ * importer. Storage is owned by the live TMEM layer and remains valid until
+ * the next materialization/reset call. The function fails closed for YUV,
+ * invalid shadow bytes, malformed layout, or an unproven TLUT footprint.
+ */
+bool gfxRdpTmemLiveMaterializeTexture(uint8_t tile,
+    uint32_t loaded_line_size_bytes, uint32_t loaded_size_bytes,
+    uint8_t render_fmt, uint8_t render_siz, uint8_t palette_index,
+    struct GfxRdpTmemLiveTextureView *view);
 
 const struct GfxRdpTmem *gfxRdpTmemLiveState(void);
 void gfxRdpTmemLiveGetStats(struct GfxRdpTmemLiveStats *stats);

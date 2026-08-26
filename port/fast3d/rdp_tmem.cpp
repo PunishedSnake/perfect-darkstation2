@@ -475,6 +475,70 @@ extern "C" bool gfxRdpTmemReadTileLinear(const struct GfxRdpTmem *tmem,
     return true;
 }
 
+extern "C" bool gfxRdpTmemReadTileLinearBytes(
+    const struct GfxRdpTmem *tmem,
+    uint32_t first_tmem_word, uint32_t line_words,
+    uint8_t *dest, uint32_t row_bytes, uint32_t size_bytes)
+{
+    if (!tmem || (!dest && size_bytes != 0u) ||
+        (size_bytes != 0u && row_bytes == 0u) ||
+        row_bytes > GFX_RDP_TMEM_BYTES ||
+        size_bytes > GFX_RDP_TMEM_BYTES) {
+        return false;
+    }
+
+    if (size_bytes == 0u) {
+        return true;
+    }
+
+    const uint32_t row_count =
+        (size_bytes + row_bytes - 1u) / row_bytes;
+    const uint32_t full_row_words =
+        (row_bytes + GFX_RDP_TMEM_WORD_BYTES - 1u) /
+        GFX_RDP_TMEM_WORD_BYTES;
+    if (!gfxRdpTmemTileRangeValid(first_tmem_word, line_words,
+            full_row_words, row_count, GFX_RDP_TMEM_WORDS)) {
+        return false;
+    }
+
+    uint32_t remaining = size_bytes;
+    uint8_t *dst = dest;
+    for (uint32_t row = 0; row < row_count; ++row) {
+        uint32_t current_row_bytes = remaining;
+        if (current_row_bytes > row_bytes) {
+            current_row_bytes = row_bytes;
+        }
+
+        const uint32_t row_words =
+            (current_row_bytes + GFX_RDP_TMEM_WORD_BYTES - 1u) /
+            GFX_RDP_TMEM_WORD_BYTES;
+        const uint32_t src_row_word = first_tmem_word + row * line_words;
+
+        for (uint32_t word = 0; word < row_words; ++word) {
+            const uint32_t dst_offset = word * GFX_RDP_TMEM_WORD_BYTES;
+            uint32_t copy_bytes = current_row_bytes - dst_offset;
+            if (copy_bytes > GFX_RDP_TMEM_WORD_BYTES) {
+                copy_bytes = GFX_RDP_TMEM_WORD_BYTES;
+            }
+
+            const uint32_t src_byte =
+                (src_row_word + word) * GFX_RDP_TMEM_WORD_BYTES;
+            for (uint32_t i = 0; i < copy_bytes; ++i) {
+                const uint32_t mapped = (row & 1u) ? (i ^ 4u) : i;
+                if (!tmem->byte_valid[src_byte + mapped]) {
+                    return false;
+                }
+                dst[dst_offset + i] = tmem->bytes[src_byte + mapped];
+            }
+        }
+
+        dst += current_row_bytes;
+        remaining -= current_row_bytes;
+    }
+
+    return true;
+}
+
 extern "C" bool gfxRdpTmemReadTileRgba32(const struct GfxRdpTmem *tmem,
     uint32_t first_tmem_word, uint32_t line_words,
     uint8_t *dest, uint32_t dest_stride_bytes,
@@ -524,6 +588,104 @@ extern "C" bool gfxRdpTmemReadTileRgba32(const struct GfxRdpTmem *tmem,
             dst[2] = tmem->bytes[high_byte];
             dst[3] = tmem->bytes[high_byte + 1u];
         }
+    }
+
+    return true;
+}
+
+extern "C" bool gfxRdpTmemReadTileRgba32Texels(
+    const struct GfxRdpTmem *tmem,
+    uint32_t first_tmem_word, uint32_t line_words,
+    uint8_t *dest, uint32_t texels_per_row, uint32_t texel_count)
+{
+    if (!tmem || (!dest && texel_count != 0u) ||
+        (texel_count != 0u && texels_per_row == 0u) ||
+        texels_per_row > GFX_RDP_TMEM_BYTES / 4u ||
+        texel_count > GFX_RDP_TMEM_BYTES / 4u) {
+        return false;
+    }
+
+    if (texel_count == 0u) {
+        return true;
+    }
+
+    const uint32_t row_count =
+        (texel_count + texels_per_row - 1u) / texels_per_row;
+    const uint32_t full_row_half_bytes = texels_per_row * 2u;
+    const uint32_t full_row_words =
+        (full_row_half_bytes + GFX_RDP_TMEM_WORD_BYTES - 1u) /
+        GFX_RDP_TMEM_WORD_BYTES;
+    if (!gfxRdpTmemTileRangeValid(first_tmem_word, line_words,
+            full_row_words, row_count, GFX_RDP_TMEM_HALF_WORDS)) {
+        return false;
+    }
+
+    uint32_t remaining = texel_count;
+    uint8_t *dst = dest;
+    for (uint32_t row = 0; row < row_count; ++row) {
+        uint32_t current_row_texels = remaining;
+        if (current_row_texels > texels_per_row) {
+            current_row_texels = texels_per_row;
+        }
+
+        const uint32_t low_row_word = first_tmem_word + row * line_words;
+        for (uint32_t texel = 0; texel < current_row_texels; ++texel) {
+            const uint32_t group = texel / 4u;
+            const uint32_t lane = texel & 3u;
+            const uint32_t mapped_lane = (row & 1u) ? (lane ^ 2u) : lane;
+            const uint32_t low_word = low_row_word + group;
+            const uint32_t high_word = low_word + GFX_RDP_TMEM_HALF_WORDS;
+            const uint32_t low_byte =
+                low_word * GFX_RDP_TMEM_WORD_BYTES + mapped_lane * 2u;
+            const uint32_t high_byte =
+                high_word * GFX_RDP_TMEM_WORD_BYTES + mapped_lane * 2u;
+
+            if (!tmem->byte_valid[low_byte] ||
+                !tmem->byte_valid[low_byte + 1u] ||
+                !tmem->byte_valid[high_byte] ||
+                !tmem->byte_valid[high_byte + 1u]) {
+                return false;
+            }
+
+            dst[0] = tmem->bytes[low_byte];
+            dst[1] = tmem->bytes[low_byte + 1u];
+            dst[2] = tmem->bytes[high_byte];
+            dst[3] = tmem->bytes[high_byte + 1u];
+            dst += 4;
+        }
+
+        remaining -= current_row_texels;
+    }
+
+    return true;
+}
+
+extern "C" bool gfxRdpTmemReadTlut(const struct GfxRdpTmem *tmem,
+    uint32_t first_tmem_word, uint16_t *entries, uint32_t entry_count)
+{
+    if (!tmem || (!entries && entry_count != 0u) ||
+        first_tmem_word > GFX_RDP_TMEM_WORDS ||
+        entry_count > GFX_RDP_TMEM_WORDS - first_tmem_word) {
+        return false;
+    }
+
+    for (uint32_t entry = 0; entry < entry_count; ++entry) {
+        const uint32_t byte_offset =
+            (first_tmem_word + entry) * GFX_RDP_TMEM_WORD_BYTES;
+        const uint8_t hi = tmem->bytes[byte_offset];
+        const uint8_t lo = tmem->bytes[byte_offset + 1u];
+
+        for (uint32_t lane = 0; lane < 4u; ++lane) {
+            const uint32_t lane_offset = byte_offset + lane * 2u;
+            if (!tmem->byte_valid[lane_offset] ||
+                !tmem->byte_valid[lane_offset + 1u] ||
+                tmem->bytes[lane_offset] != hi ||
+                tmem->bytes[lane_offset + 1u] != lo) {
+                return false;
+            }
+        }
+
+        entries[entry] = (uint16_t)((uint16_t)hi << 8) | lo;
     }
 
     return true;

@@ -125,11 +125,34 @@ bool gfxRdpTmemReadTileLinear(const struct GfxRdpTmem *tmem,
     uint8_t *dest, uint32_t dest_stride_bytes,
     uint32_t row_bytes, uint32_t row_count);
 
+/*
+ * Contiguous logical readback variant for a texture whose final row may be
+ * partial. `row_bytes` is the logical render-row width while `size_bytes` is
+ * the exact amount consumed by the importer. This retains the physical TMEM
+ * row stride/interleave without requiring unknown padding bytes to be valid.
+ */
+bool gfxRdpTmemReadTileLinearBytes(const struct GfxRdpTmem *tmem,
+    uint32_t first_tmem_word, uint32_t line_words,
+    uint8_t *dest, uint32_t row_bytes, uint32_t size_bytes);
+
 /* Reconstruct canonical R,G,B,A texels from the split RGBA32 TMEM layout. */
 bool gfxRdpTmemReadTileRgba32(const struct GfxRdpTmem *tmem,
     uint32_t first_tmem_word, uint32_t line_words,
     uint8_t *dest, uint32_t dest_stride_bytes,
     uint32_t texels_per_row, uint32_t row_count);
+
+/* RGBA32 counterpart accepting an exact texel count and a partial final row. */
+bool gfxRdpTmemReadTileRgba32Texels(const struct GfxRdpTmem *tmem,
+    uint32_t first_tmem_word, uint32_t line_words,
+    uint8_t *dest, uint32_t texels_per_row, uint32_t texel_count);
+
+/*
+ * Reconstruct host-order logical TLUT entries from quadricated TMEM words.
+ * Every replicated lane must be valid and equal, otherwise the shadow cannot
+ * claim an exact palette view.
+ */
+bool gfxRdpTmemReadTlut(const struct GfxRdpTmem *tmem,
+    uint32_t first_tmem_word, uint16_t *entries, uint32_t entry_count);
 
 const uint8_t *gfxRdpTmemBytes(const struct GfxRdpTmem *tmem);
 uint32_t gfxRdpTmemGeneration(const struct GfxRdpTmem *tmem);

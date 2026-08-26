@@ -101,19 +101,67 @@ def patch(source: str) -> str:
         "    } else {\n"
         "        key = { orig_addr, {}, fmt, siz, palette_index };\n"
         "    }\n\n"
-        "    uint64_t tmem_content_identity = 0;\n"
-        "    if (gfxRdpTmemLiveTextureFingerprint(tile, loaded_texture.line_size_bytes,\n"
-        "            loaded_texture.size_bytes, fmt, siz, palette_index,\n"
-        "            &tmem_content_identity)) {\n"
+        "    GfxRdpTmemLiveTextureView tmem_view{};\n"
+        "    const bool tmem_view_exact = gfxRdpTmemLiveMaterializeTexture(\n"
+        "        tile, loaded_texture.line_size_bytes, loaded_texture.size_bytes,\n"
+        "        fmt, siz, palette_index, &tmem_view);\n"
+        "    if (tmem_view_exact) {\n"
         "        key.texture_addr = nullptr;\n"
         "        key.palette_addrs[0] = nullptr;\n"
         "        key.palette_addrs[1] = nullptr;\n"
-        "        key.content_identity = tmem_content_identity;\n"
+        "        key.content_identity = tmem_view.content_identity;\n"
         "        key.content_identity_valid = true;\n"
         "    }\n\n"
         "    if (gfx_texture_cache_lookup(i, key)) {\n",
-        "TextureCacheKey live TMEM identity",
+        "TextureCacheKey live TMEM view",
     )
+
+    source = replace_once(
+        source,
+        "    if (gfx_texture_cache_lookup(i, key)) {\n"
+        "        return;\n"
+        "    }\n\n"
+        "    if (fmt == G_IM_FMT_RGBA) {\n",
+        "    if (gfx_texture_cache_lookup(i, key)) {\n"
+        "        return;\n"
+        "    }\n\n"
+        "    LoadedTexture tmem_loaded_texture = loaded_texture;\n"
+        "    const LoadedTexture* texture_to_import = &loaded_texture;\n"
+        "    if (tmem_view_exact) {\n"
+        "        tmem_loaded_texture.addr = tmem_view.texels;\n"
+        "        tmem_loaded_texture.orig_size_bytes = tmem_view.size_bytes;\n"
+        "        tmem_loaded_texture.full_size_bytes = tmem_view.size_bytes;\n"
+        "        tmem_loaded_texture.size_bytes = tmem_view.size_bytes;\n"
+        "        tmem_loaded_texture.full_image_line_size_bytes =\n"
+        "            tmem_view.line_size_bytes;\n"
+        "        tmem_loaded_texture.line_size_bytes = tmem_view.line_size_bytes;\n"
+        "        if (tmem_view.palette_count != 0) {\n"
+        "            memcpy(rdp.palette + tmem_view.palette_first, tmem_view.palette,\n"
+        "                (size_t)tmem_view.palette_count * sizeof(rdp.palette[0]));\n"
+        "        }\n"
+        "        texture_to_import = &tmem_loaded_texture;\n"
+        "    }\n\n"
+        "    if (fmt == G_IM_FMT_RGBA) {\n",
+        "authoritative TMEM importer view",
+    )
+
+    for importer in (
+        "import_texture_rgba16",
+        "import_texture_rgba32",
+        "import_texture_ia4",
+        "import_texture_ia8",
+        "import_texture_ia16",
+        "import_texture_ci4",
+        "import_texture_ci8",
+        "import_texture_i4",
+        "import_texture_i8",
+    ):
+        source = replace_once(
+            source,
+            f"{importer}(tile, loaded_texture, rdp.tex_lod);",
+            f"{importer}(tile, *texture_to_import, rdp.tex_lod);",
+            f"{importer} live TMEM view",
+        )
 
     source = replace_once(
         source,

@@ -20,6 +20,8 @@ static struct {
     bool initialized;
     struct GfxRdpTmemRuntime runtime;
     struct GfxRdpTmemLiveStats stats;
+    uint8_t materialized_texels[GFX_RDP_TMEM_BYTES];
+    uint16_t materialized_palette[256];
 } s_live;
 
 static void gfxRdpTmemLiveEnsureInitialized(void)
@@ -295,6 +297,97 @@ extern "C" bool gfxRdpTmemLiveTextureFingerprint(uint8_t tile_index,
 
     *fingerprint = hash;
     ++s_live.stats.fingerprint_exact;
+    return true;
+}
+
+extern "C" bool gfxRdpTmemLiveMaterializeTexture(uint8_t tile_index,
+    uint32_t loaded_line_size_bytes, uint32_t loaded_size_bytes,
+    uint8_t render_fmt, uint8_t render_siz, uint8_t palette_index,
+    struct GfxRdpTmemLiveTextureView *view)
+{
+    gfxRdpTmemLiveEnsureInitialized();
+
+    if (!view) {
+        ++s_live.stats.materialize_fallback;
+        return false;
+    }
+    memset(view, 0, sizeof(*view));
+
+    uint64_t content_identity = 0u;
+    if (tile_index >= GFX_RDP_TMEM_RUNTIME_TILES ||
+        loaded_line_size_bytes == 0u || loaded_size_bytes == 0u ||
+        loaded_size_bytes > sizeof(s_live.materialized_texels) ||
+        !gfxRdpTmemLiveTextureFingerprint(tile_index,
+            loaded_line_size_bytes, loaded_size_bytes,
+            render_fmt, render_siz, palette_index, &content_identity)) {
+        ++s_live.stats.materialize_fallback;
+        return false;
+    }
+
+    const struct GfxRdpTmemRuntimeTile *tile =
+        &s_live.runtime.tiles[tile_index];
+    const struct GfxRdpTmem *tmem = &s_live.runtime.tmem;
+    const bool split_rgba32 =
+        tile->fmt == G_IM_FMT_RGBA && tile->siz == G_IM_SIZ_32b;
+    const uint32_t render_line_size_bytes =
+        (uint32_t)tile->line_words * (split_rgba32 ? 16u : 8u);
+    const uint32_t logical_line_size_bytes =
+        loaded_line_size_bytes < render_line_size_bytes
+            ? loaded_line_size_bytes : render_line_size_bytes;
+
+    bool exact;
+    if (split_rgba32) {
+        exact = (logical_line_size_bytes & 3u) == 0u &&
+            (loaded_size_bytes & 3u) == 0u &&
+            gfxRdpTmemReadTileRgba32Texels(tmem,
+                tile->tmem_word, tile->line_words,
+                s_live.materialized_texels,
+                logical_line_size_bytes / 4u,
+                loaded_size_bytes / 4u);
+    } else {
+        exact = gfxRdpTmemReadTileLinearBytes(tmem,
+            tile->tmem_word, tile->line_words,
+            s_live.materialized_texels,
+            logical_line_size_bytes, loaded_size_bytes);
+    }
+
+    if (!exact) {
+        ++s_live.stats.materialize_fallback;
+        return false;
+    }
+
+    uint16_t palette_first = 0u;
+    uint16_t palette_count = 0u;
+    if (render_fmt == G_IM_FMT_CI) {
+        uint32_t first_palette_word;
+        if (render_siz == G_IM_SIZ_4b && palette_index < 16u) {
+            palette_first = (uint16_t)((uint16_t)palette_index * 16u);
+            palette_count = 16u;
+            first_palette_word =
+                GFX_RDP_TMEM_HALF_WORDS + palette_first;
+        } else if (render_siz == G_IM_SIZ_8b) {
+            palette_count = 256u;
+            first_palette_word = GFX_RDP_TMEM_HALF_WORDS;
+        } else {
+            ++s_live.stats.materialize_fallback;
+            return false;
+        }
+
+        if (!gfxRdpTmemReadTlut(tmem, first_palette_word,
+                s_live.materialized_palette, palette_count)) {
+            ++s_live.stats.materialize_fallback;
+            return false;
+        }
+    }
+
+    view->texels = s_live.materialized_texels;
+    view->size_bytes = loaded_size_bytes;
+    view->line_size_bytes = logical_line_size_bytes;
+    view->palette = s_live.materialized_palette;
+    view->palette_first = palette_first;
+    view->palette_count = palette_count;
+    view->content_identity = content_identity;
+    ++s_live.stats.materialize_exact;
     return true;
 }
 

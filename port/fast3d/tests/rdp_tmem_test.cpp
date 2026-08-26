@@ -20,6 +20,11 @@ static void test_tlut(void)
     assert(memcmp(bytes + 257u * 8u, expected1, sizeof(expected1)) == 0);
     assert(gfxRdpTmemWordValid(&tmem, 256u));
     assert(gfxRdpTmemWordGeneration(&tmem, 256u) != 0u);
+
+    uint16_t decoded[2]{};
+    assert(gfxRdpTmemReadTlut(&tmem, 256u, decoded, 2u));
+    assert(decoded[0] == entries[0]);
+    assert(decoded[1] == entries[1]);
 }
 
 static void test_linear_tile_roundtrip_and_padding(void)
@@ -243,6 +248,36 @@ static void test_invalidation_blocks_readback(void)
         decoded, 8u, 8u, 1u));
 }
 
+static void test_partial_final_row_readback(void)
+{
+    GfxRdpTmem linear{};
+    uint8_t source_linear[15];
+    uint8_t decoded_linear[13]{};
+    for (uint32_t i = 0; i < sizeof(source_linear); ++i) {
+        source_linear[i] = (uint8_t)(0x40u + i);
+    }
+
+    assert(gfxRdpTmemLoadTileLinear(&linear, 0u, 1u,
+        source_linear, 5u, 5u, 3u));
+    assert(gfxRdpTmemReadTileLinearBytes(&linear, 0u, 1u,
+        decoded_linear, 5u, sizeof(decoded_linear)));
+    assert(memcmp(source_linear, decoded_linear, sizeof(decoded_linear)) == 0);
+
+    GfxRdpTmem rgba32{};
+    uint8_t source_rgba32[6u * 4u];
+    uint8_t decoded_rgba32[5u * 4u]{};
+    for (uint32_t i = 0; i < sizeof(source_rgba32); ++i) {
+        source_rgba32[i] = (uint8_t)(0x80u + i);
+    }
+
+    assert(gfxRdpTmemLoadTileRgba32(&rgba32, 0u, 1u,
+        source_rgba32, 3u * 4u, 3u, 2u));
+    assert(gfxRdpTmemReadTileRgba32Texels(&rgba32, 0u, 1u,
+        decoded_rgba32, 3u, 5u));
+    assert(memcmp(source_rgba32, decoded_rgba32,
+        sizeof(decoded_rgba32)) == 0);
+}
+
 int main(void)
 {
     test_tlut();
@@ -254,6 +289,7 @@ int main(void)
     test_ordered_runtime_rgba32_block();
     test_ordered_runtime_yuv_is_conservative();
     test_invalidation_blocks_readback();
+    test_partial_final_row_readback();
     puts("rdp_tmem tests passed");
     return 0;
 }
