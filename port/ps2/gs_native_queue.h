@@ -43,6 +43,13 @@ bool ps2GsNativeQueueSubmit(void);
 bool ps2GsNativeQueueWaitGs(void);
 
 /*
+ * Wait for VSync, publish the completed framebuffer through PCRTC and submit
+ * native FRAME/SCISSOR state for the next draw buffer. The state packet remains
+ * asynchronous; the next GIF claimant observes channel ownership ordering.
+ */
+bool ps2GsNativeQueuePresent(GSGLOBAL *gs);
+
+/*
  * Native host->local IMAGE upload used by gs_core's transitional GSTEXTURE
  * metadata. The function copies source pixels into one of two persistent EE
  * staging slots, submits a GIF source chain and returns after DMA submission,

@@ -44,6 +44,7 @@ static bool s_depth_update = true;
 static bool s_texture_alpha;
 static bool s_native_submit_failed;
 static bool s_native_finish_failed;
+static bool s_native_present_failed;
 static uint8_t s_fog_r;
 static uint8_t s_fog_g;
 static uint8_t s_fog_b;
@@ -327,6 +328,7 @@ extern "C" bool ps2GsCoreInit(const struct Ps2GsCreateInfo *info)
     s_texture_alpha = false;
     s_native_submit_failed = false;
     s_native_finish_failed = false;
+    s_native_present_failed = false;
     s_fog_r = 0;
     s_fog_g = 0;
     s_fog_b = 0;
@@ -474,9 +476,6 @@ extern "C" void ps2GsCoreSubmit(void)
         }
         return;
     }
-
-    /* gsKit_queue_exec used to flip this before gsKit_sync_flip(). */
-    s_gs->FirstFrame = GS_SETTING_OFF;
 }
 
 extern "C" void ps2GsCorePresent(void)
@@ -501,8 +500,14 @@ extern "C" void ps2GsCorePresent(void)
     }
     ps2GsCoreReclaimRetiredVram();
 
-    /* gsKit remains only the CRT/VSync and framebuffer-selection bootstrap. */
-    gsKit_sync_flip(s_gs);
+    if (!ps2GsNativeQueuePresent(s_gs)) {
+        if (!s_native_present_failed) {
+            sysLogPrintf(LOG_ERROR,
+                "GS core: native PCRTC present failed");
+            ps2LogCheckpoint();
+            s_native_present_failed = true;
+        }
+    }
 }
 
 extern "C" void ps2GsCoreClear(bool clear_color, bool clear_depth)

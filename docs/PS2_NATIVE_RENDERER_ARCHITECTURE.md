@@ -306,11 +306,12 @@ This semantic layer should remain backend-independent where possible. PS2-specif
 - the PS2 Fast3D cache is capped at the backend's 64 texture handles so eviction can recycle handles instead of exhausting the backend table;
 - exact live-TMEM N64 RGBA5551 textures are converted directly into GS A1B5G5R5 staging and reside as PSMCT16, halving their IMAGE payload and local-memory footprint relative to the RGBA32 baseline;
 - TEXA expands the PSMCT16 alpha bit to the same 0..255 texture-alpha convention used by the existing combiner adapter;
-- gsKit still owns CRT/screen bootstrap, system framebuffer/Z setup, block-rounded texture-size calculation and buffer flip/VSync integration;
+- the project owns the per-frame VSync wait, `DISPFB2` publication, draw-buffer selection and native `FRAME`/`SCISSOR` packet;
+- gsKit remains only in one-time CRT/screen bootstrap, system framebuffer/Z setup and block-rounded texture-size calculation;
 - RGBA32/PSMCT32 remains the compatibility fallback for other formats and any TMEM view whose exactness is not proved;
-- current renderer is therefore native in command transport, but not yet gsKit-independent.
+- the hot frame loop is native in command, texture and presentation transport, but one-time initialization is not yet gsKit-independent.
 
-Remaining renderer milestones include native indexed/16-bit texture residency, measured GS state batching and combiner coverage, VIF1/VU1 geometry batches, and replacement of the remaining gsKit CRT/present bootstrap where doing so has a concrete ownership or performance benefit.
+Remaining renderer milestones include native indexed texture residency, measured GS state batching and combiner coverage, VIF1/VU1 geometry batches, and replacement of the remaining one-time gsKit CRT/system-buffer bootstrap where doing so has a concrete ownership or performance benefit.
 
 ## 8. Bottleneck hypothesis ordering
 
@@ -324,7 +325,7 @@ Current likely sequence:
 4. **Geometry:** profile CPU Fast3D transform/light/clip cost and batch structure.
 5. **VU1 migration:** move regular geometry batches only after the input/output representation is stable.
 6. **IPU experiments:** add async image jobs where the source representation naturally matches IPU strengths.
-7. **Final low-level cleanup:** remove remaining gsKit bootstrap/present dependencies if they are still useful to remove after profiling.
+7. **Final low-level cleanup:** remove remaining one-time gsKit bootstrap dependencies if profiling or ownership requires it.
 
 After every major optimization, re-profile the whole system because the bottleneck may move to GIF, GS VRAM, Main Bus, SIF or another producer.
 

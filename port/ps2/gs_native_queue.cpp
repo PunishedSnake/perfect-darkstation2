@@ -41,6 +41,8 @@ static struct Ps2GsNativeArena s_arenas[2];
 static struct Ps2GsNativeUploadSlot s_upload_slots[PS2_GS_UPLOAD_SLOTS];
 static void *s_finish_canonical;
 static uint64_t *s_finish_ucab;
+static void *s_present_canonical;
+static uint64_t *s_present_ucab;
 static uint32_t s_build_arena;
 static uint32_t s_upload_slot;
 static bool s_initialized;
@@ -77,6 +79,10 @@ static void ps2GsNativeQueueReleaseInitMemory(void)
     free(s_finish_canonical);
     s_finish_canonical = NULL;
     s_finish_ucab = NULL;
+
+    free(s_present_canonical);
+    s_present_canonical = NULL;
+    s_present_ucab = NULL;
 }
 
 static bool ps2GsNativeEnsureUploadCapacity(struct Ps2GsNativeUploadSlot *slot,
@@ -222,6 +228,18 @@ extern "C" bool ps2GsNativeQueueInit(uint32_t qwords_per_buffer)
     s_finish_ucab[1] = PS2_GIF_REG_AD;
     s_finish_ucab[2] = 0;
     s_finish_ucab[3] = GS_FINISH;
+
+    s_present_canonical = memalign(64, 128);
+    if (!s_present_canonical) {
+        sysLogPrintf(LOG_ERROR,
+            "GS native queue: present-packet allocation failed");
+        ps2GsNativeQueueReleaseInitMemory();
+        return false;
+    }
+    memset(s_present_canonical, 0, 128);
+    SyncDCache(s_present_canonical,
+        (uint8_t *)s_present_canonical + 127u);
+    s_present_ucab = (uint64_t *)UCAB_SEG(s_present_canonical);
 
     s_build_arena = 0;
     s_upload_slot = 0;
@@ -411,6 +429,57 @@ extern "C" bool ps2GsNativeQueueWaitGs(void)
     }
     while (!(GS_CSR_FINISH)) {
     }
+    return true;
+}
+
+extern "C" bool ps2GsNativeQueuePresent(GSGLOBAL *gs)
+{
+    if (!s_initialized || !s_present_ucab || !gs ||
+        gs->Width <= 0 || gs->Height <= 0) {
+        return false;
+    }
+
+    /* Own the tiny dynamic packet before rewriting its UCAB storage. */
+    if (dmaKit_wait(DMA_CHANNEL_GIF, 0) < 0) {
+        return false;
+    }
+
+    /* CSR.VSINT is write-one-to-clear. Wait for the next scanout boundary. */
+    *GS_CSR = *GS_CSR & 8u;
+    while (!(*GS_CSR & 8u)) {
+    }
+
+    if (gs->DoubleBuffering == GS_SETTING_ON) {
+        GS_SET_DISPFB2(
+            gs->ScreenBuffer[gs->ActiveBuffer & 1u] / 8192u,
+            gs->Width / 64u,
+            gs->PSM,
+            0,
+            0);
+        gs->ActiveBuffer ^= 1u;
+    }
+
+    uint64_t *p = s_present_ucab;
+    *p++ = ps2GifPackedAdTag(4);
+    *p++ = PS2_GIF_REG_AD;
+    *p++ = GS_SETREG_SCISSOR(0, gs->Width - 1, 0, gs->Height - 1);
+    *p++ = GS_SCISSOR_1;
+    *p++ = GS_SETREG_FRAME_1(
+        gs->ScreenBuffer[gs->ActiveBuffer & 1u] / 8192u,
+        gs->Width / 64u,
+        gs->PSM,
+        0);
+    *p++ = GS_FRAME_1;
+    *p++ = GS_SETREG_SCISSOR(0, gs->Width - 1, 0, gs->Height - 1);
+    *p++ = GS_SCISSOR_2;
+    *p++ = GS_SETREG_FRAME_1(
+        gs->ScreenBuffer[gs->ActiveBuffer & 1u] / 8192u,
+        gs->Width / 64u,
+        gs->PSM,
+        0);
+    *p++ = GS_FRAME_2;
+
+    dmaKit_send_ucab(DMA_CHANNEL_GIF, s_present_ucab, 5);
     return true;
 }
 
