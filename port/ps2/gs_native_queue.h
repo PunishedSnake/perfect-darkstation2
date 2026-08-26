@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include <gsKit.h>
+
 #include "gs_core.h"
 
 #ifdef __cplusplus
@@ -13,10 +15,12 @@ extern "C" {
 /*
  * Project-owned PATH3 command arena.
  *
- * The current first implementation emits contiguous GIF PACKED A+D streams
- * through dmaKit. It deliberately does not append GS FINISH. Double buffering
- * lets the EE build the next arena without overwriting a buffer still owned by
- * GIF DMA. Buffer sizing is a measured policy knob, not part of the API.
+ * PACKED A+D draw/state streams use double-buffered UCAB arenas. Texture IMAGE
+ * uploads use a separate two-slot source-chain staging path so the EE may copy
+ * and prepare upload N+1 while GIF DMA still owns upload N. Neither path emits
+ * or waits for GS FINISH.
+ *
+ * Buffer sizing is a measured policy knob, not part of the public Fast3D API.
  */
 bool ps2GsNativeQueueInit(uint32_t qwords_per_buffer);
 void ps2GsNativeQueueBeginFrame(void);
@@ -28,8 +32,19 @@ void ps2GsNativeQueueBeginFrame(void);
  */
 struct Ps2GsPackedReg *ps2GsNativeQueueReserveAd(uint32_t reg_count);
 
-/* Submit the active arena to GIF DMA. This never waits for GS FINISH/VSync. */
+/* Submit the active draw/state arena to GIF DMA. Never waits for GS FINISH/VSync. */
 bool ps2GsNativeQueueSubmit(void);
+
+/*
+ * Native host->local IMAGE upload used by gs_core's transitional GSTEXTURE
+ * metadata. The function copies source pixels into one of two persistent EE
+ * staging slots, submits a GIF source chain and returns after DMA submission,
+ * not completion. Subsequent PATH3 submissions serialize on the GIF channel,
+ * preserving upload -> TEXFLUSH -> dependent draw ordering.
+ *
+ * Current renderer contract is RGBA32 / GS_PSM_CT32 only.
+ */
+bool ps2GsNativeQueueUploadTexture(GSGLOBAL *gs, GSTEXTURE *texture);
 
 uint32_t ps2GsNativeQueueUsedQwords(void);
 uint32_t ps2GsNativeQueueCapacityQwords(void);
@@ -38,5 +53,14 @@ bool ps2GsNativeQueueOverflowed(void);
 #ifdef __cplusplus
 }
 #endif
+
+/*
+ * Transitional call-site seam: gs_core.cpp includes this header after gsKit.h,
+ * so its legacy gsKit_texture_upload() call is redirected to the project-owned
+ * IMAGE transport without leaking gsKit types into the public gs_core API.
+ * Remove this alias when gs_core no longer stores GSTEXTURE metadata.
+ */
+#define gsKit_texture_upload(gs_, texture_) \
+    ((void)ps2GsNativeQueueUploadTexture((gs_), (texture_)))
 
 #endif

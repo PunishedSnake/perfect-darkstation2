@@ -14,6 +14,14 @@
 #define PS2_GIF_REG_AD 0x0eu
 #define PS2_GIF_MAX_NLOOP 0x7fffu
 
+#define PS2_GS_UPLOAD_SLOTS 2u
+#define PS2_GS_UPLOAD_MAX_BYTES (1024u * 1024u * 4u)
+#define PS2_GS_UPLOAD_MAX_QW ((PS2_GS_UPLOAD_MAX_BYTES + 15u) / 16u)
+#define PS2_GS_UPLOAD_MAX_CHUNKS \
+    ((PS2_GS_UPLOAD_MAX_QW + GS_GIF_BLOCKSIZE - 1u) / GS_GIF_BLOCKSIZE)
+/* Initial CNT packet: 6 QW, each IMAGE chunk: 3 QW, END+TEXFLUSH: 3 QW. */
+#define PS2_GS_UPLOAD_CHAIN_QW (9u + PS2_GS_UPLOAD_MAX_CHUNKS * 3u)
+
 struct Ps2GsNativeArena {
     void *canonical;
     uint64_t *ucab;
@@ -22,8 +30,16 @@ struct Ps2GsNativeArena {
     bool overflowed;
 };
 
+struct Ps2GsNativeUploadSlot {
+    uint8_t *payload;
+    uint32_t capacity_bytes;
+    uint64_t *chain;
+};
+
 static struct Ps2GsNativeArena s_arenas[2];
+static struct Ps2GsNativeUploadSlot s_upload_slots[PS2_GS_UPLOAD_SLOTS];
 static uint32_t s_build_arena;
+static uint32_t s_upload_slot;
 static bool s_initialized;
 
 static_assert(sizeof(struct Ps2GsPackedReg) == 16,
@@ -39,6 +55,107 @@ static uint64_t ps2GifPackedAdTag(uint32_t nloop)
            ((uint64_t)1u << 60);       /* NREG = one A+D descriptor */
 }
 
+static void ps2GsNativeQueueReleaseInitMemory(void)
+{
+    for (uint32_t i = 0; i < 2; ++i) {
+        free(s_arenas[i].canonical);
+        s_arenas[i].canonical = NULL;
+        s_arenas[i].ucab = NULL;
+    }
+
+    for (uint32_t i = 0; i < PS2_GS_UPLOAD_SLOTS; ++i) {
+        free(s_upload_slots[i].payload);
+        free(s_upload_slots[i].chain);
+        s_upload_slots[i].payload = NULL;
+        s_upload_slots[i].chain = NULL;
+        s_upload_slots[i].capacity_bytes = 0;
+    }
+}
+
+static bool ps2GsNativeEnsureUploadCapacity(struct Ps2GsNativeUploadSlot *slot,
+    uint32_t required_bytes)
+{
+    if (slot->capacity_bytes >= required_bytes) {
+        return true;
+    }
+
+    /*
+     * Cache-line alignment is intentional only for this EE staging allocation:
+     * the payload is explicitly written by the CPU then range-writebacked for
+     * GIF DMA. DMA itself only requires qword-granular payload here.
+     */
+    uint8_t *replacement = (uint8_t *)memalign(64, required_bytes);
+    if (!replacement) {
+        return false;
+    }
+
+    free(slot->payload);
+    slot->payload = replacement;
+    slot->capacity_bytes = required_bytes;
+    return true;
+}
+
+static uint32_t ps2GsNativeTextureTbw(uint32_t width)
+{
+    /* CT32/24/16 base width is represented in 64-pixel units. */
+    uint32_t tbw = (width + 63u) / 64u;
+    return tbw ? tbw : 1u;
+}
+
+static uint32_t ps2GsNativeBuildUploadChain(struct Ps2GsNativeUploadSlot *slot,
+    uint32_t width, uint32_t height, uint32_t vram, uint32_t tbw,
+    uint32_t psm, uint32_t payload_qw)
+{
+    uint64_t *p = slot->chain;
+    uint8_t *payload = slot->payload;
+    uint32_t remaining_qw = payload_qw;
+
+    *p++ = DMA_TAG(5, 0, DMA_CNT, 0, 0, 0);
+    *p++ = 0;
+
+    *p++ = GIF_TAG(4, 0, 0, 0, GSKIT_GIF_FLG_PACKED, 1);
+    *p++ = GIF_AD;
+
+    *p++ = GS_SETREG_BITBLTBUF(0, 0, 0, vram / 256u, tbw, psm);
+    *p++ = GS_BITBLTBUF;
+    *p++ = GS_SETREG_TRXPOS(0, 0, 0, 0, 0);
+    *p++ = GS_TRXPOS;
+    *p++ = GS_SETREG_TRXREG(width, height);
+    *p++ = GS_TRXREG;
+    *p++ = GS_SETREG_TRXDIR(0);
+    *p++ = GS_TRXDIR;
+
+    while (remaining_qw > 0) {
+        const uint32_t chunk_qw = remaining_qw > GS_GIF_BLOCKSIZE
+            ? GS_GIF_BLOCKSIZE : remaining_qw;
+
+        *p++ = DMA_TAG(1, 0, DMA_CNT, 0, 0, 0);
+        *p++ = 0;
+        *p++ = GIF_TAG(chunk_qw, 0, 0, 0, GSKIT_GIF_FLG_IMAGE, 0);
+        *p++ = 0;
+        *p++ = DMA_TAG(chunk_qw, 1, DMA_REF, 0,
+            (uint32_t)(uintptr_t)payload, 0);
+        *p++ = 0;
+
+        payload += (size_t)chunk_qw * 16u;
+        remaining_qw -= chunk_qw;
+    }
+
+    /*
+     * TEXFLUSH is ordered after IMAGE data in the same PATH3 chain. A later
+     * draw chain therefore does not need a GS FINISH just to observe the newly
+     * uploaded texture.
+     */
+    *p++ = DMA_TAG(2, 0, DMA_END, 0, 0, 0);
+    *p++ = 0;
+    *p++ = GIF_TAG(1, 1, 0, 0, GSKIT_GIF_FLG_PACKED, 1);
+    *p++ = GIF_AD;
+    *p++ = 0;
+    *p++ = GS_TEXFLUSH;
+
+    return (uint32_t)((p - slot->chain) / 2);
+}
+
 extern "C" bool ps2GsNativeQueueInit(uint32_t qwords_per_buffer)
 {
     if (s_initialized) {
@@ -50,6 +167,7 @@ extern "C" bool ps2GsNativeQueueInit(uint32_t qwords_per_buffer)
 
     const size_t bytes = (size_t)qwords_per_buffer * 16u;
     memset(s_arenas, 0, sizeof(s_arenas));
+    memset(s_upload_slots, 0, sizeof(s_upload_slots));
 
     for (uint32_t i = 0; i < 2; ++i) {
         void *canonical = memalign(64, bytes);
@@ -57,11 +175,7 @@ extern "C" bool ps2GsNativeQueueInit(uint32_t qwords_per_buffer)
             sysLogPrintf(LOG_ERROR,
                 "GS native queue: allocation failed arena=%u bytes=%u",
                 i, (unsigned int)bytes);
-            for (uint32_t j = 0; j < i; ++j) {
-                free(s_arenas[j].canonical);
-                s_arenas[j].canonical = NULL;
-                s_arenas[j].ucab = NULL;
-            }
+            ps2GsNativeQueueReleaseInitMemory();
             return false;
         }
 
@@ -73,12 +187,29 @@ extern "C" bool ps2GsNativeQueueInit(uint32_t qwords_per_buffer)
         s_arenas[i].capacity_qw = qwords_per_buffer;
     }
 
+    const size_t upload_chain_bytes = (size_t)PS2_GS_UPLOAD_CHAIN_QW * 16u;
+    for (uint32_t i = 0; i < PS2_GS_UPLOAD_SLOTS; ++i) {
+        s_upload_slots[i].chain = (uint64_t *)memalign(64, upload_chain_bytes);
+        if (!s_upload_slots[i].chain) {
+            sysLogPrintf(LOG_ERROR,
+                "GS native queue: upload-chain allocation failed slot=%u bytes=%u",
+                i, (unsigned int)upload_chain_bytes);
+            ps2GsNativeQueueReleaseInitMemory();
+            return false;
+        }
+        memset(s_upload_slots[i].chain, 0, upload_chain_bytes);
+    }
+
     s_build_arena = 0;
+    s_upload_slot = 0;
     s_initialized = true;
 
     sysLogPrintf(LOG_NOTE,
         "GS native queue: 2x%u QW (%u KiB each) UCAB command arenas",
         qwords_per_buffer, (unsigned int)(bytes / 1024u));
+    sysLogPrintf(LOG_NOTE,
+        "GS native queue: %u-slot staged IMAGE uploader, max=%u KiB/texture",
+        PS2_GS_UPLOAD_SLOTS, PS2_GS_UPLOAD_MAX_BYTES / 1024u);
     ps2LogCheckpoint();
     return true;
 }
@@ -121,6 +252,77 @@ extern "C" struct Ps2GsPackedReg *ps2GsNativeQueueReserveAd(uint32_t reg_count)
     return (struct Ps2GsPackedReg *)(packet + 2);
 }
 
+extern "C" bool ps2GsNativeQueueUploadTexture(GSGLOBAL *gs, GSTEXTURE *texture)
+{
+    (void)gs;
+
+    if (!s_initialized || !texture || !texture->Mem || texture->Width == 0 ||
+        texture->Height == 0 || texture->Width > 1024 || texture->Height > 1024) {
+        return false;
+    }
+
+    if (texture->PSM != GS_PSM_CT32) {
+        sysLogPrintf(LOG_ERROR,
+            "GS native queue: IMAGE uploader only supports CT32, psm=0x%x",
+            texture->PSM);
+        return false;
+    }
+    if ((texture->Vram & 0xffu) != 0) {
+        sysLogPrintf(LOG_ERROR,
+            "GS native queue: texture VRAM base is not 256-byte aligned: %08x",
+            texture->Vram);
+        return false;
+    }
+
+    const uint32_t source_bytes = texture->Width * texture->Height * 4u;
+    const uint32_t payload_bytes = (source_bytes + 15u) & ~15u;
+    const uint32_t payload_qw = payload_bytes / 16u;
+    if (payload_bytes == 0 || payload_bytes > PS2_GS_UPLOAD_MAX_BYTES) {
+        return false;
+    }
+
+    struct Ps2GsNativeUploadSlot *slot = &s_upload_slots[s_upload_slot];
+    if (!ps2GsNativeEnsureUploadCapacity(slot, payload_bytes)) {
+        sysLogPrintf(LOG_ERROR,
+            "GS native queue: upload staging allocation failed slot=%u bytes=%u",
+            s_upload_slot, payload_bytes);
+        return false;
+    }
+
+    /*
+     * Stage before claiming GIF ownership. The alternating slot is no longer
+     * referenced by DMA: every later GIF submission waits for the immediately
+     * preceding one, so a slot reused two uploads later is already consumer-free.
+     */
+    memcpy(slot->payload, texture->Mem, source_bytes);
+    if (payload_bytes > source_bytes) {
+        memset(slot->payload + source_bytes, 0, payload_bytes - source_bytes);
+    }
+    SyncDCache(slot->payload, slot->payload + payload_bytes - 1u);
+
+    texture->TBW = ps2GsNativeTextureTbw(texture->Width);
+    const uint32_t chain_qw = ps2GsNativeBuildUploadChain(slot,
+        texture->Width, texture->Height, texture->Vram, texture->TBW,
+        texture->PSM, payload_qw);
+    if (chain_qw == 0 || chain_qw > PS2_GS_UPLOAD_CHAIN_QW) {
+        return false;
+    }
+
+    /*
+     * submit early, wait late: CPU staging and chain construction happen before
+     * this ownership wait, allowing them to overlap the previous PATH3 DMA.
+     * Return immediately after submission; the next GIF claimant performs the
+     * dependency wait instead of forcing completion here.
+     */
+    if (dmaKit_wait(DMA_CHANNEL_GIF, 0) < 0) {
+        return false;
+    }
+    dmaKit_send_chain(DMA_CHANNEL_GIF, slot->chain, chain_qw);
+
+    s_upload_slot ^= 1u;
+    return true;
+}
+
 extern "C" bool ps2GsNativeQueueSubmit(void)
 {
     if (!s_initialized) {
@@ -140,7 +342,8 @@ extern "C" bool ps2GsNativeQueueSubmit(void)
      * queue_exec this does not append or wait for GS FINISH. With two arenas,
      * EE packet construction can proceed in the other buffer while PATH3 owns
      * this one. A busy channel is waited only when a new submit actually needs
-     * to claim it.
+     * to claim it. Texture IMAGE transfers use the same rule, so their TEXFLUSH
+     * is ordered before any dependent draw chain submitted here.
      */
     if (dmaKit_wait(DMA_CHANNEL_GIF, 0) < 0) {
         return false;
