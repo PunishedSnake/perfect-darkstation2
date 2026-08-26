@@ -249,6 +249,77 @@ target_compile_definitions(pd_ps2_game_compile_all PRIVATE
   PD_PS2_GIT_COMMIT="${PD_PS2_GIT_COMMIT}"
 )
 
+# Mirror the current portable library set from the desktop build. This is a
+# compile-only EE ABI/toolchain gate, not an assertion that every subsystem
+# should keep its current implementation at runtime. In particular audio and
+# storage will still get explicit PS2 service contracts before full linking.
+file(GLOB PD_PS2_LIB_MP3 CONFIGURE_DEPENDS "${PD_ROOT}/src/lib/mp3/*.c")
+file(GLOB PD_PS2_LIB_NAUDIO CONFIGURE_DEPENDS "${PD_ROOT}/src/lib/naudio/*.c")
+file(GLOB PD_PS2_LIB_ULTRA_AUDIO CONFIGURE_DEPENDS "${PD_ROOT}/src/lib/ultra/audio/*.c")
+file(GLOB PD_PS2_LIB_GU CONFIGURE_DEPENDS "${PD_ROOT}/src/lib/ultra/gu/*.c")
+set(PD_PS2_PORTABLE_LIB_SOURCES
+  "${PD_ROOT}/src/lib/ultra/io/vimodentsclan1.c"
+  "${PD_ROOT}/src/lib/ultra/io/vimodepallan1.c"
+  "${PD_ROOT}/src/lib/ultra/io/vimodempallan1.c"
+  "${PD_ROOT}/src/lib/ultra/io/vitbl.c"
+  "${PD_ROOT}/src/lib/ailist.c"
+  "${PD_ROOT}/src/lib/anim.c"
+  "${PD_ROOT}/src/lib/args.c"
+  "${PD_ROOT}/src/lib/audiodma.c"
+  "${PD_ROOT}/src/lib/audiomgr.c"
+  "${PD_ROOT}/src/lib/base.c"
+  "${PD_ROOT}/src/lib/collision.c"
+  "${PD_ROOT}/src/lib/debughud.c"
+  "${PD_ROOT}/src/lib/dma.c"
+  "${PD_ROOT}/src/lib/fault.c"
+  "${PD_ROOT}/src/lib/joy.c"
+  "${PD_ROOT}/src/lib/lib_2f490_c.c"
+  "${PD_ROOT}/src/lib/lib_2fc60.c"
+  "${PD_ROOT}/src/lib/lib_3e3e0.c"
+  "${PD_ROOT}/src/lib/lib_04f60nb.c"
+  "${PD_ROOT}/src/lib/lib_17ce0.c"
+  "${PD_ROOT}/src/lib/lib_034d0.c"
+  "${PD_ROOT}/src/lib/lib_39c80.c"
+  "${PD_ROOT}/src/lib/lib_15850.c"
+  "${PD_ROOT}/src/lib/mema.c"
+  "${PD_ROOT}/src/lib/memp.c"
+  "${PD_ROOT}/src/lib/model.c"
+  "${PD_ROOT}/src/lib/modelasm_c.c"
+  "${PD_ROOT}/src/lib/mp3.c"
+  "${PD_ROOT}/src/lib/mtx_c.c"
+  "${PD_ROOT}/src/lib/mtx.c"
+  "${PD_ROOT}/src/lib/music.c"
+  "${PD_ROOT}/src/lib/path.c"
+  "${PD_ROOT}/src/lib/profile.c"
+  "${PD_ROOT}/src/lib/rdp.c"
+  "${PD_ROOT}/src/lib/rmon.c"
+  "${PD_ROOT}/src/lib/rng_c.c"
+  "${PD_ROOT}/src/lib/rzip_c.c"
+  "${PD_ROOT}/src/lib/snd.c"
+  "${PD_ROOT}/src/lib/speaker.c"
+  "${PD_ROOT}/src/lib/varsinit.c"
+  "${PD_ROOT}/src/lib/vi.c"
+  "${PD_ROOT}/src/textureconfig.c"
+  ${PD_PS2_LIB_MP3}
+  ${PD_PS2_LIB_NAUDIO}
+  ${PD_PS2_LIB_ULTRA_AUDIO}
+  ${PD_PS2_LIB_GU}
+)
+add_library(pd_ps2_core_compile_all OBJECT ${PD_PS2_PORTABLE_LIB_SOURCES})
+add_dependencies(pd_ps2_core_compile_all pd_ps2_asset_headers)
+target_include_directories(pd_ps2_core_compile_all PRIVATE
+  ${PD_PS2_COMMON_INCLUDE_DIRS}
+  "${PD_PS2_GENERATED_DIR}"
+  "${GSKIT}/include"
+)
+target_compile_options(pd_ps2_core_compile_all PRIVATE
+  ${PD_PS2_CORRECTNESS_FLAGS}
+)
+target_compile_definitions(pd_ps2_core_compile_all PRIVATE
+  ${PD_PS2_GAME_DEFINITIONS}
+  PD_PS2_GIT_COMMIT="${PD_PS2_GIT_COMMIT}"
+)
+
 # The real Fast3D translator remains linked as the compatibility frontend.
 # gfx_api_scene.c is the current lower-level correctness baseline while GS
 # ownership is moved below gfx_ps2 into gs_core. DualShock 2 input is a separate
@@ -257,8 +328,8 @@ target_compile_definitions(pd_ps2_game_compile_all PRIVATE
 # active renderer so packet correctness can be gated independently.
 #
 # pd_ps2_game_bridge is the migration seam toward the actual Perfect Dark main
-# loop. Grow it only as each platform dependency gets an explicit PS2 contract;
-# do not paper over missing APIs with generic POSIX assumptions.
+# loop. Once both broad compile gates are green, stop growing compile-only
+# coverage and move to a real link probe with explicit PS2 platform services.
 
 message(STATUS "Perfect Dark PS2 bootstrap root: ${PD_ROOT}")
 message(STATUS "Perfect Dark PS2 bootstrap gsKit: ${GSKIT}")
