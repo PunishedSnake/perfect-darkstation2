@@ -90,11 +90,12 @@ void ps2GsCoreSetTextureClamp(uint32_t cms, uint32_t cmt);
 /*
  * Texture residency baseline.
  *
- * Handles are logical GS resources. The current implementation uses gsKit's
- * monotonic VRAM allocator and synchronous upload path internally. That is a
- * bring-up transport policy, not part of the Fast3D contract, and can later be
- * replaced by an explicit residency cache plus batched DMA without changing
- * callers.
+ * Handles are logical GS resources. The current implementation still uses
+ * gsKit's monotonic VRAM allocation metadata, but pixel transport is submitted
+ * through the project-owned asynchronous GIF IMAGE path. VRAM allocation and
+ * successful upload are separate states, and upload failure is propagated to
+ * the caller. The allocator/metadata dependency is transitional and may later
+ * be replaced by an explicit residency cache without changing this public API.
  */
 Ps2GsTextureHandle ps2GsCoreCreateTexture(void);
 bool ps2GsCoreTextureExists(Ps2GsTextureHandle handle);
