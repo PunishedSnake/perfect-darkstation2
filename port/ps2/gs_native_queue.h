@@ -49,7 +49,9 @@ bool ps2GsNativeQueueWaitGs(void);
  * not completion. Subsequent PATH3 submissions serialize on the GIF channel,
  * preserving upload -> TEXFLUSH -> dependent draw ordering.
  *
- * Current renderer contract is RGBA32 / GS_PSM_CT32 only.
+ * Current source contracts are host RGBA32 / GS_PSM_CT32 and authoritative
+ * N64 big-endian RGBA5551 / GS_PSM_CT16. CT16 conversion is fused into staging
+ * so no intermediate RGBA32 expansion is needed.
  */
 bool ps2GsNativeQueueUploadTexture(GSGLOBAL *gs, GSTEXTURE *texture);
 

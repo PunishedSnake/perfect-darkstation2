@@ -7,6 +7,7 @@
 #include "gfx_rendering_api.h"
 #include "gfx_ps2.h"
 #include "gs_core.h"
+#include "rdp_tmem_live.h"
 #include "system.h"
 
 /*
@@ -34,11 +35,11 @@
  *   - TEXEL0
  *   - TEXEL0 * INPUT1
  *
- * GS texture MODULATE uses 0x80 as unity and multiplies with >>7. Fast3D's
- * RGBA8 texture upload keeps texel alpha in 0..255, while GS fragment alpha uses
- * the native 0..0x80 range. When texture alpha participates (TCC=RGBA), fragment
- * alpha is therefore scaled to 0..0x40 so the MODULATE result returns to the
- * GS-native 0..0x80 range without repacking every texture at upload time.
+ * GS texture MODULATE uses 0x80 as unity and multiplies with >>7. RGBA32 alpha
+ * remains in 0..255, while native PSMCT16 alpha is expanded to the same range
+ * through TEXA. When texture alpha participates (TCC=RGBA), fragment alpha is
+ * therefore scaled to 0..0x40 so MODULATE returns to the GS-native 0..0x80
+ * range without expanding every RGBA16 texture to RGBA32.
  *
  * Fog maps to the GS native FOGCOL + per-vertex XYZF2 path. Fast3D's factor is
  * the fog contribution, while GS F is the source-color contribution, so the
@@ -53,6 +54,8 @@
 #define PS2_GFX_TRANSLATE_VERTS 96
 /* Fast3D threshold is 8/256. GS alpha unity is 0x80, hence reference 4. */
 #define PS2_GFX_ALPHA_THRESHOLD 4u
+#define PS2_GFX_N64_FMT_RGBA 0u
+#define PS2_GFX_N64_SIZ_16B 2u
 
 /* GS packed-register IDs consumed by the packet-ready core boundary. */
 #define PS2_GS_REG_RGBAQ 0x01u
@@ -113,6 +116,7 @@ static int s_anisotropy = 1;
 static bool s_warned_framebuffer;
 static bool s_warned_depth_prim;
 static bool s_warned_mipmap;
+static bool s_logged_native_rgba16;
 
 static struct Ps2GsTexturedVertex s_stq_vertices[PS2_GFX_TRANSLATE_VERTS];
 static struct Ps2GsColorVertex s_color_vertices[PS2_GFX_TRANSLATE_VERTS];
@@ -429,6 +433,42 @@ static void ps2_upload_texture(const uint8_t *rgba32_buf, uint32_t width, uint32
      */
     ps2GsCoreUploadTextureRgba32(
         s_selected_texture[s_active_texture_tile], rgba32_buf, width, height);
+}
+
+extern "C" bool gfxPs2UploadTmemTexture(
+    const struct GfxRdpTmemLiveTextureView *view,
+    uint8_t format, uint8_t size, bool gen_mipmaps)
+{
+    if (!view || !view->texels ||
+        format != PS2_GFX_N64_FMT_RGBA || size != PS2_GFX_N64_SIZ_16B ||
+        view->line_size_bytes == 0u ||
+        (view->line_size_bytes & 1u) != 0u || view->size_bytes == 0u ||
+        view->size_bytes % view->line_size_bytes != 0u ||
+        s_active_texture_tile < 0 || s_active_texture_tile > 1) {
+        return false;
+    }
+
+    if (gen_mipmaps && !s_warned_mipmap) {
+        sysLogPrintf(LOG_WARNING,
+            "GfxPS2 mipmap generation is not implemented in the bring-up backend");
+        s_warned_mipmap = true;
+    }
+
+    const uint32_t width = view->line_size_bytes / 2u;
+    const uint32_t height = view->size_bytes / view->line_size_bytes;
+    const Ps2GsTextureHandle handle =
+        s_selected_texture[s_active_texture_tile];
+    if (!ps2GsCoreUploadTextureN64Rgba16(
+            handle, view->texels, width, height)) {
+        return false;
+    }
+
+    if (!s_logged_native_rgba16) {
+        sysLogPrintf(LOG_NOTE,
+            "GfxPS2 native texture path: exact N64 RGBA16 -> GS PSMCT16");
+        s_logged_native_rgba16 = true;
+    }
+    return true;
 }
 
 static void ps2_set_sampler_parameters(int sampler, bool linear_filter, uint32_t cms, uint32_t cmt, bool mipmaps)
@@ -824,6 +864,7 @@ static void ps2_init(void)
     s_filter_mode = FILTER_LINEAR;
     s_mipmap_filter = MIPMAP_DISABLED;
     s_anisotropy = 1;
+    s_logged_native_rgba16 = false;
     ps2GsCoreSetAlphaTest(false, 0u);
     ps2GsCoreSetFog(false, 0u, 0u, 0u);
     ps2GsCoreSetTextureAlpha(false);

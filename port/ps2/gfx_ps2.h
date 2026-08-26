@@ -10,6 +10,15 @@ extern "C" {
 /* Fast3D backend consumes the already-initialised project GS core. */
 extern struct GfxRenderingAPI gfx_ps2_api;
 
+struct GfxRdpTmemLiveTextureView;
+
+/*
+ * PS2-only import seam used by the generated live-TMEM frontend. Returns true
+ * only when the exact logical view was consumed in a native GS format.
+ */
+bool gfxPs2UploadTmemTexture(const struct GfxRdpTmemLiveTextureView *view,
+    uint8_t format, uint8_t size, bool gen_mipmaps);
+
 #ifdef __cplusplus
 }
 #endif

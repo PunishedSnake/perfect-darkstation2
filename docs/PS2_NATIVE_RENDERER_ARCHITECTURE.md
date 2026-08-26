@@ -257,11 +257,11 @@ Avoid runtime float-heavy repacking when equivalent static asset transformation 
 
 ### Textures
 
-Candidate policy by class, subject to actual Perfect Dark content profiling:
+Current/candidate policy by class, subject to actual Perfect Dark content profiling:
 
 ```text
 CI4 / CI8      -> GS indexed texture + CLUT candidate
-RGBA16         -> GS 16-bit candidate
+RGBA16         -> exact live-TMEM view -> PSMCT16 active path
 IA / I         -> preserve compact semantics where practical
 large imagery  -> IPU experiment candidate
 runtime RGBA32 -> native GIF IMAGE baseline, then remove copies if measured worthwhile
@@ -304,8 +304,10 @@ This semantic layer should remain backend-independent where possible. PS2-specif
 - retired blocks are reclaimed only after an explicit native GS `FINISH` fence proves that previous consumers are done;
 - normal draw and upload submission does not wait for `FINISH`; fences occur at PCRTC publication and under genuine texture-allocation pressure;
 - the PS2 Fast3D cache is capped at the backend's 64 texture handles so eviction can recycle handles instead of exhausting the backend table;
+- exact live-TMEM N64 RGBA5551 textures are converted directly into GS A1B5G5R5 staging and reside as PSMCT16, halving their IMAGE payload and local-memory footprint relative to the RGBA32 baseline;
+- TEXA expands the PSMCT16 alpha bit to the same 0..255 texture-alpha convention used by the existing combiner adapter;
 - gsKit still owns CRT/screen bootstrap, system framebuffer/Z setup, block-rounded texture-size calculation and buffer flip/VSync integration;
-- current texture resource format exposed below Fast3D is RGBA32/PSMCT32 baseline;
+- RGBA32/PSMCT32 remains the compatibility fallback for other formats and any TMEM view whose exactness is not proved;
 - current renderer is therefore native in command transport, but not yet gsKit-independent.
 
 Remaining renderer milestones include native indexed/16-bit texture residency, measured GS state batching and combiner coverage, VIF1/VU1 geometry batches, and replacement of the remaining gsKit CRT/present bootstrap where doing so has a concrete ownership or performance benefit.
@@ -437,9 +439,10 @@ PCSX2 is useful for correctness, packet/state inspection and fast iteration. It 
 
 ### M3c: GS texture residency
 
-- inventory actual Perfect Dark texture sizes/formats/lifetimes;
-- replace monotonic allocation with an explicit residency policy only after that inventory;
-- prefer direct GS formats where the source semantics permit it.
+- project-owned 256-byte-block allocator for post-system GS VRAM;
+- transactional reupload/resize with fence-delayed retirement;
+- exact RGBA16 -> PSMCT16 direct residency, with RGBA32 fallback;
+- continue the format inventory before adding CI4/CI8 CLUT residency.
 
 ### M4: RDP state coverage
 

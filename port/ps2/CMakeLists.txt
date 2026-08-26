@@ -51,6 +51,7 @@ set(PD_PS2_ASSET_DIR "${PD_ROOT}/src/assets/${PD_PS2_ROMID}")
 set(PD_PS2_GENERATED_DIR "${PD_ROOT}/src/generated/${PD_PS2_ROMID}")
 
 set(PD_PS2_COMMON_INCLUDE_DIRS
+  "${CMAKE_CURRENT_LIST_DIR}"
   "${PD_ROOT}/include"
   "${PD_ROOT}/include/PR"
   "${PD_ROOT}/src/include"
@@ -161,6 +162,7 @@ add_executable(pd_ps2_bootstrap
   video_diag.c
   gs_core.cpp
   gs_native_queue.cpp
+  gs_texture_convert.cpp
   gs_vram_allocator.cpp
   gfx_api_scene.c
   gfx_frame_ps2.c

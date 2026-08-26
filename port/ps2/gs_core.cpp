@@ -231,6 +231,19 @@ static void ps2GsCoreEmitClamp(void)
     }
 }
 
+static void ps2GsCoreEmitTextureAlphaExpansion(void)
+{
+    struct Ps2GsPackedReg *p = ps2GsCoreReserve(1);
+    if (p) {
+        /*
+         * Expand the one-bit alpha of PSMCT16 to 0xff. This deliberately
+         * matches RGBA32 texel alpha, preserving the adapter's 0x40 fragment
+         * compensation for GS MODULATE across both resident formats.
+         */
+        ps2GsCoreWriteReg(p, GS_SETREG_TEXA(0x00, 0, 0xff), GS_TEXA);
+    }
+}
+
 static void ps2GsCoreEmitFullScissor(void)
 {
     struct Ps2GsPackedReg *p = ps2GsCoreReserve(1);
@@ -440,6 +453,7 @@ extern "C" void ps2GsCoreBeginFrame(void)
     ps2GsCoreEmitTest();
     ps2GsCoreEmitZbufWriteMask();
     ps2GsCoreEmitClamp();
+    ps2GsCoreEmitTextureAlphaExpansion();
     ps2GsCoreEmitAlpha();
     ps2GsCoreEmitFogColor();
 }
@@ -682,10 +696,12 @@ extern "C" bool ps2GsCoreTextureReady(Ps2GsTextureHandle handle)
     return slot && slot->uploaded;
 }
 
-extern "C" bool ps2GsCoreUploadTextureRgba32(Ps2GsTextureHandle handle,
-    const uint8_t *rgba32, uint32_t width, uint32_t height)
+static bool ps2GsCoreUploadTexture(Ps2GsTextureHandle handle,
+    const uint8_t *source, uint32_t width, uint32_t height, int psm)
 {
-    if (!s_gs || !rgba32 || width == 0 || height == 0 || width > 1024 || height > 1024) {
+    if (!s_gs || !source || width == 0 || height == 0 ||
+        width > 1024 || height > 1024 ||
+        (psm != GS_PSM_CT32 && psm != GS_PSM_CT16)) {
         return false;
     }
 
@@ -694,7 +710,7 @@ extern "C" bool ps2GsCoreUploadTextureRgba32(Ps2GsTextureHandle handle,
         return false;
     }
 
-    const u32 bytes = gsKit_texture_size((int)width, (int)height, GS_PSM_CT32);
+    const u32 bytes = gsKit_texture_size((int)width, (int)height, psm);
 
     if (slot->resident && !ps2GsCoreEnsureRetireCapacity()) {
         sysLogPrintf(LOG_ERROR,
@@ -748,10 +764,10 @@ extern "C" bool ps2GsCoreUploadTextureRgba32(Ps2GsTextureHandle handle,
     memset(&candidate, 0, sizeof(candidate));
     candidate.Width = width;
     candidate.Height = height;
-    candidate.PSM = GS_PSM_CT32;
+    candidate.PSM = psm;
     candidate.Filter = slot->texture.Filter;
     candidate.Vram = new_vram;
-    candidate.Mem = (u32 *)(uintptr_t)rgba32;
+    candidate.Mem = (u32 *)(uintptr_t)source;
     const bool submitted = ps2GsNativeQueueUploadTexture(s_gs, &candidate);
     candidate.Mem = NULL;
 
@@ -779,6 +795,20 @@ extern "C" bool ps2GsCoreUploadTextureRgba32(Ps2GsTextureHandle handle,
     slot->uploaded = true;
     slot->vram_bytes = bytes;
     return true;
+}
+
+extern "C" bool ps2GsCoreUploadTextureRgba32(Ps2GsTextureHandle handle,
+    const uint8_t *rgba32, uint32_t width, uint32_t height)
+{
+    return ps2GsCoreUploadTexture(
+        handle, rgba32, width, height, GS_PSM_CT32);
+}
+
+extern "C" bool ps2GsCoreUploadTextureN64Rgba16(Ps2GsTextureHandle handle,
+    const uint8_t *rgba5551_be, uint32_t width, uint32_t height)
+{
+    return ps2GsCoreUploadTexture(
+        handle, rgba5551_be, width, height, GS_PSM_CT16);
 }
 
 extern "C" void ps2GsCoreSetTextureFilter(Ps2GsTextureHandle handle, bool linear_filter)

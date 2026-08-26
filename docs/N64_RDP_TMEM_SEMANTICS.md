@@ -245,16 +245,18 @@ Do not promote Stage D without targeted tests because a superficially plausible 
 
 The PS2 texture importer/cache uses logical views decoded from authoritative TMEM whenever the live model proves the requested range exact. Remaining fallbacks are deliberately counted and must be removed format by format rather than silently promoted.
 
-### Stage F: PS2-native formats
+### Stage F: PS2-native formats - RGBA16 active
 
-Only after the frontend is correct, translate logical N64 texture state into the best GS representation:
+After the frontend proves a logical view exact, translate N64 texture state into the best GS representation:
 
 ```text
 CI4/CI8 -> indexed GS formats + CLUT where semantics fit
-RGBA16  -> 16-bit GS representation where appropriate
+RGBA16  -> PSMCT16 active, direct N64 RGBA5551 to GS A1B5G5R5 conversion
 other formats -> measured conversion path
 large streamed imagery -> IPU experiment candidate, not default
 ```
+
+RGBA32 remains the authoritative compatibility fallback for all formats not yet promoted. CI4/CI8 must not become native until their CLUT storage mode, palette lifetime and upload ordering are explicit.
 
 ## 11. Instrumentation required before optimization
 

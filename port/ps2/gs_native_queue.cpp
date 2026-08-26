@@ -7,6 +7,7 @@
 #include <kernel.h>
 
 #include "gs_native_queue.h"
+#include "gs_texture_convert.h"
 #include "log_ps2.h"
 #include "system.h"
 
@@ -283,9 +284,9 @@ extern "C" bool ps2GsNativeQueueUploadTexture(GSGLOBAL *gs, GSTEXTURE *texture)
         return false;
     }
 
-    if (texture->PSM != GS_PSM_CT32) {
+    if (texture->PSM != GS_PSM_CT32 && texture->PSM != GS_PSM_CT16) {
         sysLogPrintf(LOG_ERROR,
-            "GS native queue: IMAGE uploader only supports CT32, psm=0x%x",
+            "GS native queue: IMAGE uploader only supports CT32/CT16, psm=0x%x",
             texture->PSM);
         return false;
     }
@@ -296,7 +297,10 @@ extern "C" bool ps2GsNativeQueueUploadTexture(GSGLOBAL *gs, GSTEXTURE *texture)
         return false;
     }
 
-    const uint32_t source_bytes = texture->Width * texture->Height * 4u;
+    const uint32_t bytes_per_texel =
+        texture->PSM == GS_PSM_CT16 ? 2u : 4u;
+    const uint32_t source_bytes =
+        texture->Width * texture->Height * bytes_per_texel;
     const uint32_t payload_bytes = (source_bytes + 15u) & ~15u;
     const uint32_t payload_qw = payload_bytes / 16u;
     if (payload_bytes == 0 || payload_bytes > PS2_GS_UPLOAD_MAX_BYTES) {
@@ -316,7 +320,16 @@ extern "C" bool ps2GsNativeQueueUploadTexture(GSGLOBAL *gs, GSTEXTURE *texture)
      * referenced by DMA: every later GIF submission waits for the immediately
      * preceding one, so a slot reused two uploads later is already consumer-free.
      */
-    memcpy(slot->payload, texture->Mem, source_bytes);
+    if (texture->PSM == GS_PSM_CT16) {
+        /* CT16 input is the authoritative N64 big-endian RGBA5551 view. */
+        if (!ps2GsConvertN64Rgba16ToGsCt16(
+                (const uint8_t *)texture->Mem, slot->payload,
+                texture->Width * texture->Height)) {
+            return false;
+        }
+    } else {
+        memcpy(slot->payload, texture->Mem, source_bytes);
+    }
     if (payload_bytes > source_bytes) {
         memset(slot->payload + source_bytes, 0, payload_bytes - source_bytes);
     }

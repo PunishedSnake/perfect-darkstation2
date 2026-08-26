@@ -27,7 +27,7 @@ def patch(source: str) -> str:
     source = replace_once(
         source,
         '#include "gfx_screen_config.h"\n',
-        '#include "gfx_screen_config.h"\n#include "rdp_tmem_live.h"\n',
+        '#include "gfx_screen_config.h"\n#include "gfx_ps2.h"\n#include "rdp_tmem_live.h"\n',
         "include",
     )
 
@@ -143,6 +143,21 @@ def patch(source: str) -> str:
         "    }\n\n"
         "    if (fmt == G_IM_FMT_RGBA) {\n",
         "authoritative TMEM importer view",
+    )
+
+    source = replace_once(
+        source,
+        "        texture_to_import = &tmem_loaded_texture;\n"
+        "    }\n\n"
+        "    if (fmt == G_IM_FMT_RGBA) {\n",
+        "        texture_to_import = &tmem_loaded_texture;\n"
+        "    }\n\n"
+        "    if (tmem_view_exact && gfxPs2UploadTmemTexture(\n"
+        "            &tmem_view, fmt, siz, rdp.tex_lod)) {\n"
+        "        return;\n"
+        "    }\n\n"
+        "    if (fmt == G_IM_FMT_RGBA) {\n",
+        "native PS2 TMEM texture upload",
     )
 
     for importer in (

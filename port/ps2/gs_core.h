@@ -88,20 +88,16 @@ void ps2GsCoreSetTextureAlpha(bool enable);
 void ps2GsCoreSetTextureClamp(uint32_t cms, uint32_t cmt);
 
 /*
- * Texture residency baseline.
- *
- * Handles are logical GS resources. The current implementation still uses
- * gsKit's monotonic VRAM allocation metadata, but pixel transport is submitted
- * through the project-owned asynchronous GIF IMAGE path. VRAM allocation and
- * successful upload are separate states, and upload failure is propagated to
- * the caller. The allocator/metadata dependency is transitional and may later
- * be replaced by an explicit residency cache without changing this public API.
+ * Texture residency. Handles are logical GS resources backed by the native
+ * reclaimable VRAM pool. Allocation, upload and retirement are transactional.
  */
 Ps2GsTextureHandle ps2GsCoreCreateTexture(void);
 bool ps2GsCoreTextureExists(Ps2GsTextureHandle handle);
 bool ps2GsCoreTextureReady(Ps2GsTextureHandle handle);
 bool ps2GsCoreUploadTextureRgba32(Ps2GsTextureHandle handle,
     const uint8_t *rgba32, uint32_t width, uint32_t height);
+bool ps2GsCoreUploadTextureN64Rgba16(Ps2GsTextureHandle handle,
+    const uint8_t *rgba5551_be, uint32_t width, uint32_t height);
 void ps2GsCoreSetTextureFilter(Ps2GsTextureHandle handle, bool linear_filter);
 void ps2GsCoreReleaseTexture(Ps2GsTextureHandle handle);
 
