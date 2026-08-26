@@ -20,6 +20,7 @@
 
 struct Ps2GsTextureSlot {
     bool used;
+    bool allocated;
     bool uploaded;
     GSTEXTURE texture;
 };
@@ -581,17 +582,17 @@ extern "C" bool ps2GsCoreUploadTextureRgba32(Ps2GsTextureHandle handle,
 
     /*
      * CURRENT IMPLEMENTATION: gsKit's VRAM allocator is monotonic. Preserve the
-     * existing correctness rule and reject resizing an already resident handle
+     * existing correctness rule and reject resizing an already allocated handle
      * rather than leak another allocation behind the caller's back.
      */
-    if (slot->uploaded && (tex->Width != width || tex->Height != height)) {
+    if (slot->allocated && (tex->Width != width || tex->Height != height)) {
         sysLogPrintf(LOG_WARNING,
             "GS core: texture resize rejected id=%u old=%ux%u new=%ux%u",
             (unsigned int)handle, tex->Width, tex->Height, width, height);
         return false;
     }
 
-    if (!slot->uploaded) {
+    if (!slot->allocated) {
         memset(tex, 0, sizeof(*tex));
         tex->Width = width;
         tex->Height = height;
@@ -604,17 +605,28 @@ extern "C" bool ps2GsCoreUploadTextureRgba32(Ps2GsTextureHandle handle,
                 (unsigned int)handle, bytes);
             return false;
         }
-        slot->uploaded = true;
+        slot->allocated = true;
     }
 
     /*
-     * CURRENT IMPLEMENTATION: texture transport is the last synchronous gsKit
-     * datapath retained by the active renderer. It lives outside frame command
-     * building and will be replaced by native IMAGE-mode upload batching next.
+     * CURRENT IMPLEMENTATION: pixel transport is project-owned GIF IMAGE DMA.
+     * GSTEXTURE remains temporary metadata for gsKit's bootstrap-era VRAM/TBW
+     * helpers, but no gsKit texture submit/wait path is used here.
      */
     tex->Mem = (u32 *)(uintptr_t)rgba32;
-    gsKit_texture_upload(s_gs, tex);
+    const bool submitted = ps2GsNativeQueueUploadTexture(s_gs, tex);
     tex->Mem = NULL;
+
+    if (!submitted) {
+        slot->uploaded = false;
+        sysLogPrintf(LOG_ERROR,
+            "GS core: native texture upload failed id=%u size=%u (%ux%u)",
+            (unsigned int)handle, bytes, width, height);
+        ps2LogCheckpoint();
+        return false;
+    }
+
+    slot->uploaded = true;
     return true;
 }
 
