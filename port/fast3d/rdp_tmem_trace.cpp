@@ -238,6 +238,7 @@ static void gfxRdpTmemTraceLoadTile(const Gfx *cmd)
     const uint8_t *source = s_trace.image.addr + start_offset;
 
     if (tile->fmt == G_IM_FMT_RGBA &&
+        s_trace.image.fmt == G_IM_FMT_RGBA &&
         s_trace.image.siz == G_IM_SIZ_32b &&
         tile->siz == G_IM_SIZ_32b) {
         if (gfxRdpTmemLoadTileRgba32(&s_trace.tmem,
@@ -301,14 +302,23 @@ static void gfxRdpTmemTraceLoadBlock(const Gfx *cmd)
         return;
     }
 
-    /*
-     * RGBA32 and YUV need split-bank formatting during LoadBlock. The exact
-     * row/tmem-index interaction is intentionally not guessed here; invalidate
-     * conservatively until the dedicated loader is verified against Nintendo's
-     * layout plus real-N64 behavior.
-     */
-    if ((tile->fmt == G_IM_FMT_RGBA && s_trace.image.siz == G_IM_SIZ_32b) ||
-        tile->fmt == G_IM_FMT_YUV || s_trace.image.fmt == G_IM_FMT_YUV) {
+    if (tile->fmt == G_IM_FMT_RGBA &&
+        s_trace.image.fmt == G_IM_FMT_RGBA &&
+        tile->siz == G_IM_SIZ_32b &&
+        s_trace.image.siz == G_IM_SIZ_32b) {
+        if (gfxRdpTmemLoadBlockRgba32(&s_trace.tmem,
+                tile->tmem_word, tile->line_words,
+                s_trace.image.addr, lrs + 1u, dxt)) {
+            ++s_trace.stats.load_block_exact;
+            return;
+        }
+
+        ++s_trace.stats.load_block_conservative;
+        gfxRdpTmemTraceInvalidateAll();
+        return;
+    }
+
+    if (tile->fmt == G_IM_FMT_YUV || s_trace.image.fmt == G_IM_FMT_YUV) {
         ++s_trace.stats.load_block_conservative;
         gfxRdpTmemTraceInvalidateAll();
         return;
