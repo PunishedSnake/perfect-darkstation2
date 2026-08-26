@@ -1,4 +1,5 @@
 #include "rdp_tmem.h"
+#include "rdp_tmem_runtime.h"
 
 #include <assert.h>
 #include <stdint.h>
@@ -36,7 +37,6 @@ static void test_linear_tile_roundtrip_and_padding(void)
         decoded, 13u, 13u, 2u));
     assert(memcmp(source, decoded, sizeof(source)) == 0);
 
-    /* Even row: second word contains bytes 8..12; bytes 13..15 are padding. */
     const uint32_t even_partial = 9u * 8u;
     for (uint32_t i = 0; i < 5u; ++i) {
         assert(gfxRdpTmemByteValid(&tmem, even_partial + i));
@@ -46,7 +46,6 @@ static void test_linear_tile_roundtrip_and_padding(void)
     }
     assert(!gfxRdpTmemWordValid(&tmem, 9u));
 
-    /* Odd row maps five source bytes with XOR 4: 4,5,6,7,0. */
     const uint32_t odd_partial = 11u * 8u;
     assert(gfxRdpTmemByteValid(&tmem, odd_partial + 0u));
     for (uint32_t i = 1u; i < 4u; ++i) {
@@ -65,7 +64,6 @@ static void test_loadblock_dxt(void)
         source[i] = (uint8_t)i;
     }
 
-    /* dxt=0x400 gives two 64-bit words per logical row: 0,0,1,1. */
     assert(gfxRdpTmemLoadBlockLinear(&tmem, 0u, source, sizeof(source), 0x400u));
     const uint8_t *bytes = gfxRdpTmemBytes(&tmem);
     assert(memcmp(bytes + 0u, source + 0u, 8u) == 0);
@@ -92,14 +90,13 @@ static void test_rgba32_figure_14_15_layout(void)
         for (uint32_t x = 0; x < 6u; ++x) {
             const uint32_t texel = row * 6u + x;
             uint8_t *p = source + texel * 4u;
-            p[0] = (uint8_t)(0x10u + texel); /* R */
-            p[1] = (uint8_t)(0x30u + texel); /* G */
-            p[2] = (uint8_t)(0x50u + texel); /* B */
-            p[3] = (uint8_t)(0x70u + texel); /* A */
+            p[0] = (uint8_t)(0x10u + texel);
+            p[1] = (uint8_t)(0x30u + texel);
+            p[2] = (uint8_t)(0x50u + texel);
+            p[3] = (uint8_t)(0x70u + texel);
         }
     }
 
-    /* Six RGBA32 texels use two 64-bit words per TMEM half. */
     assert(gfxRdpTmemLoadTileRgba32(&tmem, 0u, 2u,
         source, 24u, 6u, 2u));
     assert(gfxRdpTmemReadTileRgba32(&tmem, 0u, 2u,
@@ -107,27 +104,22 @@ static void test_rgba32_figure_14_15_layout(void)
     assert(memcmp(source, decoded, sizeof(source)) == 0);
 
     const uint8_t *bytes = gfxRdpTmemBytes(&tmem);
-
-    /* T=0 low half: r0g r1g r2g r3g. */
     const uint8_t row0_low0[] = {
         0x10, 0x30, 0x11, 0x31, 0x12, 0x32, 0x13, 0x33
     };
     assert(memcmp(bytes, row0_low0, sizeof(row0_low0)) == 0);
 
-    /* T=1 first low word: r2g r3g r0g r1g for that row. */
     const uint8_t row1_low0[] = {
         0x18, 0x38, 0x19, 0x39, 0x16, 0x36, 0x17, 0x37
     };
     assert(memcmp(bytes + 2u * 8u, row1_low0, sizeof(row1_low0)) == 0);
 
-    /* Matching high-half word carries B/A, not interleaved RGBA. */
     const uint8_t row0_high0[] = {
         0x50, 0x70, 0x51, 0x71, 0x52, 0x72, 0x53, 0x73
     };
     assert(memcmp(bytes + GFX_RDP_TMEM_HALF_WORDS * 8u,
         row0_high0, sizeof(row0_high0)) == 0);
 
-    /* Partial second word keeps only texels 4 and 5 authoritative. */
     assert(!gfxRdpTmemWordValid(&tmem, 1u));
     assert(!gfxRdpTmemWordValid(&tmem, GFX_RDP_TMEM_HALF_WORDS + 1u));
     assert(gfxRdpTmemByteValid(&tmem, 1u * 8u + 0u));
@@ -149,10 +141,6 @@ static void test_rgba32_loadblock_dxt_roundtrip(void)
         p[3] = (uint8_t)(0x70u + texel);
     }
 
-    /*
-     * Four RGBA32 texels are two 64-bit source words per row, hence dxt=0x400.
-     * The load tile normally has line=0; the later render tile uses line=1.
-     */
     assert(gfxRdpTmemLoadBlockRgba32(&tmem, 0u, 0u,
         source, 8u, 0x400u));
     assert(gfxRdpTmemReadTileRgba32(&tmem, 0u, 1u,
@@ -176,7 +164,6 @@ static void test_rgba32_loadblock_odd_texel_validity(void)
     assert(gfxRdpTmemLoadBlockRgba32(&tmem, 0u, 0u,
         source, 5u, 0u));
 
-    /* The fifth texel is known; its unseen partner in that source word is not. */
     assert(gfxRdpTmemByteValid(&tmem, 8u));
     assert(gfxRdpTmemByteValid(&tmem, 9u));
     assert(!gfxRdpTmemByteValid(&tmem, 10u));
@@ -185,6 +172,60 @@ static void test_rgba32_loadblock_odd_texel_validity(void)
         GFX_RDP_TMEM_BYTES / 2u + 8u));
     assert(!gfxRdpTmemByteValid(&tmem,
         GFX_RDP_TMEM_BYTES / 2u + 10u));
+}
+
+static void test_ordered_runtime_rgba32_block(void)
+{
+    enum : uint8_t {
+        FMT_RGBA = 0u,
+        SIZ_32B = 3u,
+    };
+
+    GfxRdpTmemRuntime runtime{};
+    uint8_t source[8u * 4u];
+    uint8_t decoded[sizeof(source)]{};
+    for (uint32_t texel = 0; texel < 8u; ++texel) {
+        source[texel * 4u + 0u] = (uint8_t)(0x10u + texel);
+        source[texel * 4u + 1u] = (uint8_t)(0x20u + texel);
+        source[texel * 4u + 2u] = (uint8_t)(0x30u + texel);
+        source[texel * 4u + 3u] = (uint8_t)(0x40u + texel);
+    }
+
+    gfxRdpTmemRuntimeReset(&runtime);
+    gfxRdpTmemRuntimeSetTextureImage(&runtime,
+        FMT_RGBA, SIZ_32B, 3u, source);
+    assert(gfxRdpTmemRuntimeSetTile(&runtime,
+        7u, FMT_RGBA, SIZ_32B, 0u, 0u));
+    assert(gfxRdpTmemRuntimeLoadBlock(&runtime,
+        7u, 0u, 0u, 7u, 0x400u) == GFX_RDP_TMEM_LOAD_EXACT);
+
+    assert(gfxRdpTmemReadTileRgba32(gfxRdpTmemRuntimeState(&runtime),
+        0u, 1u, decoded, 16u, 4u, 2u));
+    assert(memcmp(source, decoded, sizeof(source)) == 0);
+}
+
+static void test_ordered_runtime_yuv_is_conservative(void)
+{
+    enum : uint8_t {
+        FMT_YUV = 1u,
+        SIZ_16B = 2u,
+    };
+
+    GfxRdpTmemRuntime runtime{};
+    const uint8_t seed[8] = {1,2,3,4,5,6,7,8};
+    const uint8_t source[16] = {};
+
+    gfxRdpTmemRuntimeReset(&runtime);
+    assert(gfxRdpTmemWritePhysical(&runtime.tmem, 0u, seed, sizeof(seed)));
+    assert(gfxRdpTmemByteValid(&runtime.tmem, 0u));
+
+    gfxRdpTmemRuntimeSetTextureImage(&runtime,
+        FMT_YUV, SIZ_16B, 3u, source);
+    assert(gfxRdpTmemRuntimeSetTile(&runtime,
+        7u, FMT_YUV, SIZ_16B, 1u, 0u));
+    assert(gfxRdpTmemRuntimeLoadTile(&runtime,
+        7u, 0u, 0u, 12u, 0u) == GFX_RDP_TMEM_LOAD_CONSERVATIVE);
+    assert(!gfxRdpTmemByteValid(&runtime.tmem, 0u));
 }
 
 static void test_invalidation_blocks_readback(void)
@@ -210,6 +251,8 @@ int main(void)
     test_rgba32_figure_14_15_layout();
     test_rgba32_loadblock_dxt_roundtrip();
     test_rgba32_loadblock_odd_texel_validity();
+    test_ordered_runtime_rgba32_block();
+    test_ordered_runtime_yuv_is_conservative();
     test_invalidation_blocks_readback();
     puts("rdp_tmem tests passed");
     return 0;
