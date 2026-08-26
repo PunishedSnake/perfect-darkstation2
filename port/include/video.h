@@ -11,6 +11,13 @@
 #define VIDEO_MAX_FPS 240
 #endif
 
+enum videoaspectmode {
+	VIDEO_ASPECT_AUTO = 0,
+	VIDEO_ASPECT_4_3,
+	VIDEO_ASPECT_16_9,
+	VIDEO_ASPECT_COUNT,
+};
+
 typedef struct {
 	s32 width;
 	s32 height;
@@ -31,6 +38,7 @@ s32 videoGetNativeHeight(void);
 s32 videoGetWidth(void);
 s32 videoGetHeight(void);
 f32 videoGetAspect(void);
+s32 videoGetAspectMode(void);
 s32 videoGetFullscreen(void);
 s32 videoGetFullscreenMode(void);
 s32 videoGetMaximizeWindow(void);
@@ -57,6 +65,7 @@ f32 videoGetAverageFPS(void);
 void videoSetWindowOffset(s32 x, s32 y);
 void videoSetFullscreen(s32 fs);
 void videoSetFullscreenMode(s32 mode);
+void videoSetAspectMode(s32 mode);
 void videoSetTextureFilter(u32 filter);
 void videoSetTextureFilter2D(s32 filter);
 void videoSetAnisotropicFilter(u32 filter);
