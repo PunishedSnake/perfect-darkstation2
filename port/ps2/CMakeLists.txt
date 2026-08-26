@@ -127,14 +127,32 @@ endforeach()
 
 add_custom_target(pd_ps2_asset_headers DEPENDS ${PD_PS2_GENERATED_HEADERS})
 
-# Keep the shared Fast3D source intact. On PS2 only, rename two exported
-# entrypoints so tiny platform wrappers can add PS2-specific frame/aspect state
-# and observe texture-load commands into the backend-independent TMEM shadow
-# before the unchanged compatibility translator consumes the display list.
+# Keep shared Fast3D byte-for-byte intact. The PS2 bootstrap generates a narrow
+# frontend copy with ordered live-TMEM hooks at the existing gfx_dp_* execution
+# points. Exact-match replacement makes upstream drift a build error instead of
+# silently compiling a partially instrumented texture path.
+set(PD_PS2_FAST3D_LIVE_CPP
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/gfx_pc_ps2_live.cpp"
+)
+add_custom_command(
+  OUTPUT "${PD_PS2_FAST3D_LIVE_CPP}"
+  COMMAND "${PD_PS2_PYTHON3}"
+    "${CMAKE_CURRENT_LIST_DIR}/patch_fast3d_tmem_live.py"
+    "${PD_ROOT}/port/fast3d/gfx_pc.cpp"
+    "${PD_PS2_FAST3D_LIVE_CPP}"
+  DEPENDS
+    "${PD_ROOT}/port/fast3d/gfx_pc.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/patch_fast3d_tmem_live.py"
+  WORKING_DIRECTORY "${PD_ROOT}"
+  COMMENT "Generating PS2 Fast3D frontend with ordered live TMEM hooks"
+  VERBATIM
+)
 set_source_files_properties(
-  "${PD_ROOT}/port/fast3d/gfx_pc.cpp"
-  PROPERTIES COMPILE_DEFINITIONS
-    "gfx_start_frame=gfx_start_frame_ps2_impl;gfx_run=gfx_run_ps2_impl"
+  "${PD_PS2_FAST3D_LIVE_CPP}"
+  PROPERTIES
+    GENERATED TRUE
+    COMPILE_DEFINITIONS
+      "gfx_start_frame=gfx_start_frame_ps2_impl;gfx_run=gfx_run_ps2_impl"
 )
 
 add_executable(pd_ps2_bootstrap
@@ -153,7 +171,7 @@ add_executable(pd_ps2_bootstrap
   rom_probe.c
   "${PD_ROOT}/port/src/romsource.c"
   "${PD_ROOT}/port/fast3d/gfx_cc.cpp"
-  "${PD_ROOT}/port/fast3d/gfx_pc.cpp"
+  "${PD_PS2_FAST3D_LIVE_CPP}"
   "${PD_ROOT}/port/fast3d/rdp_tmem.cpp"
   "${PD_ROOT}/port/fast3d/rdp_tmem_runtime.cpp"
   "${PD_ROOT}/port/fast3d/rdp_tmem_live.cpp"
