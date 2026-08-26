@@ -36,6 +36,15 @@ static void set_tex01_lerp(struct CombinerBuilder *builder, uint8_t cycle,
     builder->c[cycle][channel][3] = SHADER_TEXEL0;
 }
 
+static void set_input1_tex0_lerp(struct CombinerBuilder *builder,
+    uint8_t cycle, uint8_t channel)
+{
+    builder->c[cycle][channel][0] = SHADER_TEXEL0;
+    builder->c[cycle][channel][1] = SHADER_INPUT_1;
+    builder->c[cycle][channel][2] = SHADER_INPUT_2;
+    builder->c[cycle][channel][3] = SHADER_INPUT_1;
+}
+
 static struct CCFeatures decode(const struct CombinerBuilder *builder)
 {
     uint64_t shader_id0 = 0;
@@ -201,6 +210,49 @@ static void test_alpha_trilerp_remains_unsupported(void)
     assert(!result.supported);
 }
 
+static void test_opaque_env_tex0_lerp_modulate(void)
+{
+    struct CombinerBuilder builder{};
+    builder.options = SHADER_OPT_2CYC | SHADER_OPT_FOG;
+    set_input1_tex0_lerp(&builder, 0, 0);
+    set_multiply(&builder, 1, 0, SHADER_COMBINED, SHADER_INPUT_3);
+
+    const struct Ps2CombinerPlan result = plan(&builder);
+    assert(result.supported);
+    assert(result.color_recipe ==
+        PS2_COLOR_INPUT1_TEX0_LERP_INPUT2_MUL_INPUT3);
+    assert(result.alpha_recipe == PS2_ALPHA_OPAQUE);
+    assert(result.textured);
+    assert(!result.texture_alpha);
+}
+
+static void test_opaque_env_tex0_lerp_pass2(void)
+{
+    struct CombinerBuilder builder{};
+    builder.options = SHADER_OPT_2CYC;
+    set_input1_tex0_lerp(&builder, 0, 0);
+    set_single(&builder, 1, 0, SHADER_COMBINED);
+
+    const struct Ps2CombinerPlan result = plan(&builder);
+    assert(result.supported);
+    assert(result.color_recipe ==
+        PS2_COLOR_INPUT1_TEX0_LERP_INPUT2);
+    assert(result.alpha_recipe == PS2_ALPHA_OPAQUE);
+}
+
+static void test_alpha_env_tex0_lerp_remains_unsupported(void)
+{
+    struct CombinerBuilder builder{};
+    builder.options = SHADER_OPT_2CYC | SHADER_OPT_ALPHA;
+    set_input1_tex0_lerp(&builder, 0, 0);
+    set_multiply(&builder, 1, 0, SHADER_COMBINED, SHADER_INPUT_3);
+    set_single(&builder, 0, 1, SHADER_INPUT_1);
+    set_single(&builder, 1, 1, SHADER_COMBINED);
+
+    const struct Ps2CombinerPlan result = plan(&builder);
+    assert(!result.supported);
+}
+
 static void test_opaque_output_ignores_alpha_dependency(void)
 {
     struct CombinerBuilder builder{};
@@ -240,6 +292,9 @@ int main(void)
     test_opaque_trilerp_pass2();
     test_opaque_trilerp_modulate();
     test_alpha_trilerp_remains_unsupported();
+    test_opaque_env_tex0_lerp_modulate();
+    test_opaque_env_tex0_lerp_pass2();
+    test_alpha_env_tex0_lerp_remains_unsupported();
     test_opaque_output_ignores_alpha_dependency();
     test_rejects_unmapped_state_and_alpha_only_texture();
     puts("gfx_ps2_combiner tests passed");

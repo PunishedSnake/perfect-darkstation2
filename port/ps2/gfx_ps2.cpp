@@ -33,6 +33,8 @@
  *   - TEXEL0 * INPUT1
  *   - lerp(TEXEL0, TEXEL1, INPUT1), optionally multiplied by INPUT2,
  *     reconstructed as two ordered GS passes for opaque output
+ *   - lerp(INPUT1, TEXEL0, INPUT2), optionally multiplied by INPUT3,
+ *     reconstructed as a solid base plus textured GS pass for opaque output
  *
  * Current exact alpha recipes:
  *   - opaque/one/zero
@@ -555,6 +557,13 @@ static bool ps2_color_recipe_is_opaque_trilerp(enum Ps2ColorRecipe recipe)
            recipe == PS2_COLOR_TEX01_LERP_INPUT1_MUL_INPUT2;
 }
 
+static bool ps2_color_recipe_is_opaque_input1_tex0_lerp(
+    enum Ps2ColorRecipe recipe)
+{
+    return recipe == PS2_COLOR_INPUT1_TEX0_LERP_INPUT2 ||
+           recipe == PS2_COLOR_INPUT1_TEX0_LERP_INPUT2_MUL_INPUT3;
+}
+
 static void ps2_trilerp_set_base_state(void)
 {
     ps2GsCoreSetDepthMode(s_depth_test, s_depth_update, s_depth_compare);
@@ -579,6 +588,23 @@ static void ps2_trilerp_restore_state(void)
     ps2GsCoreSetAlphaWrite(true);
     ps2GsCoreSetAlphaBlend(s_alpha_blend);
     ps2GsCoreSetDepthMode(s_depth_test, s_depth_update, s_depth_compare);
+    ps2GsCoreSetTextureClamp(s_sampler_cms[0], s_sampler_cmt[0]);
+}
+
+static void ps2_input1_tex0_lerp_set_base_state(void)
+{
+    ps2GsCoreSetDepthMode(s_depth_test, s_depth_update, s_depth_compare);
+    ps2GsCoreSetAlphaBlend(false);
+    ps2GsCoreSetAlphaWrite(true);
+    ps2GsCoreSetTextureAlpha(false);
+}
+
+static void ps2_input1_tex0_lerp_set_texture_state(void)
+{
+    ps2GsCoreSetDepthMode(s_depth_test, false, s_depth_compare);
+    ps2GsCoreSetAlphaBlend(true);
+    ps2GsCoreSetAlphaWrite(false);
+    ps2GsCoreSetTextureAlpha(false);
     ps2GsCoreSetTextureClamp(s_sampler_cms[0], s_sampler_cmt[0]);
 }
 
@@ -612,6 +638,28 @@ static void ps2_draw_opaque_trilerp(uint32_t vertex_count)
     ps2_trilerp_restore_state();
 }
 
+static void ps2_draw_opaque_input1_tex0_lerp(uint32_t vertex_count)
+{
+    const bool batch_safe = s_depth_test && s_depth_compare && s_depth_update;
+    if (batch_safe) {
+        ps2_input1_tex0_lerp_set_base_state();
+        ps2GsCoreDrawColorTriangles(s_color_vertices, vertex_count);
+        ps2_input1_tex0_lerp_set_texture_state();
+        ps2GsCoreDrawTexturedTriangles(
+            s_selected_texture[0], s_stq_vertices[0], vertex_count);
+    } else {
+        for (uint32_t vertex = 0; vertex < vertex_count; vertex += 3u) {
+            ps2_input1_tex0_lerp_set_base_state();
+            ps2GsCoreDrawColorTriangles(&s_color_vertices[vertex], 3u);
+            ps2_input1_tex0_lerp_set_texture_state();
+            ps2GsCoreDrawTexturedTriangles(
+                s_selected_texture[0], &s_stq_vertices[0][vertex], 3u);
+        }
+    }
+
+    ps2_trilerp_restore_state();
+}
+
 static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_vbo_num_tris)
 {
     if (!ps2GsCoreIsReady() || !s_shader || !buf_vbo || buf_vbo_num_tris == 0) {
@@ -638,6 +686,9 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
 
     const bool opaque_trilerp =
         ps2_color_recipe_is_opaque_trilerp(s_shader->plan.color_recipe);
+    const bool opaque_input1_tex0_lerp =
+        ps2_color_recipe_is_opaque_input1_tex0_lerp(
+            s_shader->plan.color_recipe);
     if (s_shader->plan.textured &&
         (!ps2GsCoreTextureReady(s_selected_texture[0]) ||
          (opaque_trilerp && !ps2GsCoreTextureReady(s_selected_texture[1])))) {
@@ -697,13 +748,14 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
 
             if (s_shader->features.opt_grayscale) pos += 4;
 
-            float input[2][4] = {
+            float input[3][4] = {
+                { 1.0f, 1.0f, 1.0f, 1.0f },
                 { 1.0f, 1.0f, 1.0f, 1.0f },
                 { 1.0f, 1.0f, 1.0f, 1.0f },
             };
             int parsed_inputs = s_shader->features.num_inputs;
-            if (parsed_inputs > 2) {
-                parsed_inputs = 2;
+            if (parsed_inputs > 3) {
+                parsed_inputs = 3;
             }
             for (int input_index = 0; input_index < parsed_inputs; ++input_index) {
                 input[input_index][0] = src[pos++];
@@ -791,6 +843,29 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
                 s_stq_vertices[1][i].st =
                     ps2_pack_st(tex_u[1] * inv_w, tex_v[1] * inv_w);
                 s_stq_vertices[1][i].xyz2 = packed_position;
+            } else if (opaque_input1_tex0_lerp) {
+                const bool modulate = s_shader->plan.color_recipe ==
+                    PS2_COLOR_INPUT1_TEX0_LERP_INPUT2_MUL_INPUT3;
+                const float shade_r = modulate ? input[2][0] : 1.0f;
+                const float shade_g = modulate ? input[2][1] : 1.0f;
+                const float shade_b = modulate ? input[2][2] : 1.0f;
+                const uint8_t lerp = ps2_modulate_component(input[1][0]);
+
+                s_color_vertices[i].rgbaq = ps2_pack_rgbaq(
+                    ps2_u8_component(input[0][0] * shade_r),
+                    ps2_u8_component(input[0][1] * shade_g),
+                    ps2_u8_component(input[0][2] * shade_b),
+                    0x80, 0.0f);
+                s_color_vertices[i].xyz2 = packed_position;
+
+                s_stq_vertices[0][i].rgbaq = ps2_pack_rgbaq(
+                    ps2_modulate_component(shade_r),
+                    ps2_modulate_component(shade_g),
+                    ps2_modulate_component(shade_b),
+                    lerp, inv_w);
+                s_stq_vertices[0][i].st =
+                    ps2_pack_st(tex_u[0] * inv_w, tex_v[0] * inv_w);
+                s_stq_vertices[0][i].xyz2 = packed_position;
             } else if (s_shader->plan.textured) {
                 s_stq_vertices[0][i].rgbaq =
                     ps2_pack_rgbaq(cr, cg, cb, ca, inv_w);
@@ -805,6 +880,8 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
 
         if (opaque_trilerp) {
             ps2_draw_opaque_trilerp((uint32_t)batch_vertices);
+        } else if (opaque_input1_tex0_lerp) {
+            ps2_draw_opaque_input1_tex0_lerp((uint32_t)batch_vertices);
         } else if (s_shader->plan.textured) {
             ps2GsCoreDrawTexturedTriangles(
                 s_selected_texture[0], s_stq_vertices[0],
