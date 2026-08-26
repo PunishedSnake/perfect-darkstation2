@@ -127,12 +127,14 @@ endforeach()
 
 add_custom_target(pd_ps2_asset_headers DEPENDS ${PD_PS2_GENERATED_HEADERS})
 
-# Keep the shared Fast3D source intact. On PS2 only, rename its frame-start
-# entrypoint so a tiny platform wrapper can provide logical display aspect while
-# restoring the real GS raster dimensions before display-list translation.
+# Keep the shared Fast3D source intact. On PS2 only, rename two exported
+# entrypoints so tiny platform wrappers can add PS2-specific frame/aspect state
+# and observe texture-load commands into the backend-independent TMEM shadow
+# before the unchanged compatibility translator consumes the display list.
 set_source_files_properties(
   "${PD_ROOT}/port/fast3d/gfx_pc.cpp"
-  PROPERTIES COMPILE_DEFINITIONS "gfx_start_frame=gfx_start_frame_ps2_impl"
+  PROPERTIES COMPILE_DEFINITIONS
+    "gfx_start_frame=gfx_start_frame_ps2_impl;gfx_run=gfx_run_ps2_impl"
 )
 
 add_executable(pd_ps2_bootstrap
@@ -143,6 +145,7 @@ add_executable(pd_ps2_bootstrap
   gs_native_queue.cpp
   gfx_api_scene.c
   gfx_frame_ps2.c
+  gfx_run_tmem_ps2.cpp
   gfx_ps2.cpp
   gfx_window_ps2.c
   pad_ps2.c
@@ -152,6 +155,7 @@ add_executable(pd_ps2_bootstrap
   "${PD_ROOT}/port/fast3d/gfx_cc.cpp"
   "${PD_ROOT}/port/fast3d/gfx_pc.cpp"
   "${PD_ROOT}/port/fast3d/rdp_tmem.cpp"
+  "${PD_ROOT}/port/fast3d/rdp_tmem_trace.cpp"
 )
 
 target_include_directories(pd_ps2_bootstrap PRIVATE
