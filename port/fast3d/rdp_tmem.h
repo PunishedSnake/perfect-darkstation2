@@ -19,15 +19,15 @@ extern "C" {
  * Loader-specific format/bank/interleave rules belong in this module or in the
  * RDP command implementation, never in an OpenGL/GS texture cache key.
  *
- * `word_valid` is deliberately separate from generation tracking. During the
- * incremental migration a command may be known to mutate a TMEM word before we
- * have implemented its byte-exact layout (notably RGBA32/YUV and loader
- * cases that are not byte-exact yet).
- * Such a word receives a new generation and is marked invalid instead of
- * pretending that stale or zero-filled bytes are authoritative.
+ * Validity is tracked per byte while generations stay per 64-bit word. During
+ * the incremental migration a command may be known to mutate a TMEM word before
+ * every byte of its result is represented exactly (notably RGBA32/YUV and row
+ * padding cases). Known texel bytes remain usable while unknown padding cannot
+ * accidentally become an authoritative cache input.
  */
 struct GfxRdpTmem {
     uint8_t bytes[GFX_RDP_TMEM_BYTES];
+    uint8_t byte_valid[GFX_RDP_TMEM_BYTES];
     uint32_t generation;
     uint32_t word_generation[GFX_RDP_TMEM_WORDS];
     uint8_t word_valid[GFX_RDP_TMEM_WORDS];
@@ -87,10 +87,21 @@ bool gfxRdpTmemLoadBlockLinear(struct GfxRdpTmem *tmem,
     uint32_t first_tmem_word, const uint8_t *source,
     uint32_t size_bytes, uint16_t dxt);
 
+/*
+ * Reconstruct logical non-planar tile rows from physical TMEM. This reverses
+ * the odd-row 32-bit-half interleave used by the matching LoadTile writer and
+ * fails if any requested source byte is not known byte-exact.
+ */
+bool gfxRdpTmemReadTileLinear(const struct GfxRdpTmem *tmem,
+    uint32_t first_tmem_word, uint32_t line_words,
+    uint8_t *dest, uint32_t dest_stride_bytes,
+    uint32_t row_bytes, uint32_t row_count);
+
 const uint8_t *gfxRdpTmemBytes(const struct GfxRdpTmem *tmem);
 uint32_t gfxRdpTmemGeneration(const struct GfxRdpTmem *tmem);
 uint32_t gfxRdpTmemWordGeneration(const struct GfxRdpTmem *tmem,
     uint32_t tmem_word);
+bool gfxRdpTmemByteValid(const struct GfxRdpTmem *tmem, uint32_t byte_offset);
 bool gfxRdpTmemWordValid(const struct GfxRdpTmem *tmem, uint32_t tmem_word);
 
 #ifdef __cplusplus
