@@ -127,6 +127,14 @@ endforeach()
 
 add_custom_target(pd_ps2_asset_headers DEPENDS ${PD_PS2_GENERATED_HEADERS})
 
+# Keep the shared Fast3D source intact. On PS2 only, rename its frame-start
+# entrypoint so a tiny platform wrapper can provide logical display aspect while
+# restoring the real GS raster dimensions before display-list translation.
+set_source_files_properties(
+  "${PD_ROOT}/port/fast3d/gfx_pc.cpp"
+  PROPERTIES COMPILE_DEFINITIONS "gfx_start_frame=gfx_start_frame_ps2_impl"
+)
+
 add_executable(pd_ps2_bootstrap
   bootstrap.c
   system_ps2.c
@@ -134,6 +142,7 @@ add_executable(pd_ps2_bootstrap
   gs_core.cpp
   gs_native_queue.cpp
   gfx_api_scene.c
+  gfx_frame_ps2.c
   gfx_ps2.cpp
   gfx_window_ps2.c
   pad_ps2.c
@@ -186,6 +195,7 @@ add_library(pd_ps2_game_bridge OBJECT
   "${PD_ROOT}/port/src/pdmain.c"
   "${PD_ROOT}/port/src/pdsched.c"
   video_ps2.c
+  gfx_frame_ps2.c
 )
 add_dependencies(pd_ps2_game_bridge pd_ps2_asset_headers)
 
