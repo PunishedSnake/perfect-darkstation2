@@ -183,17 +183,19 @@ set_target_properties(pd_ps2_bootstrap PROPERTIES
   SUFFIX ".elf"
 )
 
-# Compile the first slice of the real game next to the renderer bootstrap.
+# Compile the first slices of the real game next to the renderer bootstrap.
 #
-# This is deliberately an OBJECT target: the first milestone is to expose EE
-# compiler/platform-contract breakage in the actual game entry/scheduler code
-# without hiding it behind hundreds of unresolved desktop audio/input symbols.
-# The bootstrap remains an independent, runnable A/B correctness baseline.
+# This is deliberately an OBJECT target: the migration frontier exposes EE
+# compiler/platform-contract breakage without hiding it behind hundreds of
+# unresolved audio/filesystem/gameplay symbols. VI and RDP are included because
+# they are real producers of the display-list stream consumed by Fast3D->GS.
 add_library(pd_ps2_game_bridge OBJECT
   "${PD_ROOT}/port/src/main.c"
   "${PD_ROOT}/port/src/config.c"
   "${PD_ROOT}/port/src/pdmain.c"
   "${PD_ROOT}/port/src/pdsched.c"
+  "${PD_ROOT}/src/lib/vi.c"
+  "${PD_ROOT}/src/lib/rdp.c"
   video_ps2.c
   gfx_frame_ps2.c
 )
