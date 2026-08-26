@@ -1,5 +1,7 @@
 #include <stdint.h>
 
+#include <PR/gbi.h>
+
 #include "gfx_api.h"
 #include "gfx_window_ps2.h"
 #include "gs_core.h"
