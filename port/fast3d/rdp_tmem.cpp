@@ -84,6 +84,18 @@ static void gfxRdpTmemWriteMappedByte(struct GfxRdpTmem *tmem,
     tmem->byte_valid[dst_byte] = 1u;
 }
 
+static void gfxRdpTmemPreparePartialWord(struct GfxRdpTmem *tmem,
+    uint32_t dst_word, uint32_t copy_bytes)
+{
+    if (copy_bytes >= GFX_RDP_TMEM_WORD_BYTES) {
+        return;
+    }
+
+    const uint32_t dst_byte = dst_word * GFX_RDP_TMEM_WORD_BYTES;
+    memset(&tmem->byte_valid[dst_byte], 0, GFX_RDP_TMEM_WORD_BYTES);
+    tmem->word_valid[dst_word] = 0u;
+}
+
 extern "C" void gfxRdpTmemReset(struct GfxRdpTmem *tmem)
 {
     if (!tmem) {
@@ -203,6 +215,7 @@ extern "C" bool gfxRdpTmemLoadTileLinear(struct GfxRdpTmem *tmem,
             const uint32_t dst_byte = dst_word * GFX_RDP_TMEM_WORD_BYTES;
             const uint8_t *src = src_row + src_offset;
 
+            gfxRdpTmemPreparePartialWord(tmem, dst_word, copy_bytes);
             for (uint32_t i = 0; i < copy_bytes; ++i) {
                 const uint32_t mapped = (row & 1u) ? (i ^ 4u) : i;
                 gfxRdpTmemWriteMappedByte(tmem, dst_byte + mapped, src[i]);
@@ -248,6 +261,7 @@ extern "C" bool gfxRdpTmemLoadBlockLinear(struct GfxRdpTmem *tmem,
         const uint32_t dst_byte = dst_word * GFX_RDP_TMEM_WORD_BYTES;
         const uint8_t *src = source + src_offset;
 
+        gfxRdpTmemPreparePartialWord(tmem, dst_word, copy_bytes);
         for (uint32_t i = 0; i < copy_bytes; ++i) {
             const uint32_t mapped = (dxt != 0u && (line & 1u)) ? (i ^ 4u) : i;
             gfxRdpTmemWriteMappedByte(tmem, dst_byte + mapped, src[i]);
