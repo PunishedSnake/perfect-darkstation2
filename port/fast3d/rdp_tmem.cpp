@@ -213,6 +213,62 @@ extern "C" bool gfxRdpTmemLoadTileLinear(struct GfxRdpTmem *tmem,
     return true;
 }
 
+extern "C" bool gfxRdpTmemLoadBlockLinear(struct GfxRdpTmem *tmem,
+    uint32_t first_tmem_word, const uint8_t *source,
+    uint32_t size_bytes, uint16_t dxt)
+{
+    if (!tmem || (!source && size_bytes != 0u) || dxt > 0x0fffu ||
+        first_tmem_word > GFX_RDP_TMEM_WORDS) {
+        return false;
+    }
+
+    if (size_bytes == 0u) {
+        return true;
+    }
+
+    const uint32_t word_count =
+        (size_bytes + GFX_RDP_TMEM_WORD_BYTES - 1u) / GFX_RDP_TMEM_WORD_BYTES;
+    if (word_count > GFX_RDP_TMEM_WORDS - first_tmem_word) {
+        return false;
+    }
+
+    const uint32_t generation = gfxRdpTmemNextGeneration(tmem);
+    uint32_t t_accum = 0u;
+
+    for (uint32_t word = 0; word < word_count; ++word) {
+        const uint32_t src_offset = word * GFX_RDP_TMEM_WORD_BYTES;
+        uint32_t copy_bytes = size_bytes - src_offset;
+        if (copy_bytes > GFX_RDP_TMEM_WORD_BYTES) {
+            copy_bytes = GFX_RDP_TMEM_WORD_BYTES;
+        }
+
+        const uint32_t line = t_accum >> 11;
+        const uint32_t dst_word = first_tmem_word + word;
+        uint8_t *dst = &tmem->bytes[dst_word * GFX_RDP_TMEM_WORD_BYTES];
+        const uint8_t *src = source + src_offset;
+
+        if ((line & 1u) == 0u || dxt == 0u) {
+            memcpy(dst, src, copy_bytes);
+        } else {
+            const uint32_t low_bytes = copy_bytes > 4u ? 4u : copy_bytes;
+            if (low_bytes != 0u) {
+                memcpy(dst + 4u, src, low_bytes);
+            }
+            if (copy_bytes > 4u) {
+                memcpy(dst, src + 4u, copy_bytes - 4u);
+            }
+        }
+
+        tmem->word_generation[dst_word] = generation;
+        tmem->word_valid[dst_word] =
+            copy_bytes == GFX_RDP_TMEM_WORD_BYTES ? 1u : 0u;
+
+        t_accum += dxt;
+    }
+
+    return true;
+}
+
 extern "C" const uint8_t *gfxRdpTmemBytes(const struct GfxRdpTmem *tmem)
 {
     return tmem ? tmem->bytes : NULL;
