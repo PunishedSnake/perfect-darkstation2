@@ -151,6 +151,7 @@ add_executable(pd_ps2_bootstrap
   "${PD_ROOT}/port/src/romsource.c"
   "${PD_ROOT}/port/fast3d/gfx_cc.cpp"
   "${PD_ROOT}/port/fast3d/gfx_pc.cpp"
+  "${PD_ROOT}/port/fast3d/rdp_tmem.cpp"
 )
 
 target_include_directories(pd_ps2_bootstrap PRIVATE
