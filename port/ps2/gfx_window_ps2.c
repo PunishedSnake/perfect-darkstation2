@@ -17,15 +17,45 @@
  * Whole-system rule: swap_buffers_begin() never waits. Presentation waits only
  * in swap_buffers_end(), after Fast3D has submitted the frame and called its
  * rendering backend finish hook. Device state lives exclusively in gs_core.
+ *
+ * PS2-specific display rule: GS framebuffer width/height are raster dimensions,
+ * not a square-pixel statement about the physical TV aspect. The normal WAPI
+ * surface therefore reports physical GS dimensions. A tightly scoped logical
+ * dimension probe is enabled only while Fast3D computes aspect-dependent state.
  */
 
 static int s_target_fps = 60;
+static float s_display_aspect = 4.0f / 3.0f;
+static bool s_logical_dimensions;
 static void (*s_fullscreen_changed_cb)(bool);
 
 static int ps2_window_refresh_rate(void)
 {
     const int refresh = ps2GsCoreGetRefreshRate();
     return refresh > 0 ? refresh : (s_target_fps > 0 ? s_target_fps : 60);
+}
+
+void gfxPs2WindowSetDisplayAspect(float aspect)
+{
+    /* Reject nonsense without turning a bad config file into divide-by-zero. */
+    if (aspect >= 1.0f && aspect <= 3.0f) {
+        s_display_aspect = aspect;
+    }
+}
+
+float gfxPs2WindowGetDisplayAspect(void)
+{
+    return s_display_aspect;
+}
+
+void gfxPs2WindowBeginLogicalDimensions(void)
+{
+    s_logical_dimensions = true;
+}
+
+void gfxPs2WindowEndLogicalDimensions(void)
+{
+    s_logical_dimensions = false;
 }
 
 static void ps2_window_init(const struct GfxWindowInitSettings *settings)
@@ -47,8 +77,8 @@ static void ps2_window_init(const struct GfxWindowInitSettings *settings)
 
     s_target_fps = ps2_window_refresh_rate();
     sysLogPrintf(LOG_NOTE,
-        "GfxWapiPS2 init: fixed display %dx%d mode=0x%x refresh=%d",
-        width, height, ps2GsCoreGetMode(), s_target_fps);
+        "GfxWapiPS2 init: fixed display %dx%d mode=0x%x refresh=%d aspect=%.4f",
+        width, height, ps2GsCoreGetMode(), s_target_fps, s_display_aspect);
 }
 
 static void ps2_window_close(void)
@@ -147,8 +177,27 @@ static void ps2_set_dimensions(uint32_t width, uint32_t height, int32_t posX, in
 
 static void ps2_get_dimensions(uint32_t *width, uint32_t *height, int32_t *posX, int32_t *posY)
 {
-    if (width) *width = ps2GsCoreIsReady() ? (uint32_t)ps2GsCoreGetWidth() : 0;
-    if (height) *height = ps2GsCoreIsReady() ? (uint32_t)ps2GsCoreGetHeight() : 0;
+    uint32_t out_width = 0;
+    uint32_t out_height = 0;
+
+    if (ps2GsCoreIsReady()) {
+        out_width = (uint32_t)ps2GsCoreGetWidth();
+        out_height = (uint32_t)ps2GsCoreGetHeight();
+
+        if (s_logical_dimensions && out_width > 0 && s_display_aspect > 0.0f) {
+            /*
+             * Keep X resolution stable and derive a square-pixel logical Y.
+             * Fast3D consumes only the resulting aspect during the scoped probe;
+             * the PS2 frame bridge restores physical GS dimensions immediately
+             * afterwards, so raster workload and VRAM footprint do not change.
+             */
+            uint32_t logical_height = (uint32_t)((float)out_width / s_display_aspect + 0.5f);
+            out_height = logical_height > 0 ? logical_height : 1;
+        }
+    }
+
+    if (width) *width = out_width;
+    if (height) *height = out_height;
     if (posX) *posX = 0;
     if (posY) *posY = 0;
 }
