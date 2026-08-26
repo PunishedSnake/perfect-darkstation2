@@ -135,6 +135,58 @@ static void test_rgba32_figure_14_15_layout(void)
     assert(!gfxRdpTmemByteValid(&tmem, 1u * 8u + 4u));
 }
 
+static void test_rgba32_loadblock_dxt_roundtrip(void)
+{
+    GfxRdpTmem tmem{};
+    uint8_t source[2u * 4u * 4u];
+    uint8_t decoded[sizeof(source)]{};
+
+    for (uint32_t texel = 0; texel < 8u; ++texel) {
+        uint8_t *p = source + texel * 4u;
+        p[0] = (uint8_t)(0x10u + texel);
+        p[1] = (uint8_t)(0x30u + texel);
+        p[2] = (uint8_t)(0x50u + texel);
+        p[3] = (uint8_t)(0x70u + texel);
+    }
+
+    /*
+     * Four RGBA32 texels are two 64-bit source words per row, hence dxt=0x400.
+     * The load tile normally has line=0; the later render tile uses line=1.
+     */
+    assert(gfxRdpTmemLoadBlockRgba32(&tmem, 0u, 0u,
+        source, 8u, 0x400u));
+    assert(gfxRdpTmemReadTileRgba32(&tmem, 0u, 1u,
+        decoded, 16u, 4u, 2u));
+    assert(memcmp(source, decoded, sizeof(source)) == 0);
+
+    const uint8_t *bytes = gfxRdpTmemBytes(&tmem);
+    const uint8_t odd_row_low[] = {
+        0x16, 0x36, 0x17, 0x37, 0x14, 0x34, 0x15, 0x35
+    };
+    assert(memcmp(bytes + 8u, odd_row_low, sizeof(odd_row_low)) == 0);
+}
+
+static void test_rgba32_loadblock_odd_texel_validity(void)
+{
+    GfxRdpTmem tmem{};
+    const uint8_t source[5u * 4u] = {
+        1,2,3,4, 5,6,7,8, 9,10,11,12, 13,14,15,16, 17,18,19,20
+    };
+
+    assert(gfxRdpTmemLoadBlockRgba32(&tmem, 0u, 0u,
+        source, 5u, 0u));
+
+    /* The fifth texel is known; its unseen partner in that source word is not. */
+    assert(gfxRdpTmemByteValid(&tmem, 8u));
+    assert(gfxRdpTmemByteValid(&tmem, 9u));
+    assert(!gfxRdpTmemByteValid(&tmem, 10u));
+    assert(!gfxRdpTmemByteValid(&tmem, 11u));
+    assert(gfxRdpTmemByteValid(&tmem,
+        GFX_RDP_TMEM_BYTES / 2u + 8u));
+    assert(!gfxRdpTmemByteValid(&tmem,
+        GFX_RDP_TMEM_BYTES / 2u + 10u));
+}
+
 static void test_invalidation_blocks_readback(void)
 {
     GfxRdpTmem tmem{};
@@ -156,6 +208,8 @@ int main(void)
     test_linear_tile_roundtrip_and_padding();
     test_loadblock_dxt();
     test_rgba32_figure_14_15_layout();
+    test_rgba32_loadblock_dxt_roundtrip();
+    test_rgba32_loadblock_odd_texel_validity();
     test_invalidation_blocks_readback();
     puts("rdp_tmem tests passed");
     return 0;
