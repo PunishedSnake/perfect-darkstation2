@@ -88,6 +88,35 @@ def patch(source: str) -> str:
 
     source = replace_once(
         source,
+        "    TextureCacheKey key;\n"
+        "    if (fmt == G_IM_FMT_CI) {\n"
+        "        key = { orig_addr, { rdp.palette_addrs[0], rdp.palette_addrs[1] }, fmt, siz, palette_index };\n"
+        "    } else {\n"
+        "        key = { orig_addr, {}, fmt, siz, palette_index };\n"
+        "    }\n\n"
+        "    if (gfx_texture_cache_lookup(i, key)) {\n",
+        "    TextureCacheKey key;\n"
+        "    if (fmt == G_IM_FMT_CI) {\n"
+        "        key = { orig_addr, { rdp.palette_addrs[0], rdp.palette_addrs[1] }, fmt, siz, palette_index };\n"
+        "    } else {\n"
+        "        key = { orig_addr, {}, fmt, siz, palette_index };\n"
+        "    }\n\n"
+        "    uint64_t tmem_content_identity = 0;\n"
+        "    if (gfxRdpTmemLiveTextureFingerprint(tile, loaded_texture.line_size_bytes,\n"
+        "            loaded_texture.size_bytes, fmt, siz, palette_index,\n"
+        "            &tmem_content_identity)) {\n"
+        "        key.texture_addr = nullptr;\n"
+        "        key.palette_addrs[0] = nullptr;\n"
+        "        key.palette_addrs[1] = nullptr;\n"
+        "        key.content_identity = tmem_content_identity;\n"
+        "        key.content_identity_valid = true;\n"
+        "    }\n\n"
+        "    if (gfx_texture_cache_lookup(i, key)) {\n",
+        "TextureCacheKey live TMEM identity",
+    )
+
+    source = replace_once(
+        source,
         'extern "C" void gfx_init(const GfxInitSettings *settings) {\n'
         "    gfx_wapi = settings->wapi;\n",
         'extern "C" void gfx_init(const GfxInitSettings *settings) {\n'
