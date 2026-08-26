@@ -96,6 +96,32 @@ static void gfxRdpTmemPreparePartialWord(struct GfxRdpTmem *tmem,
     tmem->word_valid[dst_word] = 0u;
 }
 
+static bool gfxRdpTmemTileRangeValid(uint32_t first_tmem_word,
+    uint32_t line_words, uint32_t row_words, uint32_t row_count,
+    uint32_t word_limit)
+{
+    if (first_tmem_word > word_limit || row_words > word_limit) {
+        return false;
+    }
+    if (row_count == 0u || row_words == 0u) {
+        return true;
+    }
+    if (row_count > 1u && line_words == 0u) {
+        return false;
+    }
+    if (row_words > line_words && row_count > 1u) {
+        return false;
+    }
+
+    const uint32_t row_advance = (row_count - 1u) * line_words;
+    if (row_advance > word_limit - first_tmem_word) {
+        return false;
+    }
+
+    const uint32_t last_row_word = first_tmem_word + row_advance;
+    return row_words <= word_limit - last_row_word;
+}
+
 extern "C" void gfxRdpTmemReset(struct GfxRdpTmem *tmem)
 {
     if (!tmem) {
@@ -176,8 +202,6 @@ extern "C" bool gfxRdpTmemLoadTileLinear(struct GfxRdpTmem *tmem,
     uint32_t row_bytes, uint32_t row_count)
 {
     if (!tmem || (!source && row_bytes != 0u && row_count != 0u) ||
-        first_tmem_word > GFX_RDP_TMEM_WORDS ||
-        (row_count > 1u && line_words == 0u) ||
         source_stride_bytes < row_bytes) {
         return false;
     }
@@ -188,13 +212,8 @@ extern "C" bool gfxRdpTmemLoadTileLinear(struct GfxRdpTmem *tmem,
 
     const uint32_t row_words =
         (row_bytes + GFX_RDP_TMEM_WORD_BYTES - 1u) / GFX_RDP_TMEM_WORD_BYTES;
-    if (row_words > line_words && row_count > 1u) {
-        return false;
-    }
-
-    const uint32_t last_row_word = first_tmem_word + (row_count - 1u) * line_words;
-    if (last_row_word > GFX_RDP_TMEM_WORDS ||
-        row_words > GFX_RDP_TMEM_WORDS - last_row_word) {
+    if (!gfxRdpTmemTileRangeValid(first_tmem_word, line_words,
+            row_words, row_count, GFX_RDP_TMEM_WORDS)) {
         return false;
     }
 
@@ -221,6 +240,71 @@ extern "C" bool gfxRdpTmemLoadTileLinear(struct GfxRdpTmem *tmem,
                 gfxRdpTmemWriteMappedByte(tmem, dst_byte + mapped, src[i]);
             }
             gfxRdpTmemMarkOneWord(tmem, dst_word, generation);
+        }
+    }
+
+    return true;
+}
+
+extern "C" bool gfxRdpTmemLoadTileRgba32(struct GfxRdpTmem *tmem,
+    uint32_t first_tmem_word, uint32_t line_words,
+    const uint8_t *source, uint32_t source_stride_bytes,
+    uint32_t texels_per_row, uint32_t row_count)
+{
+    const uint32_t source_row_bytes = texels_per_row * 4u;
+    if (!tmem || (!source && texels_per_row != 0u && row_count != 0u) ||
+        source_stride_bytes < source_row_bytes) {
+        return false;
+    }
+
+    if (texels_per_row == 0u || row_count == 0u) {
+        return true;
+    }
+
+    const uint32_t row_half_bytes = texels_per_row * 2u;
+    const uint32_t row_words =
+        (row_half_bytes + GFX_RDP_TMEM_WORD_BYTES - 1u) / GFX_RDP_TMEM_WORD_BYTES;
+    if (!gfxRdpTmemTileRangeValid(first_tmem_word, line_words,
+            row_words, row_count, GFX_RDP_TMEM_HALF_WORDS)) {
+        return false;
+    }
+
+    const uint32_t generation = gfxRdpTmemNextGeneration(tmem);
+
+    for (uint32_t row = 0; row < row_count; ++row) {
+        const uint8_t *src_row = source + (size_t)row * source_stride_bytes;
+        const uint32_t low_row_word = first_tmem_word + row * line_words;
+
+        for (uint32_t group = 0; group < row_words; ++group) {
+            const uint32_t first_texel = group * 4u;
+            uint32_t group_texels = texels_per_row - first_texel;
+            if (group_texels > 4u) {
+                group_texels = 4u;
+            }
+
+            const uint32_t low_word = low_row_word + group;
+            const uint32_t high_word = low_word + GFX_RDP_TMEM_HALF_WORDS;
+            const uint32_t exact_half_bytes = group_texels * 2u;
+            gfxRdpTmemPreparePartialWord(tmem, low_word, exact_half_bytes);
+            gfxRdpTmemPreparePartialWord(tmem, high_word, exact_half_bytes);
+
+            for (uint32_t lane = 0; lane < group_texels; ++lane) {
+                const uint32_t texel = first_texel + lane;
+                const uint8_t *src = src_row + texel * 4u;
+                const uint32_t mapped_lane = (row & 1u) ? (lane ^ 2u) : lane;
+                const uint32_t low_byte =
+                    low_word * GFX_RDP_TMEM_WORD_BYTES + mapped_lane * 2u;
+                const uint32_t high_byte =
+                    high_word * GFX_RDP_TMEM_WORD_BYTES + mapped_lane * 2u;
+
+                gfxRdpTmemWriteMappedByte(tmem, low_byte, src[0]);
+                gfxRdpTmemWriteMappedByte(tmem, low_byte + 1u, src[1]);
+                gfxRdpTmemWriteMappedByte(tmem, high_byte, src[2]);
+                gfxRdpTmemWriteMappedByte(tmem, high_byte + 1u, src[3]);
+            }
+
+            gfxRdpTmemMarkOneWord(tmem, low_word, generation);
+            gfxRdpTmemMarkOneWord(tmem, high_word, generation);
         }
     }
 
@@ -279,8 +363,6 @@ extern "C" bool gfxRdpTmemReadTileLinear(const struct GfxRdpTmem *tmem,
     uint32_t row_bytes, uint32_t row_count)
 {
     if (!tmem || (!dest && row_bytes != 0u && row_count != 0u) ||
-        first_tmem_word > GFX_RDP_TMEM_WORDS ||
-        (row_count > 1u && line_words == 0u) ||
         dest_stride_bytes < row_bytes) {
         return false;
     }
@@ -291,13 +373,8 @@ extern "C" bool gfxRdpTmemReadTileLinear(const struct GfxRdpTmem *tmem,
 
     const uint32_t row_words =
         (row_bytes + GFX_RDP_TMEM_WORD_BYTES - 1u) / GFX_RDP_TMEM_WORD_BYTES;
-    if (row_words > line_words && row_count > 1u) {
-        return false;
-    }
-
-    const uint32_t last_row_word = first_tmem_word + (row_count - 1u) * line_words;
-    if (last_row_word > GFX_RDP_TMEM_WORDS ||
-        row_words > GFX_RDP_TMEM_WORDS - last_row_word) {
+    if (!gfxRdpTmemTileRangeValid(first_tmem_word, line_words,
+            row_words, row_count, GFX_RDP_TMEM_WORDS)) {
         return false;
     }
 
@@ -321,6 +398,60 @@ extern "C" bool gfxRdpTmemReadTileLinear(const struct GfxRdpTmem *tmem,
                 }
                 dst_row[dst_offset + i] = tmem->bytes[src_byte + mapped];
             }
+        }
+    }
+
+    return true;
+}
+
+extern "C" bool gfxRdpTmemReadTileRgba32(const struct GfxRdpTmem *tmem,
+    uint32_t first_tmem_word, uint32_t line_words,
+    uint8_t *dest, uint32_t dest_stride_bytes,
+    uint32_t texels_per_row, uint32_t row_count)
+{
+    const uint32_t dest_row_bytes = texels_per_row * 4u;
+    if (!tmem || (!dest && texels_per_row != 0u && row_count != 0u) ||
+        dest_stride_bytes < dest_row_bytes) {
+        return false;
+    }
+
+    if (texels_per_row == 0u || row_count == 0u) {
+        return true;
+    }
+
+    const uint32_t row_half_bytes = texels_per_row * 2u;
+    const uint32_t row_words =
+        (row_half_bytes + GFX_RDP_TMEM_WORD_BYTES - 1u) / GFX_RDP_TMEM_WORD_BYTES;
+    if (!gfxRdpTmemTileRangeValid(first_tmem_word, line_words,
+            row_words, row_count, GFX_RDP_TMEM_HALF_WORDS)) {
+        return false;
+    }
+
+    for (uint32_t row = 0; row < row_count; ++row) {
+        uint8_t *dst_row = dest + (size_t)row * dest_stride_bytes;
+        const uint32_t low_row_word = first_tmem_word + row * line_words;
+
+        for (uint32_t texel = 0; texel < texels_per_row; ++texel) {
+            const uint32_t group = texel / 4u;
+            const uint32_t lane = texel & 3u;
+            const uint32_t mapped_lane = (row & 1u) ? (lane ^ 2u) : lane;
+            const uint32_t low_word = low_row_word + group;
+            const uint32_t high_word = low_word + GFX_RDP_TMEM_HALF_WORDS;
+            const uint32_t low_byte =
+                low_word * GFX_RDP_TMEM_WORD_BYTES + mapped_lane * 2u;
+            const uint32_t high_byte =
+                high_word * GFX_RDP_TMEM_WORD_BYTES + mapped_lane * 2u;
+
+            if (!tmem->byte_valid[low_byte] || !tmem->byte_valid[low_byte + 1u] ||
+                !tmem->byte_valid[high_byte] || !tmem->byte_valid[high_byte + 1u]) {
+                return false;
+            }
+
+            uint8_t *dst = dst_row + texel * 4u;
+            dst[0] = tmem->bytes[low_byte];
+            dst[1] = tmem->bytes[low_byte + 1u];
+            dst[2] = tmem->bytes[high_byte];
+            dst[3] = tmem->bytes[high_byte + 1u];
         }
     }
 
