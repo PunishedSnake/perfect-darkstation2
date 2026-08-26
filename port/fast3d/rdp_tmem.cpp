@@ -357,6 +357,77 @@ extern "C" bool gfxRdpTmemLoadBlockLinear(struct GfxRdpTmem *tmem,
     return true;
 }
 
+extern "C" bool gfxRdpTmemLoadBlockRgba32(struct GfxRdpTmem *tmem,
+    uint32_t first_tmem_word, uint32_t line_words,
+    const uint8_t *source, uint32_t texel_count, uint16_t dxt)
+{
+    if (!tmem || (!source && texel_count != 0u) || dxt > 0x0fffu ||
+        first_tmem_word >= GFX_RDP_TMEM_HALF_WORDS ||
+        line_words >= GFX_RDP_TMEM_HALF_WORDS) {
+        return false;
+    }
+
+    if (texel_count == 0u) {
+        return true;
+    }
+
+    const uint32_t source_word_count = (texel_count + 1u) / 2u;
+    const uint32_t generation = gfxRdpTmemNextGeneration(tmem);
+    const uint32_t low_half_mask = (GFX_RDP_TMEM_BYTES / 2u) - 1u;
+    uint32_t tmem_byte = first_tmem_word * GFX_RDP_TMEM_WORD_BYTES;
+    uint32_t tmem_xor = 0u;
+    uint32_t dxt_counter = 0u;
+    uint32_t texel = 0u;
+
+    for (uint32_t source_word = 0; source_word < source_word_count; ++source_word) {
+        const uint32_t mapped_low = (tmem_byte ^ tmem_xor) & low_half_mask;
+        const uint32_t mapped_high = mapped_low + GFX_RDP_TMEM_BYTES / 2u;
+        const uint32_t low_word = mapped_low / GFX_RDP_TMEM_WORD_BYTES;
+        const uint32_t high_word = mapped_high / GFX_RDP_TMEM_WORD_BYTES;
+        const uint32_t low_lane = mapped_low & (GFX_RDP_TMEM_WORD_BYTES - 1u);
+        const uint32_t high_lane = mapped_high & (GFX_RDP_TMEM_WORD_BYTES - 1u);
+
+        if (low_lane > GFX_RDP_TMEM_WORD_BYTES - 4u ||
+            high_lane > GFX_RDP_TMEM_WORD_BYTES - 4u) {
+            return false;
+        }
+
+        /* A source 64-bit load owns four bytes in each TMEM half. */
+        memset(&tmem->byte_valid[low_word * GFX_RDP_TMEM_WORD_BYTES + low_lane],
+            0, 4u);
+        memset(&tmem->byte_valid[high_word * GFX_RDP_TMEM_WORD_BYTES + high_lane],
+            0, 4u);
+
+        for (uint32_t pair = 0; pair < 2u && texel < texel_count;
+             ++pair, ++texel) {
+            const uint8_t *src = source + (size_t)texel * 4u;
+            const uint32_t low_byte =
+                low_word * GFX_RDP_TMEM_WORD_BYTES + low_lane + pair * 2u;
+            const uint32_t high_byte =
+                high_word * GFX_RDP_TMEM_WORD_BYTES + high_lane + pair * 2u;
+
+            gfxRdpTmemWriteMappedByte(tmem, low_byte, src[0]);
+            gfxRdpTmemWriteMappedByte(tmem, low_byte + 1u, src[1]);
+            gfxRdpTmemWriteMappedByte(tmem, high_byte, src[2]);
+            gfxRdpTmemWriteMappedByte(tmem, high_byte + 1u, src[3]);
+        }
+
+        gfxRdpTmemMarkOneWord(tmem, low_word, generation);
+        gfxRdpTmemMarkOneWord(tmem, high_word, generation);
+
+        dxt_counter += dxt;
+        while (dxt_counter >= 0x800u) {
+            tmem_byte = (tmem_byte + line_words * GFX_RDP_TMEM_WORD_BYTES) &
+                        low_half_mask;
+            dxt_counter -= 0x800u;
+            tmem_xor ^= 4u;
+        }
+        tmem_byte = (tmem_byte + 4u) & low_half_mask;
+    }
+
+    return true;
+}
+
 extern "C" bool gfxRdpTmemReadTileLinear(const struct GfxRdpTmem *tmem,
     uint32_t first_tmem_word, uint32_t line_words,
     uint8_t *dest, uint32_t dest_stride_bytes,
