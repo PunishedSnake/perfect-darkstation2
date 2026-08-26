@@ -28,6 +28,8 @@
  *     vertices.
  *   - offscreen framebuffer effects, MSAA, mipmaps and anisotropy remain
  *     disabled until the corresponding GS contracts are implemented.
+ *   - logical 4:3/16:9 aspect is independent from GS framebuffer dimensions;
+ *     changing aspect therefore changes projection/layout, not raster workload.
  *
  * The public configuration names which also exist on desktop are preserved so
  * game/menu code does not need a second settings system merely because the
@@ -37,6 +39,7 @@
 static bool s_init_done;
 static s32 s_framerate_limit;
 static s32 s_display_fps;
+static s32 s_aspect_mode = VIDEO_ASPECT_4_3;
 static f32 s_display_fps_interval = 1.0f;
 static f32 s_average_fps;
 static u32 s_texture_filter = FILTER_LINEAR;
@@ -53,6 +56,16 @@ static f64 s_fps_accum;
 static s32 s_fps_frames;
 
 void optionsMenuInit(void);
+
+static f32 ps2VideoAspectValue(void)
+{
+    return s_aspect_mode == VIDEO_ASPECT_16_9 ? (16.0f / 9.0f) : (4.0f / 3.0f);
+}
+
+static void ps2VideoApplyAspect(void)
+{
+    gfxPs2WindowSetDisplayAspect(ps2VideoAspectValue());
+}
 
 static void ps2VideoRefreshModeList(void)
 {
@@ -95,6 +108,12 @@ s32 videoInit(void)
     gfx_current_native_viewport.width = 320;
     gfx_current_native_viewport.height = 220;
     gfx_current_native_aspect = 320.0f / 220.0f;
+
+    /*
+     * Set physical display aspect before gfx_init/start_frame. The WAPI frame
+     * bridge exposes it to Fast3D without changing the actual GS raster size.
+     */
+    ps2VideoApplyAspect();
 
     /* Do not advertise effects that the active GS backend intentionally rejects. */
     gfx_framebuffers_enabled = false;
@@ -139,8 +158,12 @@ s32 videoInit(void)
     s_init_done = true;
 
     sysLogPrintf(LOG_NOTE,
-        "VideoPS2: Fast3D->GS game backend active %dx%d refresh=%d framebuffers=0 msaa=0 mipmaps=0 aniso=1",
-        width, height, ps2GsCoreGetRefreshRate());
+        "VideoPS2: Fast3D->GS game backend active %dx%d refresh=%d aspect=%s(%.4f) framebuffers=0 msaa=0 mipmaps=0 aniso=1",
+        width,
+        height,
+        ps2GsCoreGetRefreshRate(),
+        s_aspect_mode == VIDEO_ASPECT_16_9 ? "16:9" : "4:3",
+        ps2VideoAspectValue());
     return 0;
 }
 
@@ -234,7 +257,12 @@ s32 videoGetHeight(void)
 
 f32 videoGetAspect(void)
 {
-    return gfx_current_dimensions.aspect_ratio;
+    return ps2VideoAspectValue();
+}
+
+s32 videoGetAspectMode(void)
+{
+    return s_aspect_mode;
 }
 
 s32 videoGetFullscreen(void)
@@ -361,6 +389,29 @@ void videoSetFullscreen(s32 fs)
 void videoSetFullscreenMode(s32 mode)
 {
     (void)mode;
+}
+
+void videoSetAspectMode(s32 mode)
+{
+    if (mode != VIDEO_ASPECT_4_3 && mode != VIDEO_ASPECT_16_9) {
+        mode = VIDEO_ASPECT_4_3;
+    }
+
+    if (s_aspect_mode == mode) {
+        return;
+    }
+
+    s_aspect_mode = mode;
+    ps2VideoApplyAspect();
+
+    if (s_init_done) {
+        sysLogPrintf(LOG_NOTE,
+            "VideoPS2: display aspect changed to %s (%.4f), GS raster unchanged %dx%d",
+            s_aspect_mode == VIDEO_ASPECT_16_9 ? "16:9" : "4:3",
+            ps2VideoAspectValue(),
+            ps2GsCoreGetWidth(),
+            ps2GsCoreGetHeight());
+    }
 }
 
 void videoSetTextureFilter(u32 filter)
@@ -511,6 +562,8 @@ void videoShutdown(void)
 
 PD_CONSTRUCTOR static void videoPs2ConfigInit(void)
 {
+    configRegisterInt("Video.AspectRatio", &s_aspect_mode,
+        VIDEO_ASPECT_4_3, VIDEO_ASPECT_16_9);
     configRegisterInt("Video.FramerateLimit", &s_framerate_limit, 0, VIDEO_MAX_FPS);
     configRegisterInt("Video.DisplayFPS", &s_display_fps, 0, 1);
     configRegisterFloat("Video.DisplayFPSInterval", &s_display_fps_interval, 0.01f, 32.0f);
