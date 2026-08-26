@@ -155,6 +155,7 @@ add_executable(pd_ps2_bootstrap
   "${PD_ROOT}/port/fast3d/gfx_cc.cpp"
   "${PD_ROOT}/port/fast3d/gfx_pc.cpp"
   "${PD_ROOT}/port/fast3d/rdp_tmem.cpp"
+  "${PD_ROOT}/port/fast3d/rdp_tmem_runtime.cpp"
   "${PD_ROOT}/port/fast3d/rdp_tmem_trace.cpp"
 )
 
