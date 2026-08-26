@@ -24,27 +24,36 @@ static bool gfxRdpTmemRangeValid(uint32_t byte_offset, uint32_t size_bytes)
            size_bytes <= GFX_RDP_TMEM_BYTES - byte_offset;
 }
 
-static void gfxRdpTmemMarkRange(struct GfxRdpTmem *tmem,
-    uint32_t byte_offset, uint32_t size_bytes, bool invalidate)
+static void gfxRdpTmemRefreshWordValid(struct GfxRdpTmem *tmem, uint32_t word)
+{
+    const uint32_t first_byte = word * GFX_RDP_TMEM_WORD_BYTES;
+    uint8_t valid = 1u;
+
+    for (uint32_t i = 0; i < GFX_RDP_TMEM_WORD_BYTES; ++i) {
+        valid &= tmem->byte_valid[first_byte + i] ? 1u : 0u;
+    }
+
+    tmem->word_valid[word] = valid;
+}
+
+static void gfxRdpTmemSetByteValidity(struct GfxRdpTmem *tmem,
+    uint32_t byte_offset, uint32_t size_bytes, uint8_t valid)
 {
     if (size_bytes == 0u) {
         return;
     }
 
-    const uint32_t generation = gfxRdpTmemNextGeneration(tmem);
+    memset(&tmem->byte_valid[byte_offset], valid ? 1 : 0, size_bytes);
+
     const uint32_t first_word = byte_offset / GFX_RDP_TMEM_WORD_BYTES;
     const uint32_t last_word =
         (byte_offset + size_bytes - 1u) / GFX_RDP_TMEM_WORD_BYTES;
-
     for (uint32_t word = first_word; word <= last_word; ++word) {
-        tmem->word_generation[word] = generation;
-        if (invalidate) {
-            tmem->word_valid[word] = 0u;
-        }
+        gfxRdpTmemRefreshWordValid(tmem, word);
     }
 }
 
-static void gfxRdpTmemMarkWrittenRange(struct GfxRdpTmem *tmem,
+static void gfxRdpTmemMarkRange(struct GfxRdpTmem *tmem,
     uint32_t byte_offset, uint32_t size_bytes)
 {
     if (size_bytes == 0u) {
@@ -55,17 +64,24 @@ static void gfxRdpTmemMarkWrittenRange(struct GfxRdpTmem *tmem,
     const uint32_t first_word = byte_offset / GFX_RDP_TMEM_WORD_BYTES;
     const uint32_t last_word =
         (byte_offset + size_bytes - 1u) / GFX_RDP_TMEM_WORD_BYTES;
-    const uint32_t write_end = byte_offset + size_bytes;
 
     for (uint32_t word = first_word; word <= last_word; ++word) {
-        const uint32_t word_start = word * GFX_RDP_TMEM_WORD_BYTES;
-        const uint32_t word_end = word_start + GFX_RDP_TMEM_WORD_BYTES;
-
         tmem->word_generation[word] = generation;
-        if (byte_offset <= word_start && write_end >= word_end) {
-            tmem->word_valid[word] = 1u;
-        }
     }
+}
+
+static void gfxRdpTmemMarkOneWord(struct GfxRdpTmem *tmem,
+    uint32_t word, uint32_t generation)
+{
+    tmem->word_generation[word] = generation;
+    gfxRdpTmemRefreshWordValid(tmem, word);
+}
+
+static void gfxRdpTmemWriteMappedByte(struct GfxRdpTmem *tmem,
+    uint32_t dst_byte, uint8_t value)
+{
+    tmem->bytes[dst_byte] = value;
+    tmem->byte_valid[dst_byte] = 1u;
 }
 
 extern "C" void gfxRdpTmemReset(struct GfxRdpTmem *tmem)
@@ -90,7 +106,8 @@ extern "C" bool gfxRdpTmemWritePhysical(struct GfxRdpTmem *tmem,
     }
 
     memcpy(&tmem->bytes[byte_offset], src, size_bytes);
-    gfxRdpTmemMarkWrittenRange(tmem, byte_offset, size_bytes);
+    gfxRdpTmemSetByteValidity(tmem, byte_offset, size_bytes, 1u);
+    gfxRdpTmemMarkRange(tmem, byte_offset, size_bytes);
     return true;
 }
 
@@ -101,7 +118,12 @@ extern "C" bool gfxRdpTmemInvalidatePhysical(struct GfxRdpTmem *tmem,
         return false;
     }
 
-    gfxRdpTmemMarkRange(tmem, byte_offset, size_bytes, true);
+    if (size_bytes == 0u) {
+        return true;
+    }
+
+    gfxRdpTmemSetByteValidity(tmem, byte_offset, size_bytes, 0u);
+    gfxRdpTmemMarkRange(tmem, byte_offset, size_bytes);
     return true;
 }
 
@@ -118,27 +140,21 @@ extern "C" bool gfxRdpTmemWriteTlut(struct GfxRdpTmem *tmem,
         return true;
     }
 
+    const uint32_t generation = gfxRdpTmemNextGeneration(tmem);
     for (uint32_t i = 0; i < entry_count; ++i) {
         const uint16_t value = entries[i];
         const uint8_t hi = (uint8_t)(value >> 8);
         const uint8_t lo = (uint8_t)value;
-        uint8_t *dst = &tmem->bytes[(first_tmem_word + i) * GFX_RDP_TMEM_WORD_BYTES];
+        const uint32_t dst_byte =
+            (first_tmem_word + i) * GFX_RDP_TMEM_WORD_BYTES;
 
-        dst[0] = hi;
-        dst[1] = lo;
-        dst[2] = hi;
-        dst[3] = lo;
-        dst[4] = hi;
-        dst[5] = lo;
-        dst[6] = hi;
-        dst[7] = lo;
-        tmem->word_valid[first_tmem_word + i] = 1u;
+        for (uint32_t copy = 0; copy < 4u; ++copy) {
+            gfxRdpTmemWriteMappedByte(tmem, dst_byte + copy * 2u, hi);
+            gfxRdpTmemWriteMappedByte(tmem, dst_byte + copy * 2u + 1u, lo);
+        }
+        gfxRdpTmemMarkOneWord(tmem, first_tmem_word + i, generation);
     }
 
-    gfxRdpTmemMarkRange(tmem,
-        first_tmem_word * GFX_RDP_TMEM_WORD_BYTES,
-        entry_count * GFX_RDP_TMEM_WORD_BYTES,
-        false);
     return true;
 }
 
@@ -184,29 +200,14 @@ extern "C" bool gfxRdpTmemLoadTileLinear(struct GfxRdpTmem *tmem,
             }
 
             const uint32_t dst_word = dst_row_word + word;
-            uint8_t *dst = &tmem->bytes[dst_word * GFX_RDP_TMEM_WORD_BYTES];
+            const uint32_t dst_byte = dst_word * GFX_RDP_TMEM_WORD_BYTES;
             const uint8_t *src = src_row + src_offset;
 
-            if ((row & 1u) == 0u) {
-                memcpy(dst, src, copy_bytes);
-            } else {
-                /* Odd rows swap the two 32-bit halves of each 64-bit word. */
-                const uint32_t low_bytes = copy_bytes > 4u ? 4u : copy_bytes;
-                if (low_bytes != 0u) {
-                    memcpy(dst + 4u, src, low_bytes);
-                }
-                if (copy_bytes > 4u) {
-                    memcpy(dst, src + 4u, copy_bytes - 4u);
-                }
+            for (uint32_t i = 0; i < copy_bytes; ++i) {
+                const uint32_t mapped = (row & 1u) ? (i ^ 4u) : i;
+                gfxRdpTmemWriteMappedByte(tmem, dst_byte + mapped, src[i]);
             }
-
-            tmem->word_generation[dst_word] = generation;
-            if (copy_bytes == GFX_RDP_TMEM_WORD_BYTES) {
-                tmem->word_valid[dst_word] = 1u;
-            } else {
-                /* Padding bytes are not claimed byte-exact yet. */
-                tmem->word_valid[dst_word] = 0u;
-            }
+            gfxRdpTmemMarkOneWord(tmem, dst_word, generation);
         }
     }
 
@@ -244,26 +245,69 @@ extern "C" bool gfxRdpTmemLoadBlockLinear(struct GfxRdpTmem *tmem,
 
         const uint32_t line = t_accum >> 11;
         const uint32_t dst_word = first_tmem_word + word;
-        uint8_t *dst = &tmem->bytes[dst_word * GFX_RDP_TMEM_WORD_BYTES];
+        const uint32_t dst_byte = dst_word * GFX_RDP_TMEM_WORD_BYTES;
         const uint8_t *src = source + src_offset;
 
-        if ((line & 1u) == 0u || dxt == 0u) {
-            memcpy(dst, src, copy_bytes);
-        } else {
-            const uint32_t low_bytes = copy_bytes > 4u ? 4u : copy_bytes;
-            if (low_bytes != 0u) {
-                memcpy(dst + 4u, src, low_bytes);
+        for (uint32_t i = 0; i < copy_bytes; ++i) {
+            const uint32_t mapped = (dxt != 0u && (line & 1u)) ? (i ^ 4u) : i;
+            gfxRdpTmemWriteMappedByte(tmem, dst_byte + mapped, src[i]);
+        }
+        gfxRdpTmemMarkOneWord(tmem, dst_word, generation);
+        t_accum += dxt;
+    }
+
+    return true;
+}
+
+extern "C" bool gfxRdpTmemReadTileLinear(const struct GfxRdpTmem *tmem,
+    uint32_t first_tmem_word, uint32_t line_words,
+    uint8_t *dest, uint32_t dest_stride_bytes,
+    uint32_t row_bytes, uint32_t row_count)
+{
+    if (!tmem || (!dest && row_bytes != 0u && row_count != 0u) ||
+        first_tmem_word > GFX_RDP_TMEM_WORDS ||
+        (row_count > 1u && line_words == 0u) ||
+        dest_stride_bytes < row_bytes) {
+        return false;
+    }
+
+    if (row_bytes == 0u || row_count == 0u) {
+        return true;
+    }
+
+    const uint32_t row_words =
+        (row_bytes + GFX_RDP_TMEM_WORD_BYTES - 1u) / GFX_RDP_TMEM_WORD_BYTES;
+    if (row_words > line_words && row_count > 1u) {
+        return false;
+    }
+
+    const uint32_t last_row_word = first_tmem_word + (row_count - 1u) * line_words;
+    if (last_row_word > GFX_RDP_TMEM_WORDS ||
+        row_words > GFX_RDP_TMEM_WORDS - last_row_word) {
+        return false;
+    }
+
+    for (uint32_t row = 0; row < row_count; ++row) {
+        uint8_t *dst_row = dest + (size_t)row * dest_stride_bytes;
+        const uint32_t src_row_word = first_tmem_word + row * line_words;
+
+        for (uint32_t word = 0; word < row_words; ++word) {
+            const uint32_t dst_offset = word * GFX_RDP_TMEM_WORD_BYTES;
+            uint32_t copy_bytes = row_bytes - dst_offset;
+            if (copy_bytes > GFX_RDP_TMEM_WORD_BYTES) {
+                copy_bytes = GFX_RDP_TMEM_WORD_BYTES;
             }
-            if (copy_bytes > 4u) {
-                memcpy(dst, src + 4u, copy_bytes - 4u);
+
+            const uint32_t src_byte =
+                (src_row_word + word) * GFX_RDP_TMEM_WORD_BYTES;
+            for (uint32_t i = 0; i < copy_bytes; ++i) {
+                const uint32_t mapped = (row & 1u) ? (i ^ 4u) : i;
+                if (!tmem->byte_valid[src_byte + mapped]) {
+                    return false;
+                }
+                dst_row[dst_offset + i] = tmem->bytes[src_byte + mapped];
             }
         }
-
-        tmem->word_generation[dst_word] = generation;
-        tmem->word_valid[dst_word] =
-            copy_bytes == GFX_RDP_TMEM_WORD_BYTES ? 1u : 0u;
-
-        t_accum += dxt;
     }
 
     return true;
@@ -287,6 +331,13 @@ extern "C" uint32_t gfxRdpTmemWordGeneration(const struct GfxRdpTmem *tmem,
     }
 
     return tmem->word_generation[tmem_word];
+}
+
+extern "C" bool gfxRdpTmemByteValid(const struct GfxRdpTmem *tmem,
+    uint32_t byte_offset)
+{
+    return tmem && byte_offset < GFX_RDP_TMEM_BYTES &&
+           tmem->byte_valid[byte_offset] != 0u;
 }
 
 extern "C" bool gfxRdpTmemWordValid(const struct GfxRdpTmem *tmem,
