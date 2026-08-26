@@ -307,6 +307,9 @@ This semantic layer should remain backend-independent where possible. PS2-specif
 - exact live-TMEM N64 RGBA5551 textures are converted directly into GS A1B5G5R5 staging and reside as PSMCT16, halving their IMAGE payload and local-memory footprint relative to the RGBA32 baseline;
 - TEXA expands the PSMCT16 alpha bit to the same 0..255 texture-alpha convention used by the existing combiner adapter;
 - the project owns the per-frame VSync wait, `DISPFB2` publication, draw-buffer selection and native `FRAME`/`SCISSOR` packet;
+- a host-tested combiner planner reduces exact two-cycle modes to one GS pass when the final channel is independent of `COMBINED` or merely passes the first-cycle result through;
+- genuinely dependent second cycles remain explicit unsupported recipes for the forthcoming GS multipass path, rather than receiving a visual approximation;
+- the fixed shader table holds 128 mode/option combinations so real level traversal does not exhaust the original 32-slot bring-up pool;
 - gsKit remains only in one-time CRT/screen bootstrap, system framebuffer/Z setup and block-rounded texture-size calculation;
 - RGBA32/PSMCT32 remains the compatibility fallback for other formats and any TMEM view whose exactness is not proved;
 - the hot frame loop is native in command, texture and presentation transport, but one-time initialization is not yet gsKit-independent.
@@ -447,8 +450,8 @@ PCSX2 is useful for correctness, packet/state inspection and fast iteration. It 
 
 ### M4: RDP state coverage
 
-- inventory actual combiner/render/blender recipes;
-- map supported recipes to GS state;
+- inventory actual combiner/render/blender recipes, with the model path's `TRILERP`, `CUSTOM_17..26`, `MODULATEI/IA` and `PASS2` families as the first concrete set;
+- map supported recipes to GS state, including exact final-cycle and `PASS2` collapse before adding any extra draw;
 - use multipass only for recipes that require it;
 - log unsupported recipes instead of silently approximating them.
 
