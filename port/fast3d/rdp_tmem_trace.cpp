@@ -34,6 +34,7 @@ static struct {
     struct GfxRdpTmemTraceImage image;
     struct GfxRdpTmemTraceTile tiles[8];
     uintptr_t segments[16];
+    uint32_t commands_this_run;
 } s_trace;
 
 static uint32_t gfxRdpTmemTraceBitsPerTexel(uint32_t siz)
@@ -252,9 +253,13 @@ static void gfxRdpTmemTraceLoadTile(const Gfx *cmd)
         return;
     }
 
+    /*
+     * YUV TMEM packing is not yet proven against the authoritative layout.
+     * Invalidate the full shadow rather than pretending we know the touched
+     * banks/words precisely. False invalidation is safe; false validity is not.
+     */
     if (tile->fmt == G_IM_FMT_YUV || s_trace.image.fmt == G_IM_FMT_YUV) {
-        const uint32_t row_words = (width + 3u) / 4u;
-        (void)gfxRdpTmemTraceInvalidateSplitTile(tile, row_words, height);
+        gfxRdpTmemTraceInvalidateAll();
         ++s_trace.stats.load_tile_conservative;
         return;
     }
@@ -330,10 +335,12 @@ static void gfxRdpTmemTraceRun(const Gfx *commands, uint32_t depth)
     const Gfx *cmd = commands;
 
     for (;;) {
-        if (++s_trace.stats.commands > TMEM_TRACE_MAX_COMMANDS) {
+        if (s_trace.commands_this_run >= TMEM_TRACE_MAX_COMMANDS) {
             gfxRdpTmemTraceMalformed();
             return;
         }
+        ++s_trace.commands_this_run;
+        ++s_trace.stats.commands_total;
 
         const uint8_t opcode = (uint8_t)(cmd->words.w0 >> 24);
         switch (opcode) {
@@ -419,9 +426,16 @@ extern "C" void gfxRdpTmemTraceDisplayList(const Gfx *commands)
         gfxRdpTmemTraceReset();
     }
 
-    /* Per-call command guard; lifetime TMEM/segment state intentionally persists. */
-    s_trace.stats.commands = 0u;
+    /*
+     * The guard is per top-level submission and is shared by nested DL calls.
+     * Lifetime counters remain monotonic so telemetry can describe a full run.
+     */
+    s_trace.commands_this_run = 0u;
     gfxRdpTmemTraceRun(commands, 0u);
+    s_trace.stats.commands_last_run = s_trace.commands_this_run;
+    if (s_trace.commands_this_run > s_trace.stats.commands_max_per_run) {
+        s_trace.stats.commands_max_per_run = s_trace.commands_this_run;
+    }
 }
 
 extern "C" const struct GfxRdpTmem *gfxRdpTmemTraceState(void)
