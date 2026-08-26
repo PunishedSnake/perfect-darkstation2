@@ -308,7 +308,10 @@ This semantic layer should remain backend-independent where possible. PS2-specif
 - TEXA expands the PSMCT16 alpha bit to the same 0..255 texture-alpha convention used by the existing combiner adapter;
 - the project owns the per-frame VSync wait, `DISPFB2` publication, draw-buffer selection and native `FRAME`/`SCISSOR` packet;
 - a host-tested combiner planner reduces exact two-cycle modes to one GS pass when the final channel is independent of `COMBINED` or merely passes the first-cycle result through;
-- genuinely dependent second cycles remain explicit unsupported recipes for the forthcoming GS multipass path, rather than receiving a visual approximation;
+- opaque `TRILERP -> PASS2` and `TRILERP -> MODULATEI2` are reconstructed from distinct live-TMEM `TEXEL0`/`TEXEL1` tiles as two ordered GS passes: the first writes `TEXEL0`, and the second uses the GS `ALPHA` equation to blend `TEXEL1` by the per-vertex Fast3D LOD fraction;
+- the interpolation pass disables Z writes, preserves framebuffer alpha through `FRAME.FBMSK`, and restores depth/blend/clamp state after submission;
+- PS2 detail textures default on and the PS2-only Fast3D seam exposes the explicit tile pair because the GS path does not own OpenGL-style generated mip chains;
+- dependent alpha combiners and remaining second-cycle equations remain explicit unsupported recipes, rather than receiving a visual approximation;
 - the fixed shader table holds 128 mode/option combinations so real level traversal does not exhaust the original 32-slot bring-up pool;
 - gsKit remains only in one-time CRT/screen bootstrap, system framebuffer/Z setup and block-rounded texture-size calculation;
 - RGBA32/PSMCT32 remains the compatibility fallback for other formats and any TMEM view whose exactness is not proved;
@@ -452,7 +455,8 @@ PCSX2 is useful for correctness, packet/state inspection and fast iteration. It 
 
 - inventory actual combiner/render/blender recipes, with the model path's `TRILERP`, `CUSTOM_17..26`, `MODULATEI/IA` and `PASS2` families as the first concrete set;
 - map supported recipes to GS state, including exact final-cycle and `PASS2` collapse before adding any extra draw;
-- use multipass only for recipes that require it;
+- reconstruct opaque `TRILERP -> PASS2/MODULATEI2` through the implemented `TEXEL0` base pass plus `TEXEL1` source-alpha interpolation pass;
+- extend the same explicit planning model to alpha-bearing `MODULATEIA2` and `CUSTOM_17..26`; these are still rejected until their framebuffer/depth/alpha equations are exact;
 - log unsupported recipes instead of silently approximating them.
 
 ### M5: VIF1/VU1 geometry path

@@ -33,6 +33,27 @@ def patch(source: str) -> str:
 
     source = replace_once(
         source,
+        "static inline int gfx_lod_tile_offset(const int i) {\n"
+        "    if (gfx_detail_textures_enabled)\n"
+        "        return ((rdp.tex_lod && !rdp.tex_detail) ? 0 : i);\n"
+        "    return (rdp.tex_lod ? rdp.tex_detail : i);\n"
+        "}\n",
+        "static inline int gfx_lod_tile_offset(const int i) {\n"
+        "    /*\n"
+        "     * OpenGL collapses ordinary mip LOD to texture 0 because its\n"
+        "     * sampler owns a generated mip chain. GS has no such chain in\n"
+        "     * the native backend: expose tile i so TEXEL0/TEXEL1 can be\n"
+        "     * reconstructed by the exact two-pass combiner.\n"
+        "     */\n"
+        "    if (gfx_detail_textures_enabled)\n"
+        "        return i;\n"
+        "    return (rdp.tex_lod ? rdp.tex_detail : i);\n"
+        "}\n",
+        "native GS LOD tile pair",
+    )
+
+    source = replace_once(
+        source,
         "static void gfx_dp_set_texture_image(uint32_t format, uint32_t size, uint32_t width, uint32_t tex_flags, const void* addr) {\n"
         "    rdp.texture_to_load.addr = (const uint8_t*)addr;\n",
         "static void gfx_dp_set_texture_image(uint32_t format, uint32_t size, uint32_t width, uint32_t tex_flags, const void* addr) {\n"

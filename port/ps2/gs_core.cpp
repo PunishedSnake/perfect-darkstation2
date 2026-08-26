@@ -41,6 +41,7 @@ static struct Ps2GsRetiredVramBlock
 static uint32_t s_retired_vram_count;
 static bool s_frame_building;
 static bool s_depth_update = true;
+static bool s_alpha_write = true;
 static bool s_texture_alpha;
 static bool s_native_submit_failed;
 static bool s_native_finish_failed;
@@ -187,6 +188,40 @@ static void ps2GsCoreEmitZbufWriteMask(void)
     }
 }
 
+static uint32_t ps2GsCoreAlphaFrameMask(void)
+{
+    if (s_alpha_write || !s_gs) {
+        return 0;
+    }
+
+    switch (s_gs->PSM) {
+        case PS2_GS_PSM_CT32:
+            return 0xff000000u;
+        case PS2_GS_PSM_CT16:
+        case PS2_GS_PSM_CT16S:
+            /* FRAME mask bit 31 maps to the converted CT16 alpha bit. */
+            return 0x80000000u;
+        default:
+            return 0;
+    }
+}
+
+static void ps2GsCoreEmitFrameMask(void)
+{
+    struct Ps2GsPackedReg *p = ps2GsCoreReserve(1);
+    if (!p || !s_gs) {
+        return;
+    }
+
+    ps2GsCoreWriteReg(p,
+        GS_SETREG_FRAME_1(
+            s_gs->ScreenBuffer[s_gs->ActiveBuffer & 1u] / 8192u,
+            s_gs->Width / 64u,
+            s_gs->PSM,
+            ps2GsCoreAlphaFrameMask()),
+        GS_FRAME_1 + s_gs->PrimContext);
+}
+
 static void ps2GsCoreEmitAlpha(void)
 {
     if (!s_gs->PrimAlphaEnable) {
@@ -325,6 +360,7 @@ extern "C" bool ps2GsCoreInit(const struct Ps2GsCreateInfo *info)
     s_gs = gs;
     s_frame_building = false;
     s_depth_update = true;
+    s_alpha_write = true;
     s_texture_alpha = false;
     s_native_submit_failed = false;
     s_native_finish_failed = false;
@@ -454,6 +490,7 @@ extern "C" void ps2GsCoreBeginFrame(void)
     ps2GsCoreEmitFullScissor();
     ps2GsCoreEmitTest();
     ps2GsCoreEmitZbufWriteMask();
+    ps2GsCoreEmitFrameMask();
     ps2GsCoreEmitClamp();
     ps2GsCoreEmitTextureAlphaExpansion();
     ps2GsCoreEmitAlpha();
@@ -622,6 +659,18 @@ extern "C" void ps2GsCoreSetAlphaBlend(bool enable)
         if (s_frame_building) {
             ps2GsCoreEmitAlpha();
         }
+    }
+}
+
+extern "C" void ps2GsCoreSetAlphaWrite(bool enable)
+{
+    if (!s_gs || s_alpha_write == enable) {
+        return;
+    }
+
+    s_alpha_write = enable;
+    if (s_frame_building) {
+        ps2GsCoreEmitFrameMask();
     }
 }
 

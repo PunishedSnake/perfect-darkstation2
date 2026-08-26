@@ -81,6 +81,8 @@ void ps2GsCoreClear(bool clear_color, bool clear_depth);
 void ps2GsCoreSetScissor(int x, int y, int width, int height);
 void ps2GsCoreSetDepthMode(bool depth_test, bool depth_update, bool depth_compare);
 void ps2GsCoreSetAlphaBlend(bool enable);
+/* Preserve framebuffer alpha while RGB is accumulated by a multipass draw. */
+void ps2GsCoreSetAlphaWrite(bool enable);
 void ps2GsCoreSetAlphaTest(bool enable, uint8_t reference);
 void ps2GsCoreSetFog(bool enable, uint8_t r, uint8_t g, uint8_t b);
 /* TEX0.TCC is texture-function state, independent of primitive alpha blending. */

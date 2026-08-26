@@ -135,6 +135,46 @@ static bool ps2_common_options_supported(const struct CCFeatures *f)
            (!f->opt_alpha_threshold || f->opt_alpha);
 }
 
+static bool ps2_is_tex01_lerp_cycle(const struct CCFeatures *f)
+{
+    return f->c[0][0][0] == SHADER_TEXEL1 &&
+           f->c[0][0][1] == SHADER_TEXEL0 &&
+           f->c[0][0][2] == SHADER_INPUT_1 &&
+           f->c[0][0][3] == SHADER_TEXEL0;
+}
+
+static bool ps2_plan_opaque_tex01_lerp(const struct CCFeatures *f,
+    struct Ps2CombinerPlan *plan)
+{
+    if (!f->opt_2cyc || f->opt_alpha || !ps2_is_tex01_lerp_cycle(f)) {
+        return false;
+    }
+
+    if (ps2_channel_passes_combined(f, 0)) {
+        plan->color_recipe = PS2_COLOR_TEX01_LERP_INPUT1;
+    } else if (f->do_multiply[1][0]) {
+        const uint8_t a = f->c[1][0][0];
+        const uint8_t c = f->c[1][0][2];
+        if ((a == SHADER_COMBINED && c == SHADER_INPUT_2) ||
+            (a == SHADER_INPUT_2 && c == SHADER_COMBINED)) {
+            plan->color_recipe =
+                PS2_COLOR_TEX01_LERP_INPUT1_MUL_INPUT2;
+        }
+    }
+
+    if (plan->color_recipe == PS2_COLOR_UNSUPPORTED) {
+        return false;
+    }
+
+    plan->alpha_recipe = PS2_ALPHA_OPAQUE;
+    plan->color_cycle = 1;
+    plan->alpha_cycle = 0;
+    plan->textured = true;
+    plan->texture_alpha = false;
+    plan->supported = true;
+    return true;
+}
+
 bool ps2GfxPlanCombiner(const struct CCFeatures *f,
     struct Ps2CombinerPlan *plan)
 {
@@ -148,6 +188,10 @@ bool ps2GfxPlanCombiner(const struct CCFeatures *f,
 
     if (!ps2_common_options_supported(f)) {
         return false;
+    }
+
+    if (ps2_plan_opaque_tex01_lerp(f, plan)) {
+        return true;
     }
 
     const int color_cycle = ps2_effective_cycle(f, 0);

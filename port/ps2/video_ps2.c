@@ -44,6 +44,7 @@ static f32 s_display_fps_interval = 1.0f;
 static f32 s_average_fps;
 static u32 s_texture_filter = FILTER_LINEAR;
 static s32 s_texture_filter_2d = true;
+static s32 s_detail_textures = true;
 static f32 s_glare_brightness = 1.0f;
 static f32 s_overexposure_scale = 1.0f;
 
@@ -117,7 +118,7 @@ s32 videoInit(void)
 
     /* Do not advertise effects that the active GS backend intentionally rejects. */
     gfx_framebuffers_enabled = false;
-    gfx_detail_textures_enabled = false;
+    gfx_detail_textures_enabled = (bool)s_detail_textures;
     gfx_msaa_level = 1;
 
     struct GfxInitSettings settings = {
@@ -317,7 +318,7 @@ u32 videoGetMaxAnisotropyLevel(void)
 
 s32 videoGetDetailTextures(void)
 {
-    return false;
+    return s_detail_textures;
 }
 
 s32 videoGetDisplayModeIndex(void)
@@ -441,8 +442,8 @@ void videoSetAnisotropicFilter(u32 filter)
 
 void videoSetDetailTextures(s32 detail)
 {
-    (void)detail;
-    gfx_detail_textures_enabled = false;
+    s_detail_textures = !!detail;
+    gfx_detail_textures_enabled = (bool)s_detail_textures;
 }
 
 void videoSetDisplayMode(const s32 index)
@@ -569,6 +570,7 @@ PD_CONSTRUCTOR static void videoPs2ConfigInit(void)
     configRegisterFloat("Video.DisplayFPSInterval", &s_display_fps_interval, 0.01f, 32.0f);
     configRegisterInt("Video.TextureFilter", (s32 *)&s_texture_filter, 0, FILTER_THREE_POINT);
     configRegisterInt("Video.TextureFilter2D", &s_texture_filter_2d, 0, 1);
+    configRegisterInt("Video.DetailTextures", &s_detail_textures, 0, 1);
     configRegisterFloat("Video.GlareBrightness", &s_glare_brightness, 0.0f, 1.0f);
     configRegisterFloat("Video.OverexposureScale", &s_overexposure_scale, 0.0f, 1.0f);
 }

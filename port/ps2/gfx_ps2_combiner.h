@@ -11,6 +11,8 @@ enum Ps2ColorRecipe {
     PS2_COLOR_INPUT1,
     PS2_COLOR_TEX0,
     PS2_COLOR_TEX0_MUL_INPUT1,
+    PS2_COLOR_TEX01_LERP_INPUT1,
+    PS2_COLOR_TEX01_LERP_INPUT1_MUL_INPUT2,
 };
 
 enum Ps2AlphaRecipe {
@@ -34,9 +36,9 @@ struct Ps2CombinerPlan {
 };
 
 /*
- * Reduce an upstream Fast3D combiner to one exact GS fixed-function pass.
- * Two-cycle equations are accepted only when the final channel is independent
- * of COMBINED or is an algebraic pass-through of the first-cycle channel.
+ * Reduce an upstream Fast3D combiner to an exact GS recipe. Independent final
+ * cycles collapse to one pass; the explicitly classified opaque TEXEL0/TEXEL1
+ * interpolation recipes carry a two-pass execution plan in color_recipe.
  */
 bool ps2GfxPlanCombiner(const struct CCFeatures *features,
     struct Ps2CombinerPlan *plan);
