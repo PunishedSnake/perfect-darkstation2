@@ -21,7 +21,9 @@ extern "C" {
  */
 struct GfxRdpTmemTraceStats {
     uint32_t display_lists;
-    uint32_t commands;
+    uint64_t commands_total;
+    uint32_t commands_last_run;
+    uint32_t commands_max_per_run;
     uint32_t set_texture_image;
     uint32_t set_tile;
     uint32_t load_tlut_exact;
