@@ -17,8 +17,9 @@ extern "C" {
  *
  * PACKED A+D draw/state streams use double-buffered UCAB arenas. Texture IMAGE
  * uploads use a separate two-slot source-chain staging path so the EE may copy
- * and prepare upload N+1 while GIF DMA still owns upload N. Neither path emits
- * or waits for GS FINISH.
+ * and prepare upload N+1 while GIF DMA still owns upload N. Normal submission
+ * never emits GS FINISH; the explicit dependency fence below is reserved for
+ * PCRTC publication and texture-residency hazards.
  *
  * Buffer sizing is a measured policy knob, not part of the public Fast3D API.
  */
@@ -34,6 +35,12 @@ struct Ps2GsPackedReg *ps2GsNativeQueueReserveAd(uint32_t reg_count);
 
 /* Submit the active draw/state arena to GIF DMA. Never waits for GS FINISH/VSync. */
 bool ps2GsNativeQueueSubmit(void);
+
+/*
+ * Submit one native GS FINISH token after all earlier PATH3 traffic and wait
+ * for it. This is a full GS dependency fence, not merely GIF DMA completion.
+ */
+bool ps2GsNativeQueueWaitGs(void);
 
 /*
  * Native host->local IMAGE upload used by gs_core's transitional GSTEXTURE

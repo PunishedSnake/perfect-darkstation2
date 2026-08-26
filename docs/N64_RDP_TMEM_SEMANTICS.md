@@ -143,7 +143,7 @@ The exact bank mapping is a required implementation detail before full replaceme
 
 ## 7. Current Perfect DarkStation 2 compatibility behavior
 
-**CURRENT IMPLEMENTATION:** `port/fast3d/gfx_pc.cpp` currently stores:
+**CURRENT IMPLEMENTATION:** `port/fast3d/gfx_pc.cpp` retains the portable renderer's historical records:
 
 ```text
 texture_to_load.addr
@@ -157,27 +157,11 @@ palette[256]
 
 `gfx_dp_set_texture_image()` correctly behaves as source-state setup.
 
-However, the actual load functions are approximations:
+The generated PS2 frontend augments those exact execution points with `rdp_tmem_live` hooks. It maintains an authoritative checked 4096-byte image, load state and eight tile descriptors without imposing PS2 types on the shared model.
 
-### `gfx_dp_load_block()`
+For exact paths, texture import now reads from that image rather than from `loaded_texture[].addr`. This includes linear byte layouts, partial final rows, split-bank RGBA32 reconstruction and CI4/CI8 TLUT extraction. A source buffer may therefore change after `LoadTile`/`LoadBlock` without changing the already-loaded texture, as required by RDP semantics.
 
-It computes sizes and associates the current source pointer with:
-
-```text
-rdp.loaded_texture[rdp.texture_tile[tile].tmem]
-```
-
-but does not materialize the 4 KiB TMEM contents, `dxt` line transitions or odd-line swapping.
-
-### `gfx_dp_load_tile()`
-
-It computes a source offset/stride and associates a pointer to the selected source region with the TMEM-word slot, but does not materialize physical TMEM row padding/layout.
-
-### `gfx_dp_load_tlut()`
-
-It copies converted 16-bit palette entries into a host palette array and tracks source addresses, but does not make a 4 KiB TMEM image the authoritative storage/invalidation source.
-
-This pointer-alias model is a useful portable-renderer shortcut, but it is not the documented RDP TMEM contract.
+Unsupported YUV, malformed commands and any layout with insufficient valid TMEM coverage keep the old pointer import as an explicit fallback. `materialize_exact` and `materialize_fallback` counters make that boundary measurable.
 
 ## 8. Required replacement architecture
 
@@ -230,7 +214,7 @@ This list is an implementation design, not a claim that every field must necessa
 
 ## 10. Incremental implementation plan
 
-### Stage A: shadow without changing output
+### Stage A: shadow without changing output - implemented
 
 Add a checked 4096-byte TMEM model and mutation-generation tracking. Keep the existing pointer-based import path active while shadow writes are validated.
 
@@ -241,25 +225,25 @@ Purpose:
 - compare shadow state with expected load commands;
 - avoid changing visible output before exact format layouts are verified.
 
-### Stage B: TLUT authority
+### Stage B: TLUT authority - implemented for the PS2 live path
 
 Move TLUT mutation/identity to the TMEM model while retaining the existing decoded `palette[256]` cache as a derived view.
 
 This is attractive early because Nintendo documents the 16-bit-entry -> replicated 64-bit-word behavior explicitly.
 
-### Stage C: LoadTile
+### Stage C: LoadTile - exact/conservative split implemented with targeted host tests
 
 Implement exact row copy/padding and format-specific TMEM placement. Compare decoded results against the existing renderer on known scenes.
 
-### Stage D: LoadBlock
+### Stage D: LoadBlock - exact/conservative split implemented with targeted host tests
 
 Implement `dxt`, logical line rollover and the documented odd-line word swapping. Include pre-swapped / `dxt=0` behavior.
 
 Do not promote Stage D without targeted tests because a superficially plausible `memcpy` implementation is specifically wrong here.
 
-### Stage E: render from TMEM
+### Stage E: render from TMEM - active on exact PS2 paths
 
-Switch the texture importer/cache from source aliases to logical views decoded from authoritative TMEM.
+The PS2 texture importer/cache uses logical views decoded from authoritative TMEM whenever the live model proves the requested range exact. Remaining fallbacks are deliberately counted and must be removed format by format rather than silently promoted.
 
 ### Stage F: PS2-native formats
 

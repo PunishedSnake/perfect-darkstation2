@@ -38,6 +38,8 @@ struct Ps2GsNativeUploadSlot {
 
 static struct Ps2GsNativeArena s_arenas[2];
 static struct Ps2GsNativeUploadSlot s_upload_slots[PS2_GS_UPLOAD_SLOTS];
+static void *s_finish_canonical;
+static uint64_t *s_finish_ucab;
 static uint32_t s_build_arena;
 static uint32_t s_upload_slot;
 static bool s_initialized;
@@ -70,6 +72,10 @@ static void ps2GsNativeQueueReleaseInitMemory(void)
         s_upload_slots[i].chain = NULL;
         s_upload_slots[i].capacity_bytes = 0;
     }
+
+    free(s_finish_canonical);
+    s_finish_canonical = NULL;
+    s_finish_ucab = NULL;
 }
 
 static bool ps2GsNativeEnsureUploadCapacity(struct Ps2GsNativeUploadSlot *slot,
@@ -199,6 +205,22 @@ extern "C" bool ps2GsNativeQueueInit(uint32_t qwords_per_buffer)
         }
         memset(s_upload_slots[i].chain, 0, upload_chain_bytes);
     }
+
+    s_finish_canonical = memalign(64, 64);
+    if (!s_finish_canonical) {
+        sysLogPrintf(LOG_ERROR,
+            "GS native queue: FINISH-packet allocation failed");
+        ps2GsNativeQueueReleaseInitMemory();
+        return false;
+    }
+    memset(s_finish_canonical, 0, 64);
+    SyncDCache(s_finish_canonical,
+        (uint8_t *)s_finish_canonical + 63u);
+    s_finish_ucab = (uint64_t *)UCAB_SEG(s_finish_canonical);
+    s_finish_ucab[0] = ps2GifPackedAdTag(1);
+    s_finish_ucab[1] = PS2_GIF_REG_AD;
+    s_finish_ucab[2] = 0;
+    s_finish_ucab[3] = GS_FINISH;
 
     s_build_arena = 0;
     s_upload_slot = 0;
@@ -351,6 +373,31 @@ extern "C" bool ps2GsNativeQueueSubmit(void)
 
     dmaKit_send_ucab(DMA_CHANNEL_GIF, arena->ucab, arena->used_qw);
     s_build_arena ^= 1u;
+    return true;
+}
+
+extern "C" bool ps2GsNativeQueueWaitGs(void)
+{
+    if (!s_initialized || !s_finish_ucab) {
+        return false;
+    }
+
+    /*
+     * First acquire the GIF channel so FINISH is ordered after every earlier
+     * draw/IMAGE chain. CSR.FINISH is write-one-to-clear; clear the prior event
+     * before submitting this token, then distinguish GIF completion from actual
+     * GS completion by polling the privileged FINISH bit.
+     */
+    if (dmaKit_wait(DMA_CHANNEL_GIF, 0) < 0) {
+        return false;
+    }
+    GS_SETREG_CSR_FINISH(1);
+    dmaKit_send_ucab(DMA_CHANNEL_GIF, s_finish_ucab, 2);
+    if (dmaKit_wait(DMA_CHANNEL_GIF, 0) < 0) {
+        return false;
+    }
+    while (!(GS_CSR_FINISH)) {
+    }
     return true;
 }
 

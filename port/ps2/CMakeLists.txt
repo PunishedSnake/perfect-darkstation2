@@ -152,7 +152,7 @@ set_source_files_properties(
   PROPERTIES
     GENERATED TRUE
     COMPILE_DEFINITIONS
-      "gfx_start_frame=gfx_start_frame_ps2_impl;gfx_run=gfx_run_ps2_impl"
+      "gfx_start_frame=gfx_start_frame_ps2_impl;gfx_run=gfx_run_ps2_impl;TEXTURE_CACHE_MAX_SIZE=64"
 )
 
 add_executable(pd_ps2_bootstrap
@@ -161,6 +161,7 @@ add_executable(pd_ps2_bootstrap
   video_diag.c
   gs_core.cpp
   gs_native_queue.cpp
+  gs_vram_allocator.cpp
   gfx_api_scene.c
   gfx_frame_ps2.c
   gfx_run_tmem_ps2.cpp

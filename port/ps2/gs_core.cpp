@@ -7,10 +7,12 @@
 
 #include "gs_core.h"
 #include "gs_native_queue.h"
+#include "gs_vram_allocator.h"
 #include "log_ps2.h"
 #include "system.h"
 
 #define PS2_GS_MAX_TEXTURES 64
+#define PS2_GS_MAX_RETIRED_BLOCKS (PS2_GS_MAX_TEXTURES * 2)
 #define PS2_GS_NATIVE_QUEUE_QW 16384u
 
 /* GS TEST.ATST encodings, cross-checked against current PS2SDK libgs. */
@@ -20,17 +22,28 @@
 
 struct Ps2GsTextureSlot {
     bool used;
-    bool allocated;
+    bool resident;
     bool uploaded;
+    uint32_t vram_bytes;
     GSTEXTURE texture;
+};
+
+struct Ps2GsRetiredVramBlock {
+    uint32_t offset;
+    uint32_t size;
 };
 
 static GSGLOBAL *s_gs;
 static struct Ps2GsTextureSlot s_textures[PS2_GS_MAX_TEXTURES];
+static struct Ps2GsVramAllocator s_vram_allocator;
+static struct Ps2GsRetiredVramBlock
+    s_retired_vram[PS2_GS_MAX_RETIRED_BLOCKS];
+static uint32_t s_retired_vram_count;
 static bool s_frame_building;
 static bool s_depth_update = true;
 static bool s_texture_alpha;
 static bool s_native_submit_failed;
+static bool s_native_finish_failed;
 static uint8_t s_fog_r;
 static uint8_t s_fog_g;
 static uint8_t s_fog_b;
@@ -48,6 +61,77 @@ static struct Ps2GsTextureSlot *ps2GsCoreTextureSlot(Ps2GsTextureHandle handle)
 
     struct Ps2GsTextureSlot *slot = &s_textures[handle - 1];
     return slot->used ? slot : NULL;
+}
+
+static bool ps2GsCoreReclaimRetiredVram(void)
+{
+    uint32_t failed = 0;
+    for (uint32_t i = 0; i < s_retired_vram_count; ++i) {
+        const struct Ps2GsRetiredVramBlock block = s_retired_vram[i];
+        if (!ps2GsVramAllocatorFree(
+                &s_vram_allocator, block.offset, block.size)) {
+            s_retired_vram[failed++] = block;
+        }
+    }
+    s_retired_vram_count = failed;
+
+    if (failed != 0) {
+        sysLogPrintf(LOG_ERROR,
+            "GS core: failed to reclaim %u retired VRAM block(s)", failed);
+        ps2LogCheckpoint();
+        return false;
+    }
+    return true;
+}
+
+static bool ps2GsCoreDrainAndFence(void)
+{
+    if (s_frame_building) {
+        /*
+         * Submit the current draw arena before the fence. The replacement
+         * arena starts empty; persistent GS registers remain live, so no state
+         * replay is required at this mid-frame ownership boundary.
+         */
+        if (!ps2GsNativeQueueSubmit()) {
+            return false;
+        }
+        ps2GsNativeQueueBeginFrame();
+    }
+
+    if (!ps2GsNativeQueueWaitGs()) {
+        return false;
+    }
+    return ps2GsCoreReclaimRetiredVram();
+}
+
+static bool ps2GsCoreEnsureRetireCapacity(void)
+{
+    if (s_retired_vram_count < PS2_GS_MAX_RETIRED_BLOCKS) {
+        return true;
+    }
+    return ps2GsCoreDrainAndFence() &&
+        s_retired_vram_count < PS2_GS_MAX_RETIRED_BLOCKS;
+}
+
+static void ps2GsCoreRetireVram(uint32_t offset, uint32_t size)
+{
+    s_retired_vram[s_retired_vram_count].offset = offset;
+    s_retired_vram[s_retired_vram_count].size = size;
+    ++s_retired_vram_count;
+}
+
+static void ps2GsCoreLogVramAllocationFailure(Ps2GsTextureHandle handle,
+    uint32_t bytes, uint32_t width, uint32_t height)
+{
+    struct Ps2GsVramStats stats;
+    ps2GsVramAllocatorGetStats(&s_vram_allocator, &stats);
+    sysLogPrintf(LOG_ERROR,
+        "GS core: VRAM allocation failed id=%u size=%u (%ux%u) "
+        "free=%u largest=%u ranges=%u",
+        (unsigned int)handle, bytes, width, height,
+        stats.free_bytes, stats.largest_free_bytes,
+        (unsigned int)stats.free_ranges);
+    ps2LogCheckpoint();
 }
 
 static struct Ps2GsPackedReg *ps2GsCoreReserve(uint32_t register_count)
@@ -229,10 +313,13 @@ extern "C" bool ps2GsCoreInit(const struct Ps2GsCreateInfo *info)
     s_depth_update = true;
     s_texture_alpha = false;
     s_native_submit_failed = false;
+    s_native_finish_failed = false;
     s_fog_r = 0;
     s_fog_g = 0;
     s_fog_b = 0;
     memset(s_textures, 0, sizeof(s_textures));
+    memset(s_retired_vram, 0, sizeof(s_retired_vram));
+    s_retired_vram_count = 0;
 
     /* Match the previous gsKit Z-test baseline without queuing a gsKit packet. */
     s_gs->Test->ZTST = config->z_buffering ? 2 : 1;
@@ -244,6 +331,19 @@ extern "C" bool ps2GsCoreInit(const struct Ps2GsCreateInfo *info)
         s_gs = NULL;
         return false;
     }
+
+    if (!ps2GsVramAllocatorInit(
+            &s_vram_allocator, gs->CurrentPointer, PS2_GS_VRAM_BYTES)) {
+        sysLogPrintf(LOG_ERROR,
+            "GS core: texture VRAM pool initialisation failed begin=%08x",
+            gs->CurrentPointer);
+        ps2LogCheckpoint();
+        s_gs = NULL;
+        return false;
+    }
+
+    struct Ps2GsVramStats vram_stats;
+    ps2GsVramAllocatorGetStats(&s_vram_allocator, &vram_stats);
 
     sysLogPrintf(LOG_NOTE,
         "GS core: ready %dx%d mode=0x%x PSM=0x%x PSMZ=0x%x z=%d dither=%d",
@@ -257,6 +357,9 @@ extern "C" bool ps2GsCoreInit(const struct Ps2GsCreateInfo *info)
     sysLogPrintf(LOG_NOTE,
         "GS core: VRAM screen0=%08x screen1=%08x zbuffer=%08x next=%08x",
         gs->ScreenBuffer[0], gs->ScreenBuffer[1], gs->ZBuffer, gs->CurrentPointer);
+    sysLogPrintf(LOG_NOTE,
+        "GS core: reclaimable texture VRAM pool=%u KiB block=%u bytes",
+        vram_stats.pool_bytes / 1024u, PS2_GS_VRAM_BLOCK_BYTES);
     sysLogPrintf(LOG_NOTE,
         "GS core: active renderer transport=native GIF PACKED A+D queue=%u QW x2",
         PS2_GS_NATIVE_QUEUE_QW);
@@ -364,14 +467,28 @@ extern "C" void ps2GsCoreSubmit(void)
 
 extern "C" void ps2GsCorePresent(void)
 {
-    if (s_gs) {
-        /*
-         * TRANSITIONAL IMPLEMENTATION: gsKit still owns PCRTC/VSync and buffer
-         * selection. It waits for GIF-channel ownership in setactive(), but the
-         * renderer no longer injects or waits for GS FINISH every frame.
-         */
-        gsKit_sync_flip(s_gs);
+    if (!s_gs) {
+        return;
     }
+
+    /*
+     * PCRTC is about to expose the completed draw buffer. This is a real GS
+     * dependency, so wait for a project-owned FINISH token here, then reclaim
+     * texture blocks whose last baked TEX0 references are now consumer-free.
+     */
+    if (!ps2GsNativeQueueWaitGs()) {
+        if (!s_native_finish_failed) {
+            sysLogPrintf(LOG_ERROR,
+                "GS core: native GS FINISH fence failed; frame not presented");
+            ps2LogCheckpoint();
+            s_native_finish_failed = true;
+        }
+        return;
+    }
+    ps2GsCoreReclaimRetiredVram();
+
+    /* gsKit remains only the CRT/VSync and framebuffer-selection bootstrap. */
+    gsKit_sync_flip(s_gs);
 }
 
 extern "C" void ps2GsCoreClear(bool clear_color, bool clear_depth)
@@ -577,48 +694,76 @@ extern "C" bool ps2GsCoreUploadTextureRgba32(Ps2GsTextureHandle handle,
         return false;
     }
 
-    GSTEXTURE *tex = &slot->texture;
     const u32 bytes = gsKit_texture_size((int)width, (int)height, GS_PSM_CT32);
 
-    /*
-     * CURRENT IMPLEMENTATION: gsKit's VRAM allocator is monotonic. Preserve the
-     * existing correctness rule and reject resizing an already allocated handle
-     * rather than leak another allocation behind the caller's back.
-     */
-    if (slot->allocated && (tex->Width != width || tex->Height != height)) {
-        sysLogPrintf(LOG_WARNING,
-            "GS core: texture resize rejected id=%u old=%ux%u new=%ux%u",
-            (unsigned int)handle, tex->Width, tex->Height, width, height);
+    if (slot->resident && !ps2GsCoreEnsureRetireCapacity()) {
+        sysLogPrintf(LOG_ERROR,
+            "GS core: texture retirement fence failed id=%u",
+            (unsigned int)handle);
+        ps2LogCheckpoint();
         return false;
     }
 
-    if (!slot->allocated) {
-        memset(tex, 0, sizeof(*tex));
-        tex->Width = width;
-        tex->Height = height;
-        tex->PSM = GS_PSM_CT32;
-        tex->Filter = GS_FILTER_NEAREST;
-        tex->Vram = gsKit_vram_alloc(s_gs, bytes, GSKIT_ALLOC_USERBUFFER);
-        if (tex->Vram == GSKIT_ALLOC_ERROR) {
-            sysLogPrintf(LOG_ERROR,
-                "GS core: VRAM allocation failed id=%u size=%u",
-                (unsigned int)handle, bytes);
+    uint32_t new_vram = 0;
+    bool old_block_reused = false;
+    struct Ps2GsVramAllocator allocator_backup = {};
+
+    if (!ps2GsVramAllocatorAlloc(&s_vram_allocator, bytes, &new_vram)) {
+        /* Allocation pressure is the second real GS dependency boundary. */
+        if (!ps2GsCoreDrainAndFence()) {
+            ps2GsCoreLogVramAllocationFailure(handle, bytes, width, height);
             return false;
         }
-        slot->allocated = true;
+
+        if (!ps2GsVramAllocatorAlloc(&s_vram_allocator, bytes, &new_vram)) {
+            if (!slot->resident) {
+                ps2GsCoreLogVramAllocationFailure(handle, bytes, width, height);
+                return false;
+            }
+
+            /*
+             * All previous GS users are fenced. Transactionally release this
+             * handle's old block only as a final retry, retaining an allocator
+             * snapshot so a failed upload leaves the old texture untouched.
+             */
+            allocator_backup = s_vram_allocator;
+            if (!ps2GsVramAllocatorFree(&s_vram_allocator,
+                    slot->texture.Vram, slot->vram_bytes) ||
+                !ps2GsVramAllocatorAlloc(
+                    &s_vram_allocator, bytes, &new_vram)) {
+                s_vram_allocator = allocator_backup;
+                ps2GsCoreLogVramAllocationFailure(handle, bytes, width, height);
+                return false;
+            }
+            old_block_reused = true;
+        }
     }
 
     /*
-     * CURRENT IMPLEMENTATION: pixel transport is project-owned GIF IMAGE DMA.
-     * GSTEXTURE remains temporary metadata for gsKit's bootstrap-era VRAM/TBW
-     * helpers, but no gsKit texture submit/wait path is used here.
+     * Pixel transport is project-owned GIF IMAGE DMA. GSTEXTURE remains a
+     * compact register/size description, but gsKit no longer owns allocation,
+     * submission or retirement of texture residency.
      */
-    tex->Mem = (u32 *)(uintptr_t)rgba32;
-    const bool submitted = ps2GsNativeQueueUploadTexture(s_gs, tex);
-    tex->Mem = NULL;
+    GSTEXTURE candidate;
+    memset(&candidate, 0, sizeof(candidate));
+    candidate.Width = width;
+    candidate.Height = height;
+    candidate.PSM = GS_PSM_CT32;
+    candidate.Filter = slot->texture.Filter;
+    candidate.Vram = new_vram;
+    candidate.Mem = (u32 *)(uintptr_t)rgba32;
+    const bool submitted = ps2GsNativeQueueUploadTexture(s_gs, &candidate);
+    candidate.Mem = NULL;
 
     if (!submitted) {
-        slot->uploaded = false;
+        if (old_block_reused) {
+            s_vram_allocator = allocator_backup;
+        } else if (!ps2GsVramAllocatorFree(
+                       &s_vram_allocator, new_vram, bytes)) {
+            sysLogPrintf(LOG_ERROR,
+                "GS core: failed to roll back VRAM allocation id=%u",
+                (unsigned int)handle);
+        }
         sysLogPrintf(LOG_ERROR,
             "GS core: native texture upload failed id=%u size=%u (%ux%u)",
             (unsigned int)handle, bytes, width, height);
@@ -626,7 +771,13 @@ extern "C" bool ps2GsCoreUploadTextureRgba32(Ps2GsTextureHandle handle,
         return false;
     }
 
+    if (slot->resident && !old_block_reused) {
+        ps2GsCoreRetireVram(slot->texture.Vram, slot->vram_bytes);
+    }
+    slot->texture = candidate;
+    slot->resident = true;
     slot->uploaded = true;
+    slot->vram_bytes = bytes;
     return true;
 }
 
@@ -642,12 +793,17 @@ extern "C" void ps2GsCoreReleaseTexture(Ps2GsTextureHandle handle)
 {
     struct Ps2GsTextureSlot *slot = ps2GsCoreTextureSlot(handle);
     if (slot) {
-        /*
-         * CURRENT IMPLEMENTATION: logical retirement only. VRAM is not
-         * reclaimed until the native residency allocator replaces gsKit's
-         * monotonic allocator.
-         */
-        slot->used = false;
+        if (slot->resident) {
+            if (!ps2GsCoreEnsureRetireCapacity()) {
+                sysLogPrintf(LOG_ERROR,
+                    "GS core: texture release fence failed id=%u",
+                    (unsigned int)handle);
+                ps2LogCheckpoint();
+                return;
+            }
+            ps2GsCoreRetireVram(slot->texture.Vram, slot->vram_bytes);
+        }
+        memset(slot, 0, sizeof(*slot));
     }
 }
 

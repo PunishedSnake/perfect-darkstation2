@@ -271,33 +271,26 @@ This is not yet a final format table. Actual N64 texture usage in Perfect Dark m
 
 ## 6. TMEM semantic requirement
 
-This is the next major correctness milestone.
+This correctness milestone is now active in the PS2 frontend.
 
 Nintendo documents TMEM as 4 KiB of on-chip texture memory with eight tile descriptors. `SetTextureImage` identifies source image state, while `LoadTile`, `LoadBlock`, and `LoadTlut` populate TMEM. Render tile state can differ from the load tile state.
 
-**CURRENT IMPLEMENTATION:** the shared Fast3D renderer approximates loaded texture state primarily through source pointers associated with TMEM word locations rather than maintaining a faithful 4 KiB TMEM image. This is sufficient for many desktop-port cases but is not the semantic model documented for the N64 RDP.
+**CURRENT IMPLEMENTATION:** the portable renderer still contains its historical source-pointer compatibility records, but the generated PS2 Fast3D frontend also executes every relevant command against a backend-independent 4096-byte live TMEM model with eight load-tile descriptors. `SetTextureImage` only updates source state; `LoadTile`, `LoadBlock` and `LoadTLUT` mutate the live model.
 
-Required correction:
+The PS2 cache/import boundary now:
 
-1. implement an explicit 4096-byte TMEM shadow/model;
-2. retain all eight tile descriptors;
-3. make texture-image setup only describe the source;
-4. make load commands mutate TMEM according to the documented format/layout rules;
-5. make TLUT loads mutate the correct TMEM palette region;
-6. derive imported/rendered texture identity from TMEM content/generation plus render-tile state, not merely the original source pointer;
-7. preserve documented row/word interleave and 32-bit texture bank behavior rather than inventing a simplified layout;
-8. validate against known Perfect Dark display lists and desktop renderer output before PS2-specific optimization.
+1. requests a checked logical view from live TMEM;
+2. reads ordinary layouts byte-exactly, including partial final rows;
+3. reconstructs split-bank RGBA32 texels;
+4. derives CI4/CI8 palettes from the authoritative replicated TLUT words;
+5. keys cache identity from materialized TMEM content and relevant layout state;
+6. imports the materialized view rather than rereading the original RDRAM pointer.
+
+YUV, malformed commands and layouts whose exactness cannot yet be proved are explicit compatibility fallbacks. Their counters remain visible and they do not masquerade as exact TMEM materialization.
 
 This semantic layer should remain backend-independent where possible. PS2-specific residency starts after the compatibility frontend has determined the logical texture content/state.
 
 ## 7. Current native GS status
-
-At the time this record was created, `ps2` branch HEAD was:
-
-```text
-bb3a63ae7f9f3b8eead9c1fddf15d42e46652d9b
-ps2: stream texture uploads through native GIF IMAGE chains
-```
 
 **CURRENT IMPLEMENTATION:**
 
@@ -306,17 +299,16 @@ ps2: stream texture uploads through native GIF IMAGE chains
 - upload staging is prepared before claiming the GIF channel, following `submit early, wait late` as far as dependency allows;
 - upload chains end with `TEXFLUSH` and do not insert GS `FINISH`;
 - draw/state submission serializes on GIF channel ownership, preserving upload -> TEXFLUSH -> dependent draw order;
-- gsKit still owns CRT/screen bootstrap, system VRAM setup, buffer flip/VSync integration and monotonic user-texture VRAM allocation metadata;
+- a fixed-metadata project allocator owns the post-framebuffer texture region of the 4 MiB GS VRAM and uses 256-byte block alignment;
+- texture replacement is transactional: a new residency is uploaded before the old baked `TEX0` address is retired;
+- retired blocks are reclaimed only after an explicit native GS `FINISH` fence proves that previous consumers are done;
+- normal draw and upload submission does not wait for `FINISH`; fences occur at PCRTC publication and under genuine texture-allocation pressure;
+- the PS2 Fast3D cache is capped at the backend's 64 texture handles so eviction can recycle handles instead of exhausting the backend table;
+- gsKit still owns CRT/screen bootstrap, system framebuffer/Z setup, block-rounded texture-size calculation and buffer flip/VSync integration;
 - current texture resource format exposed below Fast3D is RGBA32/PSMCT32 baseline;
 - current renderer is therefore native in command transport, but not yet gsKit-independent.
 
-Known immediate cleanup:
-
-- remove the transitional macro that redirects `gsKit_texture_upload` to the native uploader;
-- call the native upload function directly;
-- propagate upload failure correctly;
-- distinguish VRAM allocation state from successful upload state;
-- update stale comments that still describe texture transfer as synchronous gsKit traffic.
+Remaining renderer milestones include native indexed/16-bit texture residency, measured GS state batching and combiner coverage, VIF1/VU1 geometry batches, and replacement of the remaining gsKit CRT/present bootstrap where doing so has a concrete ownership or performance benefit.
 
 ## 8. Bottleneck hypothesis ordering
 
