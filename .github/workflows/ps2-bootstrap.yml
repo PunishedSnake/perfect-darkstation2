@@ -64,6 +64,15 @@ jobs:
             -o /tmp/rdp_tmem_test
           /tmp/rdp_tmem_test
 
+          g++ -std=c++20 -Wall -Wextra -Werror \
+            -Iport/fast3d \
+            port/fast3d/rdp_tmem.cpp \
+            port/fast3d/rdp_tmem_runtime.cpp \
+            port/fast3d/rdp_tmem_live.cpp \
+            port/fast3d/tests/rdp_tmem_live_test.cpp \
+            -o /tmp/rdp_tmem_live_test
+          /tmp/rdp_tmem_live_test
+
       - name: Configure PS2 bootstrap
         run: |
           cmake -S port/ps2 -B build-ps2 -G Ninja \
