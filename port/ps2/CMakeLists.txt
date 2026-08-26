@@ -168,6 +168,7 @@ add_executable(pd_ps2_bootstrap
   gfx_frame_ps2.c
   gfx_run_tmem_ps2.cpp
   gfx_ps2.cpp
+  gfx_ps2_combiner.cpp
   gfx_window_ps2.c
   pad_ps2.c
   controls_ps2.c
