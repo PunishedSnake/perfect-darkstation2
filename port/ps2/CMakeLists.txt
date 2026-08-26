@@ -187,9 +187,9 @@ set_target_properties(pd_ps2_bootstrap PROPERTIES
 #
 # This stays an OBJECT target for now: the migration frontier exposes EE
 # compiler/platform-contract breakage without hiding it behind unresolved
-# audio/filesystem/gameplay symbols. VI/RDP build the task boundary, gfxmemory
-# owns the double-buffered display-list/vertex producers, tex builds material
-# commands, and model exercises a major source of real geometry commands.
+# audio/filesystem/gameplay symbols. The selected sources now span the path from
+# player/world/menu render producers through gfxmemory/GBI, VI/RDP scheduling and
+# finally videoSubmitCommands -> shared Fast3D -> the PS2 GS backend.
 add_library(pd_ps2_game_bridge OBJECT
   "${PD_ROOT}/port/src/main.c"
   "${PD_ROOT}/port/src/config.c"
@@ -200,6 +200,9 @@ add_library(pd_ps2_game_bridge OBJECT
   "${PD_ROOT}/src/lib/model.c"
   "${PD_ROOT}/src/game/gfxmemory.c"
   "${PD_ROOT}/src/game/tex.c"
+  "${PD_ROOT}/src/game/bg.c"
+  "${PD_ROOT}/src/game/player.c"
+  "${PD_ROOT}/src/game/menugfx.c"
   video_ps2.c
   gfx_frame_ps2.c
 )
