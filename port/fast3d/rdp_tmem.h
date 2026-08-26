@@ -11,6 +11,7 @@ extern "C" {
 #define GFX_RDP_TMEM_BYTES 4096u
 #define GFX_RDP_TMEM_WORD_BYTES 8u
 #define GFX_RDP_TMEM_WORDS (GFX_RDP_TMEM_BYTES / GFX_RDP_TMEM_WORD_BYTES)
+#define GFX_RDP_TMEM_HALF_WORDS (GFX_RDP_TMEM_WORDS / 2u)
 
 /*
  * Backend-independent shadow of the RDP's 4 KiB TMEM.
@@ -21,8 +22,8 @@ extern "C" {
  *
  * Validity is tracked per byte while generations stay per 64-bit word. During
  * the incremental migration a command may be known to mutate a TMEM word before
- * every byte of its result is represented exactly (notably RGBA32/YUV and row
- * padding cases). Known texel bytes remain usable while unknown padding cannot
+ * every byte of its result is represented exactly (notably YUV and row padding
+ * cases). Known texel bytes remain usable while unknown padding cannot
  * accidentally become an authoritative cache input.
  */
 struct GfxRdpTmem {
@@ -64,15 +65,29 @@ bool gfxRdpTmemWriteTlut(struct GfxRdpTmem *tmem,
  * Byte-exact LoadTile row writer for the non-planar 4/8/16-bit TMEM layouts.
  * Rows are placed `line_words` 64-bit words apart. Odd T rows swap the two
  * 32-bit halves inside each complete 64-bit word, matching the documented RDP
- * interleave. The final partial word is written only for known source bytes and
- * is marked invalid because the hardware's padding bytes are not represented.
+ * interleave. Only source texel bytes become valid; unknown row padding is
+ * explicitly invalidated.
  *
- * RGBA32/YUV planar layouts are intentionally outside this helper.
+ * RGBA32 and YUV use planar/split-bank layouts and have separate contracts.
  */
 bool gfxRdpTmemLoadTileLinear(struct GfxRdpTmem *tmem,
     uint32_t first_tmem_word, uint32_t line_words,
     const uint8_t *source, uint32_t source_stride_bytes,
     uint32_t row_bytes, uint32_t row_count);
+
+/*
+ * Nintendo's documented 32-bit RGBA layout stores R/G 16-bit pairs in low TMEM
+ * and B/A 16-bit pairs at the matching address in high TMEM. `line_words` is
+ * the SetTile line value, so a row consumes ceil(texels * 2 / 8) words in each
+ * half (SDK G_IM_SIZ_32b_LINE_BYTES is 2). Odd T rows swap pairs of 16-bit
+ * entries within each 64-bit word.
+ *
+ * Source texels are canonical big-endian RGBA byte quadruples R,G,B,A.
+ */
+bool gfxRdpTmemLoadTileRgba32(struct GfxRdpTmem *tmem,
+    uint32_t first_tmem_word, uint32_t line_words,
+    const uint8_t *source, uint32_t source_stride_bytes,
+    uint32_t texels_per_row, uint32_t row_count);
 
 /*
  * Byte-exact LoadBlock writer for a non-planar stream whose source bytes are
@@ -96,6 +111,12 @@ bool gfxRdpTmemReadTileLinear(const struct GfxRdpTmem *tmem,
     uint32_t first_tmem_word, uint32_t line_words,
     uint8_t *dest, uint32_t dest_stride_bytes,
     uint32_t row_bytes, uint32_t row_count);
+
+/* Reconstruct canonical R,G,B,A texels from the split RGBA32 TMEM layout. */
+bool gfxRdpTmemReadTileRgba32(const struct GfxRdpTmem *tmem,
+    uint32_t first_tmem_word, uint32_t line_words,
+    uint8_t *dest, uint32_t dest_stride_bytes,
+    uint32_t texels_per_row, uint32_t row_count);
 
 const uint8_t *gfxRdpTmemBytes(const struct GfxRdpTmem *tmem);
 uint32_t gfxRdpTmemGeneration(const struct GfxRdpTmem *tmem);
