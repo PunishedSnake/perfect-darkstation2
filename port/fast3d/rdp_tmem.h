@@ -15,19 +15,21 @@ extern "C" {
 /*
  * Backend-independent shadow of the RDP's 4 KiB TMEM.
  *
- * `bytes` is a canonical byte image of logical TMEM storage. Loader-specific
- * format/bank/interleave rules belong in the RDP command implementation, which
- * writes the resulting physical bytes through this model. This avoids baking
- * OpenGL/GS texture identities or source pointers into the memory contract.
+ * `bytes` uses canonical RDP byte order rather than host-endian integer layout.
+ * Loader-specific format/bank/interleave rules belong in this module or in the
+ * RDP command implementation, never in an OpenGL/GS texture cache key.
  *
- * Generation values support conservative cache invalidation while the faithful
- * loader path is introduced incrementally. A word generation is changed when
- * any byte in the corresponding 64-bit TMEM word is mutated.
+ * `word_valid` is deliberately separate from generation tracking. During the
+ * incremental migration a command may be known to mutate a TMEM word before we
+ * have implemented its byte-exact layout (notably RGBA32/LoadBlock initially).
+ * Such a word receives a new generation and is marked invalid instead of
+ * pretending that stale or zero-filled bytes are authoritative.
  */
 struct GfxRdpTmem {
     uint8_t bytes[GFX_RDP_TMEM_BYTES];
     uint32_t generation;
     uint32_t word_generation[GFX_RDP_TMEM_WORDS];
+    uint8_t word_valid[GFX_RDP_TMEM_WORDS];
 };
 
 void gfxRdpTmemReset(struct GfxRdpTmem *tmem);
@@ -40,6 +42,15 @@ bool gfxRdpTmemWritePhysical(struct GfxRdpTmem *tmem,
     uint32_t byte_offset, const void *src, uint32_t size_bytes);
 
 /*
+ * Conservatively record a TMEM mutation whose byte-exact result is not yet
+ * represented. Affected word generations advance and their byte images become
+ * invalid. This is preferable to letting a future cache treat stale bytes as
+ * authoritative during incremental loader bring-up.
+ */
+bool gfxRdpTmemInvalidatePhysical(struct GfxRdpTmem *tmem,
+    uint32_t byte_offset, uint32_t size_bytes);
+
+/*
  * Model the documented LoadTLUT storage operation for host-order logical
  * 16-bit entries: each entry is replicated four times into one 64-bit TMEM
  * word. The caller remains responsible for source-image addressing and for
@@ -48,10 +59,25 @@ bool gfxRdpTmemWritePhysical(struct GfxRdpTmem *tmem,
 bool gfxRdpTmemWriteTlut(struct GfxRdpTmem *tmem,
     uint32_t first_tmem_word, const uint16_t *entries, uint32_t entry_count);
 
+/*
+ * Byte-exact LoadTile row writer for the non-planar 4/8/16-bit TMEM layouts.
+ * Rows are placed `line_words` 64-bit words apart. Odd T rows swap the two
+ * 32-bit halves inside each complete 64-bit word, matching the documented RDP
+ * interleave. The final partial word is written only for known source bytes and
+ * is marked invalid because the hardware's padding bytes are not represented.
+ *
+ * RGBA32/YUV planar layouts are intentionally outside this helper.
+ */
+bool gfxRdpTmemLoadTileLinear(struct GfxRdpTmem *tmem,
+    uint32_t first_tmem_word, uint32_t line_words,
+    const uint8_t *source, uint32_t source_stride_bytes,
+    uint32_t row_bytes, uint32_t row_count);
+
 const uint8_t *gfxRdpTmemBytes(const struct GfxRdpTmem *tmem);
 uint32_t gfxRdpTmemGeneration(const struct GfxRdpTmem *tmem);
 uint32_t gfxRdpTmemWordGeneration(const struct GfxRdpTmem *tmem,
     uint32_t tmem_word);
+bool gfxRdpTmemWordValid(const struct GfxRdpTmem *tmem, uint32_t tmem_word);
 
 #ifdef __cplusplus
 }
