@@ -59,6 +59,7 @@ jobs:
           g++ -std=c++20 -Wall -Wextra -Werror \
             -Iport/fast3d \
             port/fast3d/rdp_tmem.cpp \
+            port/fast3d/rdp_tmem_runtime.cpp \
             port/fast3d/tests/rdp_tmem_test.cpp \
             -o /tmp/rdp_tmem_test
           /tmp/rdp_tmem_test
