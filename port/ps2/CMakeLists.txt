@@ -226,6 +226,29 @@ target_compile_definitions(pd_ps2_game_bridge PRIVATE
   PD_PS2_GIT_COMMIT="${PD_PS2_GIT_COMMIT}"
 )
 
+# Broad compile frontier: prove that the complete game layer accepts the EE ABI
+# before spending time on link/runtime services. This target contains only the
+# decompiled game sources, so failures here are genuine source/toolchain issues,
+# not missing audio/filesystem/input implementations. It is deliberately
+# compile-only and has no runtime meaning yet.
+file(GLOB_RECURSE PD_PS2_ALL_GAME_SOURCES CONFIGURE_DEPENDS
+  "${PD_ROOT}/src/game/*.c"
+)
+add_library(pd_ps2_game_compile_all OBJECT ${PD_PS2_ALL_GAME_SOURCES})
+add_dependencies(pd_ps2_game_compile_all pd_ps2_asset_headers)
+target_include_directories(pd_ps2_game_compile_all PRIVATE
+  ${PD_PS2_COMMON_INCLUDE_DIRS}
+  "${PD_PS2_GENERATED_DIR}"
+  "${GSKIT}/include"
+)
+target_compile_options(pd_ps2_game_compile_all PRIVATE
+  ${PD_PS2_CORRECTNESS_FLAGS}
+)
+target_compile_definitions(pd_ps2_game_compile_all PRIVATE
+  ${PD_PS2_GAME_DEFINITIONS}
+  PD_PS2_GIT_COMMIT="${PD_PS2_GIT_COMMIT}"
+)
+
 # The real Fast3D translator remains linked as the compatibility frontend.
 # gfx_api_scene.c is the current lower-level correctness baseline while GS
 # ownership is moved below gfx_ps2 into gs_core. DualShock 2 input is a separate
