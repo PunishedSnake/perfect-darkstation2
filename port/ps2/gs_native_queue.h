@@ -54,13 +54,4 @@ bool ps2GsNativeQueueOverflowed(void);
 }
 #endif
 
-/*
- * Transitional call-site seam: gs_core.cpp includes this header after gsKit.h,
- * so its legacy gsKit_texture_upload() call is redirected to the project-owned
- * IMAGE transport without leaking gsKit types into the public gs_core API.
- * Remove this alias when gs_core no longer stores GSTEXTURE metadata.
- */
-#define gsKit_texture_upload(gs_, texture_) \
-    ((void)ps2GsNativeQueueUploadTexture((gs_), (texture_)))
-
 #endif
