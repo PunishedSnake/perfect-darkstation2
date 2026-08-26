@@ -21,7 +21,8 @@ extern "C" {
  *
  * `word_valid` is deliberately separate from generation tracking. During the
  * incremental migration a command may be known to mutate a TMEM word before we
- * have implemented its byte-exact layout (notably RGBA32/LoadBlock initially).
+ * have implemented its byte-exact layout (notably RGBA32/YUV and loader
+ * cases that are not byte-exact yet).
  * Such a word receives a new generation and is marked invalid instead of
  * pretending that stale or zero-filled bytes are authoritative.
  */
@@ -72,6 +73,19 @@ bool gfxRdpTmemLoadTileLinear(struct GfxRdpTmem *tmem,
     uint32_t first_tmem_word, uint32_t line_words,
     const uint8_t *source, uint32_t source_stride_bytes,
     uint32_t row_bytes, uint32_t row_count);
+
+/*
+ * Byte-exact LoadBlock writer for a non-planar stream whose source bytes are
+ * already padded to 64-bit row boundaries. `dxt` is the RDP unsigned 1.11
+ * lines-per-word increment. The line number is derived from the accumulated
+ * dxt value before each 64-bit write; odd lines swap 32-bit halves. dxt=0
+ * therefore preserves a pre-interleaved source exactly.
+ *
+ * RGBA32/YUV planar formatting is intentionally outside this helper.
+ */
+bool gfxRdpTmemLoadBlockLinear(struct GfxRdpTmem *tmem,
+    uint32_t first_tmem_word, const uint8_t *source,
+    uint32_t size_bytes, uint16_t dxt);
 
 const uint8_t *gfxRdpTmemBytes(const struct GfxRdpTmem *tmem);
 uint32_t gfxRdpTmemGeneration(const struct GfxRdpTmem *tmem);
