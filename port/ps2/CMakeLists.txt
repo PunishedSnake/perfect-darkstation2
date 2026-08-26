@@ -183,12 +183,13 @@ set_target_properties(pd_ps2_bootstrap PROPERTIES
   SUFFIX ".elf"
 )
 
-# Compile the first slices of the real game next to the renderer bootstrap.
+# Compile real game/render producers next to the renderer bootstrap.
 #
-# This is deliberately an OBJECT target: the migration frontier exposes EE
-# compiler/platform-contract breakage without hiding it behind hundreds of
-# unresolved audio/filesystem/gameplay symbols. VI and RDP are included because
-# they are real producers of the display-list stream consumed by Fast3D->GS.
+# This stays an OBJECT target for now: the migration frontier exposes EE
+# compiler/platform-contract breakage without hiding it behind unresolved
+# audio/filesystem/gameplay symbols. VI/RDP build the task boundary, gfxmemory
+# owns the double-buffered display-list/vertex producers, tex builds material
+# commands, and model exercises a major source of real geometry commands.
 add_library(pd_ps2_game_bridge OBJECT
   "${PD_ROOT}/port/src/main.c"
   "${PD_ROOT}/port/src/config.c"
@@ -196,6 +197,9 @@ add_library(pd_ps2_game_bridge OBJECT
   "${PD_ROOT}/port/src/pdsched.c"
   "${PD_ROOT}/src/lib/vi.c"
   "${PD_ROOT}/src/lib/rdp.c"
+  "${PD_ROOT}/src/lib/model.c"
+  "${PD_ROOT}/src/game/gfxmemory.c"
+  "${PD_ROOT}/src/game/tex.c"
   video_ps2.c
   gfx_frame_ps2.c
 )
