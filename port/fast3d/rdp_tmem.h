@@ -96,11 +96,24 @@ bool gfxRdpTmemLoadTileRgba32(struct GfxRdpTmem *tmem,
  * dxt value before each 64-bit write; odd lines swap 32-bit halves. dxt=0
  * therefore preserves a pre-interleaved source exactly.
  *
- * RGBA32/YUV planar formatting is intentionally outside this helper.
+ * YUV planar formatting is intentionally outside this helper.
  */
 bool gfxRdpTmemLoadBlockLinear(struct GfxRdpTmem *tmem,
     uint32_t first_tmem_word, const uint8_t *source,
     uint32_t size_bytes, uint16_t dxt);
+
+/*
+ * RGBA32 LoadBlock variant. Each 64-bit source word contains two RGBA32 texels:
+ * four R/G bytes are written into low TMEM and the matching four B/A bytes into
+ * high TMEM. `dxt` controls the odd-line XOR-4 mapping. `line_words` is the
+ * loading tile's SetTile line field; normally zero for gDPLoadTextureBlock, but
+ * keeping it explicit models the RDP address step rather than assuming the
+ * common macro sequence. An odd final texel is represented byte-exact while
+ * the unseen partner texel remains invalid.
+ */
+bool gfxRdpTmemLoadBlockRgba32(struct GfxRdpTmem *tmem,
+    uint32_t first_tmem_word, uint32_t line_words,
+    const uint8_t *source, uint32_t texel_count, uint16_t dxt);
 
 /*
  * Reconstruct logical non-planar tile rows from physical TMEM. This reverses
