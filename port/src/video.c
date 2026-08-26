@@ -41,6 +41,11 @@ static s32 vidAllowHiDpi = false;
 static s32 vidVsync = 1;
 static s32 vidMSAA = 1;
 static s32 vidFramerateLimit = 0;
+#ifdef PLATFORM_PS2
+static s32 vidAspectMode = VIDEO_ASPECT_4_3;
+#else
+static s32 vidAspectMode = VIDEO_ASPECT_AUTO;
+#endif
 
 static s32 vidDisplayFPS = 0;
 static f32 vidDisplayFPSInterval = 1.f;
@@ -231,7 +236,20 @@ s32 videoGetCenterWindow(void)
 
 f32 videoGetAspect(void)
 {
-	return gfx_current_dimensions.aspect_ratio;
+	switch (vidAspectMode) {
+	case VIDEO_ASPECT_4_3:
+		return 4.f / 3.f;
+	case VIDEO_ASPECT_16_9:
+		return 16.f / 9.f;
+	case VIDEO_ASPECT_AUTO:
+	default:
+		return gfx_current_dimensions.aspect_ratio;
+	}
+}
+
+s32 videoGetAspectMode(void)
+{
+	return vidAspectMode;
 }
 
 s32 videoGetDisplayModeIndex(void)
@@ -425,6 +443,14 @@ void videoSetFullscreenMode(s32 mode)
 	}
 }
 
+void videoSetAspectMode(s32 mode)
+{
+	if (mode < VIDEO_ASPECT_AUTO || mode >= VIDEO_ASPECT_COUNT) {
+		mode = VIDEO_ASPECT_AUTO;
+	}
+	vidAspectMode = mode;
+}
+
 void videoSetMaximizeWindow(s32 fs)
 {
 	if (fs != vidMaximize) {
@@ -583,6 +609,7 @@ PD_CONSTRUCTOR static void videoConfigInit(void)
 	configRegisterInt("Video.DetailTextures", &texDetail, 0, 1);
 	configRegisterInt("Video.MipmapFilter", &texMipmapFilter, 0, 2);
 	configRegisterInt("Video.AnisotropicFilter", &texAnisotropicFilter, 0, 16);
+	configRegisterInt("Video.AspectRatio", &vidAspectMode, VIDEO_ASPECT_AUTO, VIDEO_ASPECT_COUNT - 1);
 	configRegisterFloat("Video.GlareBrightness", &vidGlareBrightness, 0.f, 1.f);
 	configRegisterFloat("Video.OverexposureScale", &vidOverexposureScale, 0.f, 1.f);
 }
