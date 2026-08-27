@@ -260,14 +260,14 @@ Avoid runtime float-heavy repacking when equivalent static asset transformation 
 Current/candidate policy by class, subject to actual Perfect Dark content profiling:
 
 ```text
-CI4 / CI8      -> GS indexed texture + CLUT candidate
+CI4 / CI8 RGBA TLUT -> PSMT4 / PSMT8 + PSMCT16 CSM1 CLUT active
 RGBA16         -> exact live-TMEM view -> PSMCT16 active path
 IA / I         -> preserve compact semantics where practical
 large imagery  -> IPU experiment candidate
 runtime RGBA32 -> native GIF IMAGE baseline, then remove copies if measured worthwhile
 ```
 
-This is not yet a final format table. Actual N64 texture usage in Perfect Dark must be inventoried before choosing permanent GS formats.
+CI index data and its CLUT are allocated, uploaded and published as one logical residency. CI4 upload reverses the two indices in each source byte for GS low-nibble-first PSMT4 addressing. CI8 index bytes are copied directly. Indexed TBW uses the GS 128-pixel buffer-width alignment, while direct-color formats retain 64-pixel alignment. The RGBA5551 palette is converted to PSMCT16 and the 256-entry CI8 case is permuted to CSM1 order. The core reloads the internal CLUT cache only when the bound indexed residency changes. IA16 palettes still take the RGBA32 compatibility path to retain their eight-bit alpha. This is not yet a final format table; actual N64 texture usage in Perfect Dark must still drive further promotion.
 
 ## 6. TMEM semantic requirement
 
@@ -451,7 +451,8 @@ PCSX2 is useful for correctness, packet/state inspection and fast iteration. It 
 - project-owned 256-byte-block allocator for post-system GS VRAM;
 - transactional reupload/resize with fence-delayed retirement;
 - exact RGBA16 -> PSMCT16 direct residency, with RGBA32 fallback;
-- continue the format inventory before adding CI4/CI8 CLUT residency.
+- exact CI4/CI8 plus RGBA16 TLUT residency as paired texture/CLUT blocks;
+- continue the format inventory before promoting IA/I and IA16-TLUT assets.
 
 ### M4: RDP state coverage
 

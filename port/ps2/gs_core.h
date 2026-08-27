@@ -100,6 +100,11 @@ bool ps2GsCoreUploadTextureRgba32(Ps2GsTextureHandle handle,
     const uint8_t *rgba32, uint32_t width, uint32_t height);
 bool ps2GsCoreUploadTextureN64Rgba16(Ps2GsTextureHandle handle,
     const uint8_t *rgba5551_be, uint32_t width, uint32_t height);
+/* Indexed texels and their RGBA16 TLUT become one atomic GS residency. */
+bool ps2GsCoreUploadTextureN64Ci(Ps2GsTextureHandle handle,
+    const uint8_t *indices, uint32_t width, uint32_t height,
+    uint8_t index_bits, const uint16_t *palette_rgba5551,
+    uint32_t palette_count);
 void ps2GsCoreSetTextureFilter(Ps2GsTextureHandle handle, bool linear_filter);
 void ps2GsCoreReleaseTexture(Ps2GsTextureHandle handle);
 

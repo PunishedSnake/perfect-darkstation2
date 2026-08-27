@@ -56,11 +56,20 @@ bool ps2GsNativeQueuePresent(GSGLOBAL *gs);
  * not completion. Subsequent PATH3 submissions serialize on the GIF channel,
  * preserving upload -> TEXFLUSH -> dependent draw ordering.
  *
- * Current source contracts are host RGBA32 / GS_PSM_CT32 and authoritative
- * N64 big-endian RGBA5551 / GS_PSM_CT16. CT16 conversion is fused into staging
- * so no intermediate RGBA32 expansion is needed.
+ * Source encoding is explicit because CT16 image texels and logical TLUT
+ * entries have different byte order, while CI4 additionally needs nibble
+ * reversal before GS PSMT4 upload. Conversion is fused into DMA staging.
  */
-bool ps2GsNativeQueueUploadTexture(GSGLOBAL *gs, GSTEXTURE *texture);
+enum Ps2GsNativeUploadEncoding {
+    PS2_GS_NATIVE_UPLOAD_RGBA32,
+    PS2_GS_NATIVE_UPLOAD_N64_RGBA16,
+    PS2_GS_NATIVE_UPLOAD_T8,
+    PS2_GS_NATIVE_UPLOAD_N64_CI4,
+    PS2_GS_NATIVE_UPLOAD_N64_RGBA16_CLUT,
+};
+
+bool ps2GsNativeQueueUploadTexture(GSGLOBAL *gs, GSTEXTURE *texture,
+    enum Ps2GsNativeUploadEncoding encoding);
 
 uint32_t ps2GsNativeQueueUsedQwords(void);
 uint32_t ps2GsNativeQueueCapacityQwords(void);

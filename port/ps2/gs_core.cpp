@@ -25,6 +25,7 @@ struct Ps2GsTextureSlot {
     bool resident;
     bool uploaded;
     uint32_t vram_bytes;
+    uint32_t clut_vram_bytes;
     GSTEXTURE texture;
 };
 
@@ -46,6 +47,7 @@ static bool s_texture_alpha;
 static bool s_native_submit_failed;
 static bool s_native_finish_failed;
 static bool s_native_present_failed;
+static Ps2GsTextureHandle s_loaded_clut_texture;
 static uint8_t s_fog_r;
 static uint8_t s_fog_g;
 static uint8_t s_fog_b;
@@ -106,13 +108,13 @@ static bool ps2GsCoreDrainAndFence(void)
     return ps2GsCoreReclaimRetiredVram();
 }
 
-static bool ps2GsCoreEnsureRetireCapacity(void)
+static bool ps2GsCoreEnsureRetireCapacity(uint32_t required)
 {
-    if (s_retired_vram_count < PS2_GS_MAX_RETIRED_BLOCKS) {
+    if (required <= PS2_GS_MAX_RETIRED_BLOCKS - s_retired_vram_count) {
         return true;
     }
     return ps2GsCoreDrainAndFence() &&
-        s_retired_vram_count < PS2_GS_MAX_RETIRED_BLOCKS;
+        required <= PS2_GS_MAX_RETIRED_BLOCKS - s_retired_vram_count;
 }
 
 static void ps2GsCoreRetireVram(uint32_t offset, uint32_t size)
@@ -120,6 +122,23 @@ static void ps2GsCoreRetireVram(uint32_t offset, uint32_t size)
     s_retired_vram[s_retired_vram_count].offset = offset;
     s_retired_vram[s_retired_vram_count].size = size;
     ++s_retired_vram_count;
+}
+
+static uint32_t ps2GsCoreResidentBlockCount(
+    const struct Ps2GsTextureSlot *slot)
+{
+    return slot && slot->resident ?
+        1u + (slot->clut_vram_bytes != 0u ? 1u : 0u) : 0u;
+}
+
+static void ps2GsCoreRetireTextureBlocks(
+    const struct Ps2GsTextureSlot *slot)
+{
+    ps2GsCoreRetireVram(slot->texture.Vram, slot->vram_bytes);
+    if (slot->clut_vram_bytes != 0u) {
+        ps2GsCoreRetireVram(slot->texture.VramClut,
+            slot->clut_vram_bytes);
+    }
 }
 
 static void ps2GsCoreLogVramAllocationFailure(Ps2GsTextureHandle handle,
@@ -365,6 +384,7 @@ extern "C" bool ps2GsCoreInit(const struct Ps2GsCreateInfo *info)
     s_native_submit_failed = false;
     s_native_finish_failed = false;
     s_native_present_failed = false;
+    s_loaded_clut_texture = PS2_GS_TEXTURE_INVALID;
     s_fog_r = 0;
     s_fog_g = 0;
     s_fog_b = 0;
@@ -766,7 +786,9 @@ static bool ps2GsCoreUploadTexture(Ps2GsTextureHandle handle,
 
     const u32 bytes = gsKit_texture_size((int)width, (int)height, psm);
 
-    if (slot->resident && !ps2GsCoreEnsureRetireCapacity()) {
+    const uint32_t old_block_count = ps2GsCoreResidentBlockCount(slot);
+    if (old_block_count != 0u &&
+        !ps2GsCoreEnsureRetireCapacity(old_block_count)) {
         sysLogPrintf(LOG_ERROR,
             "GS core: texture retirement fence failed id=%u",
             (unsigned int)handle);
@@ -786,7 +808,7 @@ static bool ps2GsCoreUploadTexture(Ps2GsTextureHandle handle,
         }
 
         if (!ps2GsVramAllocatorAlloc(&s_vram_allocator, bytes, &new_vram)) {
-            if (!slot->resident) {
+            if (!slot->resident || slot->clut_vram_bytes != 0u) {
                 ps2GsCoreLogVramAllocationFailure(handle, bytes, width, height);
                 return false;
             }
@@ -822,7 +844,11 @@ static bool ps2GsCoreUploadTexture(Ps2GsTextureHandle handle,
     candidate.Filter = slot->texture.Filter;
     candidate.Vram = new_vram;
     candidate.Mem = (u32 *)(uintptr_t)source;
-    const bool submitted = ps2GsNativeQueueUploadTexture(s_gs, &candidate);
+    const enum Ps2GsNativeUploadEncoding encoding = psm == GS_PSM_CT16
+        ? PS2_GS_NATIVE_UPLOAD_N64_RGBA16
+        : PS2_GS_NATIVE_UPLOAD_RGBA32;
+    const bool submitted = ps2GsNativeQueueUploadTexture(
+        s_gs, &candidate, encoding);
     candidate.Mem = NULL;
 
     if (!submitted) {
@@ -842,12 +868,16 @@ static bool ps2GsCoreUploadTexture(Ps2GsTextureHandle handle,
     }
 
     if (slot->resident && !old_block_reused) {
-        ps2GsCoreRetireVram(slot->texture.Vram, slot->vram_bytes);
+        ps2GsCoreRetireTextureBlocks(slot);
+    }
+    if (s_loaded_clut_texture == handle) {
+        s_loaded_clut_texture = PS2_GS_TEXTURE_INVALID;
     }
     slot->texture = candidate;
     slot->resident = true;
     slot->uploaded = true;
     slot->vram_bytes = bytes;
+    slot->clut_vram_bytes = 0u;
     return true;
 }
 
@@ -865,6 +895,140 @@ extern "C" bool ps2GsCoreUploadTextureN64Rgba16(Ps2GsTextureHandle handle,
         handle, rgba5551_be, width, height, GS_PSM_CT16);
 }
 
+static bool ps2GsCoreAllocIndexedBlocks(uint32_t texture_bytes,
+    uint32_t clut_bytes, uint32_t *texture_vram, uint32_t *clut_vram)
+{
+    if (!ps2GsVramAllocatorAlloc(
+            &s_vram_allocator, texture_bytes, texture_vram)) {
+        return false;
+    }
+    if (!ps2GsVramAllocatorAlloc(
+            &s_vram_allocator, clut_bytes, clut_vram)) {
+        (void)ps2GsVramAllocatorFree(
+            &s_vram_allocator, *texture_vram, texture_bytes);
+        return false;
+    }
+    return true;
+}
+
+extern "C" bool ps2GsCoreUploadTextureN64Ci(Ps2GsTextureHandle handle,
+    const uint8_t *indices, uint32_t width, uint32_t height,
+    uint8_t index_bits, const uint16_t *palette_rgba5551,
+    uint32_t palette_count)
+{
+    const bool ci4 = index_bits == 4u && palette_count == 16u;
+    const bool ci8 = index_bits == 8u && palette_count == 256u;
+    if (!s_gs || !indices || !palette_rgba5551 || width == 0u ||
+        height == 0u || width > 1024u || height > 1024u ||
+        (!ci4 && !ci8) || (ci4 && (width & 1u) != 0u)) {
+        return false;
+    }
+
+    struct Ps2GsTextureSlot *slot = ps2GsCoreTextureSlot(handle);
+    if (!slot) {
+        return false;
+    }
+
+    const int texture_psm = ci4 ? GS_PSM_T4 : GS_PSM_T8;
+    const uint32_t clut_width = ci4 ? 8u : 16u;
+    const uint32_t clut_height = ci4 ? 2u : 16u;
+    const uint32_t texture_bytes =
+        gsKit_texture_size((int)width, (int)height, texture_psm);
+    const uint32_t clut_bytes = gsKit_texture_size(
+        (int)clut_width, (int)clut_height, GS_PSM_CT16);
+    /*
+     * Two retirement records cover either the old residency on success or
+     * the new texture/CLUT pair if the second upload cannot be fenced safely.
+     */
+    if (!ps2GsCoreEnsureRetireCapacity(2u)) {
+        sysLogPrintf(LOG_ERROR,
+            "GS core: indexed texture retirement fence failed id=%u",
+            (unsigned int)handle);
+        ps2LogCheckpoint();
+        return false;
+    }
+
+    uint32_t texture_vram = 0u;
+    uint32_t clut_vram = 0u;
+    if (!ps2GsCoreAllocIndexedBlocks(texture_bytes, clut_bytes,
+            &texture_vram, &clut_vram)) {
+        if (!ps2GsCoreDrainAndFence() ||
+            !ps2GsCoreAllocIndexedBlocks(texture_bytes, clut_bytes,
+                &texture_vram, &clut_vram)) {
+            ps2GsCoreLogVramAllocationFailure(
+                handle, texture_bytes + clut_bytes, width, height);
+            return false;
+        }
+    }
+
+    GSTEXTURE candidate;
+    memset(&candidate, 0, sizeof(candidate));
+    candidate.Width = width;
+    candidate.Height = height;
+    candidate.PSM = texture_psm;
+    candidate.Filter = slot->texture.Filter;
+    candidate.Vram = texture_vram;
+    candidate.VramClut = clut_vram;
+    candidate.ClutPSM = GS_PSM_CT16;
+    candidate.ClutStorageMode = 0; /* CSM1 */
+    candidate.Mem = (u32 *)(uintptr_t)indices;
+
+    const enum Ps2GsNativeUploadEncoding texture_encoding = ci4
+        ? PS2_GS_NATIVE_UPLOAD_N64_CI4
+        : PS2_GS_NATIVE_UPLOAD_T8;
+    const bool texture_submitted = ps2GsNativeQueueUploadTexture(
+        s_gs, &candidate, texture_encoding);
+    candidate.Mem = NULL;
+
+    GSTEXTURE clut;
+    memset(&clut, 0, sizeof(clut));
+    clut.Width = clut_width;
+    clut.Height = clut_height;
+    clut.PSM = GS_PSM_CT16;
+    clut.Vram = clut_vram;
+    clut.Mem = (u32 *)(uintptr_t)palette_rgba5551;
+    const bool clut_submitted = texture_submitted &&
+        ps2GsNativeQueueUploadTexture(s_gs, &clut,
+            PS2_GS_NATIVE_UPLOAD_N64_RGBA16_CLUT);
+
+    if (!clut_submitted) {
+        if (texture_submitted) {
+            /* The first DMA may own the new block; fence before rollback. */
+            if (!ps2GsCoreDrainAndFence()) {
+                ps2GsCoreRetireVram(texture_vram, texture_bytes);
+                ps2GsCoreRetireVram(clut_vram, clut_bytes);
+                sysLogPrintf(LOG_ERROR,
+                    "GS core: indexed rollback deferred after fence failure id=%u",
+                    (unsigned int)handle);
+                ps2LogCheckpoint();
+                return false;
+            }
+        }
+        (void)ps2GsVramAllocatorFree(
+            &s_vram_allocator, texture_vram, texture_bytes);
+        (void)ps2GsVramAllocatorFree(
+            &s_vram_allocator, clut_vram, clut_bytes);
+        sysLogPrintf(LOG_ERROR,
+            "GS core: indexed texture upload failed id=%u ci%u (%ux%u)",
+            (unsigned int)handle, (unsigned int)index_bits, width, height);
+        ps2LogCheckpoint();
+        return false;
+    }
+
+    if (slot->resident) {
+        ps2GsCoreRetireTextureBlocks(slot);
+    }
+    if (s_loaded_clut_texture == handle) {
+        s_loaded_clut_texture = PS2_GS_TEXTURE_INVALID;
+    }
+    slot->texture = candidate;
+    slot->resident = true;
+    slot->uploaded = true;
+    slot->vram_bytes = texture_bytes;
+    slot->clut_vram_bytes = clut_bytes;
+    return true;
+}
+
 extern "C" void ps2GsCoreSetTextureFilter(Ps2GsTextureHandle handle, bool linear_filter)
 {
     struct Ps2GsTextureSlot *slot = ps2GsCoreTextureSlot(handle);
@@ -877,15 +1041,19 @@ extern "C" void ps2GsCoreReleaseTexture(Ps2GsTextureHandle handle)
 {
     struct Ps2GsTextureSlot *slot = ps2GsCoreTextureSlot(handle);
     if (slot) {
+        if (s_loaded_clut_texture == handle) {
+            s_loaded_clut_texture = PS2_GS_TEXTURE_INVALID;
+        }
         if (slot->resident) {
-            if (!ps2GsCoreEnsureRetireCapacity()) {
+            const uint32_t block_count = ps2GsCoreResidentBlockCount(slot);
+            if (!ps2GsCoreEnsureRetireCapacity(block_count)) {
                 sysLogPrintf(LOG_ERROR,
                     "GS core: texture release fence failed id=%u",
                     (unsigned int)handle);
                 ps2LogCheckpoint();
                 return;
             }
-            ps2GsCoreRetireVram(slot->texture.Vram, slot->vram_bytes);
+            ps2GsCoreRetireTextureBlocks(slot);
         }
         memset(slot, 0, sizeof(*slot));
     }
@@ -933,6 +1101,8 @@ extern "C" void ps2GsCoreDrawTexturedTriangles(Ps2GsTextureHandle handle,
     }
 
     GSTEXTURE *tex = &slot->texture;
+    const bool indexed = tex->PSM == GS_PSM_T4 || tex->PSM == GS_PSM_T8;
+    const bool load_clut = indexed && s_loaded_clut_texture != handle;
     const int tw = ps2GsCoreTextureExponent(tex->Width);
     const int th = ps2GsCoreTextureExponent(tex->Height);
     const uint32_t register_count = 3u + vertex_count * 3u;
@@ -953,11 +1123,11 @@ extern "C" void ps2GsCoreDrawTexturedTriangles(Ps2GsTextureHandle handle,
             th,
             s_texture_alpha ? 1 : 0,
             0,
+            indexed ? tex->VramClut / 256u : 0u,
+            indexed ? tex->ClutPSM : 0u,
+            indexed ? tex->ClutStorageMode : 0u,
             0,
-            0,
-            0,
-            0,
-            GS_CLUT_STOREMODE_NOLOAD),
+            load_clut ? GS_CLUT_STOREMODE_LOAD : GS_CLUT_STOREMODE_NOLOAD),
         GS_TEX0_1 + s_gs->PrimContext);
     ps2GsCoreWriteReg(&p[2],
         GS_SETREG_PRIM(
@@ -973,4 +1143,7 @@ extern "C" void ps2GsCoreDrawTexturedTriangles(Ps2GsTextureHandle handle,
         GS_PRIM);
 
     memcpy(&p[3], vertices, (size_t)vertex_count * sizeof(*vertices));
+    if (indexed) {
+        s_loaded_clut_texture = handle;
+    }
 }

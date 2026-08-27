@@ -245,18 +245,18 @@ Do not promote Stage D without targeted tests because a superficially plausible 
 
 The PS2 texture importer/cache uses logical views decoded from authoritative TMEM whenever the live model proves the requested range exact. Remaining fallbacks are deliberately counted and must be removed format by format rather than silently promoted.
 
-### Stage F: PS2-native formats - RGBA16 active
+### Stage F: PS2-native formats - RGBA16 and RGBA-TLUT CI active
 
 After the frontend proves a logical view exact, translate N64 texture state into the best GS representation:
 
 ```text
-CI4/CI8 -> indexed GS formats + CLUT where semantics fit
+CI4/CI8 -> PSMT4/PSMT8 + PSMCT16 CSM1 CLUT active for RGBA16 TLUT
 RGBA16  -> PSMCT16 active, direct N64 RGBA5551 to GS A1B5G5R5 conversion
 other formats -> measured conversion path
 large streamed imagery -> IPU experiment candidate, not default
 ```
 
-RGBA32 remains the authoritative compatibility fallback for all formats not yet promoted. CI4/CI8 must not become native until their CLUT storage mode, palette lifetime and upload ordering are explicit.
+RGBA32 remains the authoritative compatibility fallback for all formats not yet promoted. Native CI residency is one transaction containing the index plane and its palette: CI4 reverses N64 high-nibble-first index packing for PSMT4, CI8 remains byte-exact, and RGBA5551 TLUT entries become a PSMCT16 CSM1 CLUT. The 256-entry palette receives the GS CSM1 block permutation before upload. PSMT4/PSMT8 TBW is rounded to the GS-required 128-pixel buffer-width alignment. Both blocks retire behind the same GS dependency fence, and TEX0 requests a CLUT-cache load only when the indexed palette changes. IA16 TLUTs deliberately retain the RGBA32 fallback because their eight-bit alpha cannot be represented exactly by PSMCT16.
 
 ## 11. Instrumentation required before optimization
 

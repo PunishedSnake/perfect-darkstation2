@@ -174,7 +174,7 @@ def patch(source: str) -> str:
         "        texture_to_import = &tmem_loaded_texture;\n"
         "    }\n\n"
         "    if (tmem_view_exact && gfxPs2UploadTmemTexture(\n"
-        "            &tmem_view, fmt, siz, rdp.tex_lod)) {\n"
+        "            &tmem_view, fmt, siz, rdp.palette_fmt, rdp.tex_lod)) {\n"
         "        return;\n"
         "    }\n\n"
         "    if (fmt == G_IM_FMT_RGBA) {\n",

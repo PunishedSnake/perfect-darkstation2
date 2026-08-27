@@ -65,11 +65,98 @@ static void test_all_rgba5551_values_preserve_channels(void)
     }
 }
 
+static uint16_t read_ct16(const uint8_t *bytes, uint32_t index)
+{
+    return (uint16_t)bytes[index * 2u] |
+        ((uint16_t)bytes[index * 2u + 1u] << 8);
+}
+
+static uint16_t convert_palette_word(uint16_t value)
+{
+    const uint8_t source[2] = { (uint8_t)(value >> 8), (uint8_t)value };
+    uint8_t destination[2] = {};
+    assert(ps2GsConvertN64Rgba16ToGsCt16(source, destination, 1u));
+    return read_ct16(destination, 0u);
+}
+
+static void test_ci4_nibble_order(void)
+{
+    const uint8_t source[] = { 0x01, 0xab, 0xf4, 0x80 };
+    const uint8_t expected[] = { 0x10, 0xba, 0x4f, 0x08 };
+    uint8_t destination[sizeof(source)] = {};
+
+    assert(ps2GsConvertN64Ci4ToGsT4(
+        source, destination, (uint32_t)sizeof(source)));
+    assert(memcmp(destination, expected, sizeof(expected)) == 0);
+
+    memcpy(destination, source, sizeof(source));
+    assert(ps2GsConvertN64Ci4ToGsT4(
+        destination, destination, (uint32_t)sizeof(destination)));
+    assert(memcmp(destination, expected, sizeof(expected)) == 0);
+    assert(ps2GsConvertN64Ci4ToGsT4(NULL, NULL, 0u));
+    assert(!ps2GsConvertN64Ci4ToGsT4(NULL, destination, 1u));
+}
+
+static void test_rgba16_palette_conversion_and_csm1_order(void)
+{
+    uint16_t palette16[16];
+    uint8_t converted16[sizeof(palette16)] = {};
+    for (uint32_t i = 0; i < 16u; ++i) {
+        palette16[i] = (uint16_t)(i * 0x0843u + 1u);
+    }
+    assert(ps2GsConvertN64Rgba16PaletteToGsCt16(
+        palette16, converted16, 16u));
+    for (uint32_t i = 0; i < 16u; ++i) {
+        assert(read_ct16(converted16, i) ==
+            convert_palette_word(palette16[i]));
+    }
+
+    uint16_t palette256[256];
+    uint8_t converted256[sizeof(palette256)] = {};
+    for (uint32_t i = 0; i < 256u; ++i) {
+        palette256[i] = (uint16_t)((i << 8) | (i ^ 0x5au));
+    }
+    assert(ps2GsConvertN64Rgba16PaletteToGsCt16(
+        palette256, converted256, 256u));
+    for (uint32_t destination = 0; destination < 256u; ++destination) {
+        const uint32_t source = ((destination & 0x18u) == 0x08u ||
+                                 (destination & 0x18u) == 0x10u)
+            ? destination ^ 0x18u : destination;
+        assert(read_ct16(converted256, destination) ==
+            convert_palette_word(palette256[source]));
+    }
+
+    assert(!ps2GsConvertN64Rgba16PaletteToGsCt16(
+        palette16, converted16, 0u));
+    assert(!ps2GsConvertN64Rgba16PaletteToGsCt16(
+        palette16, converted16, 32u));
+    assert(!ps2GsConvertN64Rgba16PaletteToGsCt16(
+        NULL, converted16, 16u));
+}
+
+static void test_gs_texture_buffer_width_alignment(void)
+{
+    assert(ps2GsTextureBufferWidth(0u, false) == 0u);
+    assert(ps2GsTextureBufferWidth(1u, false) == 1u);
+    assert(ps2GsTextureBufferWidth(64u, false) == 1u);
+    assert(ps2GsTextureBufferWidth(65u, false) == 2u);
+    assert(ps2GsTextureBufferWidth(1024u, false) == 16u);
+
+    assert(ps2GsTextureBufferWidth(1u, true) == 2u);
+    assert(ps2GsTextureBufferWidth(64u, true) == 2u);
+    assert(ps2GsTextureBufferWidth(128u, true) == 2u);
+    assert(ps2GsTextureBufferWidth(129u, true) == 4u);
+    assert(ps2GsTextureBufferWidth(1024u, true) == 16u);
+}
+
 int main(void)
 {
     test_primary_colors_and_alpha();
     test_exact_alias_and_empty_input();
     test_all_rgba5551_values_preserve_channels();
+    test_ci4_nibble_order();
+    test_rgba16_palette_conversion_and_csm1_order();
+    test_gs_texture_buffer_width_alignment();
     puts("gs_texture_convert tests passed");
     return 0;
 }

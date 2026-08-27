@@ -17,7 +17,8 @@ struct GfxRdpTmemLiveTextureView;
  * only when the exact logical view was consumed in a native GS format.
  */
 bool gfxPs2UploadTmemTexture(const struct GfxRdpTmemLiveTextureView *view,
-    uint8_t format, uint8_t size, bool gen_mipmaps);
+    uint8_t format, uint8_t size, uint32_t palette_format,
+    bool gen_mipmaps);
 
 #ifdef __cplusplus
 }
