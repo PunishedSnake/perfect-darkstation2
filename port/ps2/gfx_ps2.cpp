@@ -67,6 +67,8 @@
 #define PS2_GFX_TEXTURE_STATE_SLOTS 65
 /* Fast3D threshold is 8/256. GS alpha unity is 0x80, hence reference 4. */
 #define PS2_GFX_ALPHA_THRESHOLD 4u
+/* Portable texture-edge threshold is >0.19; quantized GS alpha accepts >=25. */
+#define PS2_GFX_TEXTURE_EDGE_THRESHOLD 25u
 #define PS2_GFX_N64_FMT_RGBA 0u
 #define PS2_GFX_N64_FMT_CI 2u
 #define PS2_GFX_N64_FMT_IA 3u
@@ -1244,6 +1246,17 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
     }
 
     bool fog_color_emitted = false;
+    const bool texture_edge = s_shader->features.opt_texture_edge;
+    if (texture_edge) {
+        /*
+         * Fast3D's portable contract discards alpha <= 0.19 and promotes every
+         * accepted fragment to opaque. Disable source-alpha blending and use
+         * FBA to store the native 0x80 opaque bit after the GS alpha test.
+         */
+        ps2GsCoreSetAlphaTest(true, PS2_GFX_TEXTURE_EDGE_THRESHOLD);
+        ps2GsCoreSetFramebufferAlphaForce(true);
+        ps2GsCoreSetAlphaBlend(false);
+    }
     size_t base_vertex = 0;
     while (base_vertex < vertex_count) {
         size_t batch_vertices = vertex_count - base_vertex;
@@ -1471,6 +1484,15 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
 
         base_vertex += batch_vertices;
     }
+
+    if (texture_edge) {
+        ps2GsCoreSetFramebufferAlphaForce(false);
+        ps2GsCoreSetAlphaBlend(s_alpha_blend);
+        ps2GsCoreSetAlphaTest(
+            s_shader->features.opt_alpha_threshold,
+            s_shader->features.opt_alpha_threshold ?
+                PS2_GFX_ALPHA_THRESHOLD : 0u);
+    }
 }
 
 static void ps2_reset_viewport(void)
@@ -1515,6 +1537,7 @@ static void ps2_init(void)
     s_draw_fog_b = 0u;
     s_logged_native_rgba16 = false;
     ps2GsCoreSetAlphaTest(false, 0u);
+    ps2GsCoreSetFramebufferAlphaForce(false);
     ps2GsCoreSetFog(false, 0u, 0u, 0u);
     ps2GsCoreSetTextureAlpha(false);
     ps2_reset_viewport();

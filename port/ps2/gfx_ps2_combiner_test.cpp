@@ -90,6 +90,28 @@ static void test_one_cycle_modulate(void)
     assert(!result.hardware_validation_required);
 }
 
+static void test_one_cycle_texture_edge(void)
+{
+    struct CombinerBuilder builder{};
+    builder.options = SHADER_OPT_ALPHA | SHADER_OPT_TEXTURE_EDGE;
+    set_multiply(&builder, 0, 0, SHADER_TEXEL0, SHADER_INPUT_1);
+    set_multiply(&builder, 0, 1, SHADER_TEXEL0, SHADER_INPUT_1);
+
+    const struct Ps2CombinerPlan result = plan(&builder);
+    assert(result.supported);
+    assert(result.pass_graph == PS2_PASS_GRAPH_DIRECT);
+    assert(result.texture_alpha);
+}
+
+static void test_texture_edge_requires_alpha(void)
+{
+    struct CombinerBuilder builder{};
+    builder.options = SHADER_OPT_TEXTURE_EDGE;
+    set_multiply(&builder, 0, 0, SHADER_TEXEL0, SHADER_INPUT_1);
+
+    assert(!plan(&builder).supported);
+}
+
 static void test_two_cycle_independent_final_cycle(void)
 {
     struct CombinerBuilder builder{};
@@ -378,6 +400,8 @@ static void test_rejects_unmapped_state_and_alpha_only_texture(void)
 int main(void)
 {
     test_one_cycle_modulate();
+    test_one_cycle_texture_edge();
+    test_texture_edge_requires_alpha();
     test_two_cycle_independent_final_cycle();
     test_two_cycle_pass2_uses_first_cycle();
     test_multiply_by_one_is_pass2();

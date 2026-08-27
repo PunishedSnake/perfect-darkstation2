@@ -95,6 +95,8 @@ void ps2GsCoreSetAlphaBlend(bool enable);
 /* Preserve framebuffer alpha while RGB is accumulated by a multipass draw. */
 void ps2GsCoreSetAlphaWrite(bool enable);
 void ps2GsCoreSetAlphaTest(bool enable, uint8_t reference);
+/* GS FBA forces the stored framebuffer alpha MSB for accepted fragments. */
+void ps2GsCoreSetFramebufferAlphaForce(bool enable);
 void ps2GsCoreSetFog(bool enable, uint8_t r, uint8_t g, uint8_t b);
 /* TEX0.TCC is texture-function state, independent of primitive alpha blending. */
 void ps2GsCoreSetTextureAlpha(bool enable);

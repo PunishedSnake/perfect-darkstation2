@@ -66,6 +66,7 @@ static uint32_t s_retired_vram_count;
 static bool s_frame_building;
 static bool s_depth_update = true;
 static bool s_alpha_write = true;
+static bool s_framebuffer_alpha_force;
 static bool s_texture_alpha;
 static bool s_native_submit_failed;
 static bool s_native_finish_failed;
@@ -350,6 +351,16 @@ static void ps2GsCoreEmitFrameMask(void)
         GS_FRAME_1 + s_gs->PrimContext);
 }
 
+static void ps2GsCoreEmitFramebufferAlphaForce(void)
+{
+    struct Ps2GsPackedReg *p = ps2GsCoreReserve(1);
+    if (p && s_gs) {
+        ps2GsCoreWriteReg(p,
+            s_framebuffer_alpha_force ? 1u : 0u,
+            GS_FBA_1 + s_gs->PrimContext);
+    }
+}
+
 static void ps2GsCoreEmitAlpha(void)
 {
     if (!s_gs->PrimAlphaEnable) {
@@ -522,6 +533,7 @@ extern "C" bool ps2GsCoreInit(const struct Ps2GsCreateInfo *info)
     s_frame_building = false;
     s_depth_update = true;
     s_alpha_write = true;
+    s_framebuffer_alpha_force = false;
     s_texture_alpha = false;
     s_native_submit_failed = false;
     s_native_finish_failed = false;
@@ -660,6 +672,7 @@ extern "C" void ps2GsCoreBeginFrame(void)
     ps2GsCoreEmitTest();
     ps2GsCoreEmitZbufWriteMask();
     ps2GsCoreEmitFrameMask();
+    ps2GsCoreEmitFramebufferAlphaForce();
     ps2GsCoreEmitClamp();
     ps2GsCoreEmitTextureAlphaExpansion();
     ps2GsCoreEmitAlpha();
@@ -868,6 +881,18 @@ extern "C" void ps2GsCoreSetAlphaTest(bool enable, uint8_t reference)
 
     if (s_frame_building) {
         ps2GsCoreEmitTest();
+    }
+}
+
+extern "C" void ps2GsCoreSetFramebufferAlphaForce(bool enable)
+{
+    if (!s_gs || s_framebuffer_alpha_force == enable) {
+        return;
+    }
+
+    s_framebuffer_alpha_force = enable;
+    if (s_frame_building) {
+        ps2GsCoreEmitFramebufferAlphaForce();
     }
 }
 
