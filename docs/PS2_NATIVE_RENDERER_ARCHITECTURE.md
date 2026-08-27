@@ -309,6 +309,8 @@ This semantic layer should remain backend-independent where possible. PS2-specif
 - **POTWIERDZONE:** after local-memory texture data changes, `TEXFLUSH` is a required texture-cache transition rather than a general-purpose GS completion fence;
 - **CURRENT IMPLEMENTATION:** a successful clear or primitive draw marks the active transient target initialized and texture-dirty. Uninitialized targets cannot be sampled. The first later sample emits `TEXFLUSH` in the ordered native A+D stream, then clears the dependency bit. A failed command-arena reservation leaves the bit set, so the barrier cannot be silently lost;
 - transient targets can be sampled directly as PSMCT32 without an EE-memory copy. Sampling the active draw target is rejected as an uncontrolled feedback hazard, while NPOT targets use temporary `REGION_CLAMP` bounds and restore the persistent material clamp after the draw;
+- **POTWIERDZONE:** `PSMT8H` reinterprets the high byte of each 32-bit local-memory word as an indexed texel, so the alpha lane of a PSMCT32 target does not require the spatial 32-to-8-bit shuffle used for low RGB lanes;
+- **CURRENT IMPLEMENTATION:** a fifth immutable shared PSMCT32 CSM1 palette maps every byte `i` to `RGBA(i,i,i,i)`. The render-target alpha-view API combines it with `PSMT8H`, the same dirty-tracked `TEXFLUSH` dependency and exact NPOT clamp, exposing framebuffer alpha as texture intensity without an EE copy;
 - render-target release uses the existing fence-delayed retired-block queue. The block cannot return to the allocator until earlier GS consumers are complete, and an active target cannot be released;
 - texture replacement is transactional: a new residency is uploaded before the old baked `TEX0` address is retired;
 - retired blocks are reclaimed only after an explicit native GS `FINISH` fence proves that previous consumers are done;
@@ -323,7 +325,7 @@ This semantic layer should remain backend-independent where possible. PS2-specif
 - opaque `CUSTOM_17/19 -> CUSTOM_18` color is reconstructed as `ENV * SHADE` followed by `TEXEL0 * SHADE`, blended by per-vertex `SHADE_ALPHA`;
 - the interpolation pass disables Z writes, preserves framebuffer alpha through `FRAME.FBMSK`, and restores depth/blend/clamp state after submission;
 - PS2 detail textures default on and the PS2-only Fast3D seam exposes the explicit tile pair because the GS path does not own OpenGL-style generated mip chains;
-- alpha-bearing `TRILERP/MODULATEIA2` remains explicit unsupported: GS blends RGB with source alpha but writes source alpha directly. The aligned CT32 transient target and its safe target-to-texture transition now exist, but channel extraction and the final exact algebra are not yet promoted;
+- alpha-bearing `TRILERP/MODULATEIA2` remains explicit unsupported: GS blends RGB with source alpha but writes source alpha directly. The aligned CT32 transient target, safe target-to-texture transition and high-byte alpha extraction now exist, but low-lane channel writeback and the final exact algebra are not yet promoted;
 - remaining dependent second-cycle equations remain explicit unsupported recipes, rather than receiving a visual approximation;
 - the fixed shader table holds 128 mode/option combinations so real level traversal does not exhaust the original 32-slot bring-up pool;
 - gsKit remains only in one-time CRT/screen bootstrap, system framebuffer/Z setup and block-rounded texture-size calculation;
@@ -474,7 +476,8 @@ PCSX2 is useful for correctness, packet/state inspection and fast iteration. It 
 - reconstruct opaque `CUSTOM_17/19 -> CUSTOM_18` through the implemented solid `ENV` base plus `TEXEL0` source-alpha interpolation pass;
 - use the implemented page-aligned CT32 transient-target core as the ownership layer for exact alpha-bearing work;
 - use the implemented dirty-tracked `TEXFLUSH`, feedback rejection and region-clamped PSMCT32 view for the render-target-to-texture transition;
-- prove alpha channel extraction before enabling `MODULATEIA2`; framebuffer allocation and target sampling alone are not treated as a valid combiner implementation;
+- use the implemented PSMT8H plus identity-CLUT view when a pass consumes the high alpha byte of a CT32 target;
+- prove the remaining low-lane channel shuffle/writeback before enabling `MODULATEIA2`; framebuffer allocation, target sampling and alpha extraction alone are not treated as a valid combiner implementation;
 - extend the same explicit planning model to the remaining `CUSTOM_20..26`; these are still rejected until their framebuffer/depth/alpha equations are exact;
 - log unsupported recipes instead of silently approximating them.
 

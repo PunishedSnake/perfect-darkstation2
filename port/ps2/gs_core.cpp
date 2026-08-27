@@ -17,7 +17,8 @@
 #define PS2_GS_MAX_RENDER_TARGETS 4
 #define PS2_GS_MAX_RETIRED_BLOCKS (PS2_GS_MAX_TEXTURES * 2)
 #define PS2_GS_NATIVE_QUEUE_QW 16384u
-#define PS2_GS_SHARED_CLUT_COUNT 4u
+#define PS2_GS_SHARED_CLUT_COUNT 5u
+#define PS2_GS_ALPHA_IDENTITY_CLUT_INDEX 4u
 
 /* GS TEST.ATST encodings, cross-checked against current PS2SDK libgs. */
 #define PS2_GS_ATST_ALWAYS  1u
@@ -1144,32 +1145,20 @@ static bool ps2GsCoreAllocIndexedBlocks(uint32_t texture_bytes,
     return true;
 }
 
-static bool ps2GsCoreEnsureSharedIntensityClut(
-    enum Ps2GsN64IntensityEncoding encoding,
+static bool ps2GsCoreUploadSharedCt32Clut(
+    struct Ps2GsSharedClut *shared, uint32_t entry_count,
+    const char *purpose, uint32_t purpose_id,
     struct Ps2GsSharedClut **result)
 {
-    const uint32_t index = (uint32_t)encoding;
-    if (!result || index >= PS2_GS_SHARED_CLUT_COUNT) {
+    if (!shared || !result || !purpose ||
+        (entry_count != 16u && entry_count != 256u)) {
         return false;
     }
 
-    struct Ps2GsSharedClut *shared = &s_shared_cluts[index];
-    if (shared->resident) {
-        *result = shared;
-        return true;
-    }
-
-    const bool four_bit = encoding == PS2_GS_N64_IA4 ||
-        encoding == PS2_GS_N64_I4;
-    const uint32_t entry_count = four_bit ? 16u : 256u;
-    const uint32_t clut_width = four_bit ? 8u : 16u;
-    const uint32_t clut_height = four_bit ? 2u : 16u;
+    const uint32_t clut_width = entry_count == 16u ? 8u : 16u;
+    const uint32_t clut_height = entry_count == 16u ? 2u : 16u;
     const uint32_t clut_bytes = gsKit_texture_size(
         (int)clut_width, (int)clut_height, GS_PSM_CT32);
-    if (!ps2GsBuildN64IntensityClut(
-            encoding, s_shared_clut_staging, entry_count)) {
-        return false;
-    }
 
     uint32_t clut_vram = 0u;
     if (!ps2GsVramAllocatorAlloc(
@@ -1196,8 +1185,8 @@ static bool ps2GsCoreEnsureSharedIntensityClut(
         (void)ps2GsVramAllocatorFree(
             &s_vram_allocator, clut_vram, clut_bytes);
         sysLogPrintf(LOG_ERROR,
-            "GS core: shared intensity CLUT upload failed format=%u",
-            (unsigned int)encoding);
+            "GS core: shared %s CLUT upload failed id=%u",
+            purpose, (unsigned int)purpose_id);
         ps2LogCheckpoint();
         return false;
     }
@@ -1208,6 +1197,54 @@ static bool ps2GsCoreEnsureSharedIntensityClut(
     ps2GsCoreInvalidateClutCache();
     *result = shared;
     return true;
+}
+
+static bool ps2GsCoreEnsureSharedIntensityClut(
+    enum Ps2GsN64IntensityEncoding encoding,
+    struct Ps2GsSharedClut **result)
+{
+    const uint32_t index = (uint32_t)encoding;
+    if (!result || index >= PS2_GS_ALPHA_IDENTITY_CLUT_INDEX) {
+        return false;
+    }
+
+    struct Ps2GsSharedClut *shared = &s_shared_cluts[index];
+    if (shared->resident) {
+        *result = shared;
+        return true;
+    }
+
+    const bool four_bit = encoding == PS2_GS_N64_IA4 ||
+        encoding == PS2_GS_N64_I4;
+    const uint32_t entry_count = four_bit ? 16u : 256u;
+    if (!ps2GsBuildN64IntensityClut(
+            encoding, s_shared_clut_staging, entry_count)) {
+        return false;
+    }
+    return ps2GsCoreUploadSharedCt32Clut(
+        shared, entry_count, "intensity", index, result);
+}
+
+static bool ps2GsCoreEnsureSharedAlphaIdentityClut(
+    struct Ps2GsSharedClut **result)
+{
+    if (!result) {
+        return false;
+    }
+
+    struct Ps2GsSharedClut *shared =
+        &s_shared_cluts[PS2_GS_ALPHA_IDENTITY_CLUT_INDEX];
+    if (shared->resident) {
+        *result = shared;
+        return true;
+    }
+    if (!ps2GsBuildIdentityRgba8Clut(
+            s_shared_clut_staging, 256u)) {
+        return false;
+    }
+    return ps2GsCoreUploadSharedCt32Clut(
+        shared, 256u, "alpha identity",
+        PS2_GS_ALPHA_IDENTITY_CLUT_INDEX, result);
 }
 
 extern "C" bool ps2GsCoreUploadTextureN64Ci(Ps2GsTextureHandle handle,
@@ -1506,7 +1543,8 @@ static bool ps2GsCoreDrawTexturedTrianglesInternal(GSTEXTURE *tex,
         return false;
     }
 
-    const bool indexed = tex->PSM == GS_PSM_T4 || tex->PSM == GS_PSM_T8;
+    const bool indexed = tex->PSM == GS_PSM_T4 ||
+        tex->PSM == GS_PSM_T8 || tex->PSM == GS_PSM_T8H;
     const bool load_clut = indexed &&
         (s_loaded_clut_vram != tex->VramClut ||
          s_loaded_clut_psm != tex->ClutPSM);
@@ -1604,13 +1642,14 @@ extern "C" void ps2GsCoreDrawTexturedTriangles(Ps2GsTextureHandle handle,
         &slot->texture, vertices, vertex_count, false, NULL);
 }
 
-extern "C" bool ps2GsCoreDrawRenderTargetTriangles(
+static bool ps2GsCoreDrawRenderTargetView(
     Ps2GsRenderTargetHandle source,
     const struct Ps2GsTexturedVertex *vertices, uint32_t vertex_count,
-    bool linear_filter)
+    bool linear_filter, int psm)
 {
     if (!s_gs || !s_frame_building || !vertices || vertex_count == 0u ||
-        source == s_active_render_target) {
+        source == s_active_render_target ||
+        (psm != GS_PSM_CT32 && psm != GS_PSM_T8H)) {
         return false;
     }
 
@@ -1622,14 +1661,25 @@ extern "C" bool ps2GsCoreDrawRenderTargetTriangles(
         return false;
     }
 
+    struct Ps2GsSharedClut *shared = NULL;
+    if (psm == GS_PSM_T8H &&
+        !ps2GsCoreEnsureSharedAlphaIdentityClut(&shared)) {
+        return false;
+    }
+
     GSTEXTURE texture;
     memset(&texture, 0, sizeof(texture));
     texture.Width = (int)slot->layout.width;
     texture.Height = (int)slot->layout.height;
-    texture.PSM = GS_PSM_CT32;
+    texture.PSM = psm;
     texture.Vram = slot->vram;
     texture.TBW = (int)view.tbw;
     texture.Filter = linear_filter ? GS_FILTER_LINEAR : GS_FILTER_NEAREST;
+    if (shared) {
+        texture.VramClut = shared->vram;
+        texture.ClutPSM = GS_PSM_CT32;
+        texture.ClutStorageMode = 0; /* CSM1 */
+    }
 
     if (!ps2GsCoreDrawTexturedTrianglesInternal(
             &texture, vertices, vertex_count,
@@ -1639,4 +1689,22 @@ extern "C" bool ps2GsCoreDrawRenderTargetTriangles(
 
     slot->texture_cache_dirty = false;
     return true;
+}
+
+extern "C" bool ps2GsCoreDrawRenderTargetTriangles(
+    Ps2GsRenderTargetHandle source,
+    const struct Ps2GsTexturedVertex *vertices, uint32_t vertex_count,
+    bool linear_filter)
+{
+    return ps2GsCoreDrawRenderTargetView(
+        source, vertices, vertex_count, linear_filter, GS_PSM_CT32);
+}
+
+extern "C" bool ps2GsCoreDrawRenderTargetAlphaTriangles(
+    Ps2GsRenderTargetHandle source,
+    const struct Ps2GsTexturedVertex *vertices, uint32_t vertex_count,
+    bool linear_filter)
+{
+    return ps2GsCoreDrawRenderTargetView(
+        source, vertices, vertex_count, linear_filter, GS_PSM_T8H);
 }

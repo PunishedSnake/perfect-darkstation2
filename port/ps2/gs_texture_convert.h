@@ -36,6 +36,10 @@ bool ps2GsConvertN64Rgba16PaletteToGsCt16(const uint16_t *source,
 bool ps2GsBuildN64IntensityClut(enum Ps2GsN64IntensityEncoding encoding,
     uint32_t *destination, uint32_t entry_count);
 
+/* CSM1-ordered i -> RGBA(i,i,i,i) mapping for GS channel views. */
+bool ps2GsBuildIdentityRgba8Clut(uint32_t *destination,
+    uint32_t entry_count);
+
 /*
  * GS TBW is expressed in 64-pixel units. PSMT4/PSMT8 buffers additionally
  * require a 128-pixel buffer-width alignment, unlike direct-color formats.

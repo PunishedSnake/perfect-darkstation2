@@ -122,6 +122,20 @@ extern "C" bool ps2GsBuildN64IntensityClut(
     return true;
 }
 
+extern "C" bool ps2GsBuildIdentityRgba8Clut(
+    uint32_t *destination, uint32_t entry_count)
+{
+    if (!destination || entry_count != 256u) {
+        return false;
+    }
+
+    for (uint32_t i = 0u; i < entry_count; ++i) {
+        destination[i] = i * 0x01010101u;
+    }
+    ps2GsPermuteCsm1(destination, 4u, entry_count);
+    return true;
+}
+
 extern "C" uint32_t ps2GsTextureBufferWidth(uint32_t width, bool indexed)
 {
     if (width == 0u) {

@@ -18,6 +18,7 @@ enum Ps2GsPixelStorageMode {
     PS2_GS_PSM_CT16S = 0x0a,
     PS2_GS_PSM_T8 = 0x13,
     PS2_GS_PSM_T4 = 0x14,
+    PS2_GS_PSM_T8H = 0x1b,
 };
 
 enum Ps2GsDepthStorageMode {
@@ -119,6 +120,12 @@ uint32_t ps2GsCoreGetRenderTargetHeight(Ps2GsRenderTargetHandle handle);
  * required GS texture-cache transition.
  */
 bool ps2GsCoreDrawRenderTargetTriangles(Ps2GsRenderTargetHandle source,
+    const struct Ps2GsTexturedVertex *vertices, uint32_t vertex_count,
+    bool linear_filter);
+
+/* Map the high alpha byte through an identity CT32 CLUT as RGBA intensity. */
+bool ps2GsCoreDrawRenderTargetAlphaTriangles(
+    Ps2GsRenderTargetHandle source,
     const struct Ps2GsTexturedVertex *vertices, uint32_t vertex_count,
     bool linear_filter);
 

@@ -199,6 +199,20 @@ static void test_n64_intensity_cluts(void)
     assert(!ps2GsBuildN64IntensityClut(PS2_GS_N64_I8, NULL, 256u));
 }
 
+static void test_identity_rgba8_clut(void)
+{
+    uint32_t clut[256] = {};
+    assert(ps2GsBuildIdentityRgba8Clut(clut, 256u));
+    for (uint32_t destination = 0u; destination < 256u; ++destination) {
+        const uint32_t source = intensity_clut_source_index(
+            destination, 256u);
+        assert(clut[destination] == source * 0x01010101u);
+    }
+
+    assert(!ps2GsBuildIdentityRgba8Clut(clut, 16u));
+    assert(!ps2GsBuildIdentityRgba8Clut(NULL, 256u));
+}
+
 int main(void)
 {
     test_primary_colors_and_alpha();
@@ -208,6 +222,7 @@ int main(void)
     test_rgba16_palette_conversion_and_csm1_order();
     test_gs_texture_buffer_width_alignment();
     test_n64_intensity_cluts();
+    test_identity_rgba8_clut();
     puts("gs_texture_convert tests passed");
     return 0;
 }
