@@ -125,6 +125,14 @@ jobs:
             port/ps2/gfx_ps2_combiner.cpp \
             port/ps2/gfx_ps2_pass_graph.cpp
 
+          gcc -std=c11 -Wall -Wextra -Werror -fsyntax-only \
+            -DPERFECT_DARK_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT=1 \
+            -D_LANGUAGE_C=1 \
+            -include include/PR/ultratypes.h \
+            -Iport/ps2 -Iport/fast3d -Iport/include \
+            -Iinclude -Iinclude/PR -Isrc/include -Isrc/lib/ultra/audio \
+            port/ps2/gfx_api_scene.c
+
       - name: Configure PS2 bootstrap
         run: |
           cmake -S port/ps2 -B build-ps2 -G Ninja \
@@ -140,10 +148,28 @@ jobs:
           mips64r5900el-ps2-elf-readelf -h build-ps2/pd-ps2-bootstrap.elf
           mips64r5900el-ps2-elf-nm -n build-ps2/pd-ps2-bootstrap.elf | tail -n 20
 
+      - name: Build alpha-trilerp hardware diagnostic
+        run: |
+          cmake -S port/ps2 -B build-ps2-alpha-diag -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/port/ps2/ps2dev-toolchain.cmake" \
+            -DPD_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT=ON
+          cmake --build build-ps2-alpha-diag -j2 --verbose
+          test -f build-ps2-alpha-diag/pd-ps2-bootstrap.elf
+          mips64r5900el-ps2-elf-size \
+            build-ps2-alpha-diag/pd-ps2-bootstrap.elf
+
       - name: Upload bootstrap ELF
         uses: actions/upload-artifact@v4
         with:
           name: pd-ps2-bootstrap
           path: build-ps2/pd-ps2-bootstrap.elf
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload alpha-trilerp diagnostic ELF
+        uses: actions/upload-artifact@v4
+        with:
+          name: pd-ps2-alpha-trilerp-diag
+          path: build-ps2-alpha-diag/pd-ps2-bootstrap.elf
           if-no-files-found: error
           retention-days: 14

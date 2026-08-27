@@ -24,6 +24,11 @@
 #define API_SCENE_STATUS_VERTEX_COUNT 12
 #define API_SCENE_UNTEXTURED_STRIDE 7
 
+#if defined(PERFECT_DARK_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT)
+#define API_SCENE_ALPHA_DIAG_STRIDE 16
+#define API_SCENE_ALPHA_DIAG_VERTICES 6
+#endif
+
 struct api_scene_vec3 {
     float x;
     float y;
@@ -83,6 +88,19 @@ static uint32_t sCheckerTexture[API_SCENE_TEXTURE_W * API_SCENE_TEXTURE_H]
 static float sCubeVbo[API_SCENE_DRAW_VERTEX_COUNT * API_SCENE_TEXTURED_STRIDE];
 static float sStatusVbo[API_SCENE_STATUS_VERTEX_COUNT * API_SCENE_UNTEXTURED_STRIDE];
 
+#if defined(PERFECT_DARK_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT)
+static uint32_t sAlphaDiagTexture0[API_SCENE_TEXTURE_W * API_SCENE_TEXTURE_H]
+    __attribute__((aligned(64)));
+static uint32_t sAlphaDiagTexture1[API_SCENE_TEXTURE_W * API_SCENE_TEXTURE_H]
+    __attribute__((aligned(64)));
+static uint32_t sAlphaDiagReference[API_SCENE_TEXTURE_W * API_SCENE_TEXTURE_H]
+    __attribute__((aligned(64)));
+static float sAlphaDiagGraphVbo[
+    API_SCENE_ALPHA_DIAG_VERTICES * API_SCENE_ALPHA_DIAG_STRIDE];
+static float sAlphaDiagReferenceVbo[
+    API_SCENE_ALPHA_DIAG_VERTICES * API_SCENE_TEXTURED_STRIDE];
+#endif
+
 static float clampfLocal(float v, float lo, float hi)
 {
     return v < lo ? lo : (v > hi ? hi : v);
@@ -113,6 +131,136 @@ static void buildCheckerTexture(void)
         }
     }
 }
+
+#if defined(PERFECT_DARK_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT)
+static uint32_t packRgba8(uint8_t r, uint8_t g, uint8_t b, uint8_t a)
+{
+    return (uint32_t)r | ((uint32_t)g << 8) |
+        ((uint32_t)b << 16) | ((uint32_t)a << 24);
+}
+
+static uint8_t gsModulateU8(uint8_t value, uint8_t factor)
+{
+    return (uint8_t)(((uint32_t)value * factor) >> 7);
+}
+
+static uint8_t gsLerpU8(uint8_t a, uint8_t b, uint8_t factor)
+{
+    const int delta = (int)b - (int)a;
+    int value = (int)a + delta * (int)factor / 128;
+    if (value < 0) value = 0;
+    if (value > 255) value = 255;
+    return (uint8_t)value;
+}
+
+static void buildAlphaDiagTextures(void)
+{
+    const uint8_t shadeRgb = 96u;
+    const uint8_t shadeAlpha = 48u;
+    for (int y = 0; y < API_SCENE_TEXTURE_H; ++y) {
+        for (int x = 0; x < API_SCENE_TEXTURE_W; ++x) {
+            const uint8_t rampX = (uint8_t)(x * 255 / (API_SCENE_TEXTURE_W - 1));
+            const uint8_t rampY = (uint8_t)(y * 255 / (API_SCENE_TEXTURE_H - 1));
+            const uint8_t checker = ((x >> 3) ^ (y >> 3)) & 1 ? 224u : 32u;
+            const uint8_t alpha0 = (uint8_t)((x * 3 + y * 5) & 0xff);
+            const uint8_t alpha1 = (uint8_t)(255u - ((x * 7 + y) & 0xff));
+            const uint8_t lod = (uint8_t)(x * 128 / (API_SCENE_TEXTURE_W - 1));
+            const uint8_t t0[4] = { rampX, checker, rampY, alpha0 };
+            const uint8_t t1[4] = {
+                (uint8_t)(255u - rampY),
+                rampX,
+                (uint8_t)(255u - checker),
+                alpha1,
+            };
+            uint8_t result[4];
+            for (int channel = 0; channel < 3; ++channel) {
+                result[channel] = gsLerpU8(
+                    gsModulateU8(t0[channel], shadeRgb),
+                    gsModulateU8(t1[channel], shadeRgb), lod);
+            }
+            const uint8_t alpha = gsLerpU8(
+                gsModulateU8(t0[3], shadeAlpha),
+                gsModulateU8(t1[3], shadeAlpha), lod);
+            result[3] = alpha > 127u ? 255u : (uint8_t)(alpha * 2u);
+
+            const int index = y * API_SCENE_TEXTURE_W + x;
+            sAlphaDiagTexture0[index] =
+                packRgba8(t0[0], t0[1], t0[2], t0[3]);
+            sAlphaDiagTexture1[index] =
+                packRgba8(t1[0], t1[1], t1[2], t1[3]);
+            sAlphaDiagReference[index] = packRgba8(
+                result[0], result[1], result[2], result[3]);
+        }
+    }
+}
+
+static void writeAlphaDiagGraphVertex(float **dst, float x, float y,
+    float u, float v, float lod)
+{
+    float *p = *dst;
+    *p++ = x; *p++ = y; *p++ = 0.25f; *p++ = 1.0f;
+    *p++ = u; *p++ = v;
+    *p++ = u; *p++ = v;
+    *p++ = lod; *p++ = lod; *p++ = lod; *p++ = lod;
+    *p++ = 0.75f; *p++ = 0.75f; *p++ = 0.75f; *p++ = 0.75f;
+    *dst = p;
+}
+
+static void writeAlphaDiagReferenceVertex(float **dst, float x, float y,
+    float u, float v)
+{
+    float *p = *dst;
+    *p++ = x; *p++ = y; *p++ = 0.25f; *p++ = 1.0f;
+    *p++ = u; *p++ = v;
+    *p++ = 1.0f; *p++ = 1.0f; *p++ = 1.0f; *p++ = 1.0f;
+    *dst = p;
+}
+
+static void buildAlphaDiagVbos(void)
+{
+    static const uint8_t indices[6] = { 0, 1, 2, 0, 2, 3 };
+    static const float uv[4][2] = {
+        { 0.0f, 1.0f }, { 1.0f, 1.0f },
+        { 1.0f, 0.0f }, { 0.0f, 0.0f },
+    };
+    static const float graphPosition[4][2] = {
+        { -0.92f, -0.62f }, { -0.06f, -0.62f },
+        { -0.06f,  0.62f }, { -0.92f,  0.62f },
+    };
+    static const float referencePosition[4][2] = {
+        { 0.06f, -0.62f }, { 0.92f, -0.62f },
+        { 0.92f,  0.62f }, { 0.06f,  0.62f },
+    };
+    float *graph = sAlphaDiagGraphVbo;
+    float *reference = sAlphaDiagReferenceVbo;
+    for (int i = 0; i < 6; ++i) {
+        const uint8_t index = indices[i];
+        writeAlphaDiagGraphVertex(&graph,
+            graphPosition[index][0], graphPosition[index][1],
+            uv[index][0], uv[index][1], uv[index][0]);
+        writeAlphaDiagReferenceVertex(&reference,
+            referencePosition[index][0], referencePosition[index][1],
+            uv[index][0], uv[index][1]);
+    }
+}
+
+static uint64_t alphaDiagShaderId(void)
+{
+    return
+        ((uint64_t)SHADER_TEXEL1 << 0) |
+        ((uint64_t)SHADER_TEXEL0 << 4) |
+        ((uint64_t)SHADER_INPUT_1 << 8) |
+        ((uint64_t)SHADER_TEXEL0 << 12) |
+        ((uint64_t)SHADER_TEXEL1 << 16) |
+        ((uint64_t)SHADER_TEXEL0 << 20) |
+        ((uint64_t)SHADER_INPUT_1 << 24) |
+        ((uint64_t)SHADER_TEXEL0 << 28) |
+        ((uint64_t)SHADER_COMBINED << 32) |
+        ((uint64_t)SHADER_INPUT_2 << 40) |
+        ((uint64_t)SHADER_COMBINED << 48) |
+        ((uint64_t)SHADER_INPUT_2 << 56);
+}
+#endif
 
 static struct api_scene_clip_vertex projectVertex(
     const struct api_scene_vec3 *source,
@@ -344,7 +492,20 @@ bool ps2GfxApiSceneRun(int romStatus)
     struct ShaderProgram *untexturedShader =
         api->create_and_load_new_shader(untexturedShaderId, 0);
 
-    if (!texturedShader || !untexturedShader) {
+#if defined(PERFECT_DARK_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT)
+    const uint64_t alphaDiagId = alphaDiagShaderId();
+    const uint32_t alphaDiagOptions = SHADER_OPT_2CYC | SHADER_OPT_ALPHA;
+    struct ShaderProgram *alphaDiagShader =
+        api->create_and_load_new_shader(alphaDiagId, alphaDiagOptions);
+    struct ShaderProgram *alphaDiagReferenceShader =
+        api->create_and_load_new_shader(texturedShaderId, SHADER_OPT_ALPHA);
+#endif
+
+    if (!texturedShader || !untexturedShader
+#if defined(PERFECT_DARK_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT)
+        || !alphaDiagShader || !alphaDiagReferenceShader
+#endif
+    ) {
         sysLogPrintf(LOG_ERROR, "GfxAPI scene: failed to create baseline combiner shaders");
         ps2LogCheckpoint();
         return false;
@@ -363,6 +524,35 @@ bool ps2GfxApiSceneRun(int romStatus)
         API_SCENE_TEXTURE_W, API_SCENE_TEXTURE_H, false);
     api->set_sampler_parameters(0, false, 2, 2, false);
 
+#if defined(PERFECT_DARK_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT)
+    buildAlphaDiagTextures();
+    buildAlphaDiagVbos();
+    const uint32_t alphaDiagTexture0 = api->new_texture();
+    const uint32_t alphaDiagTexture1 = api->new_texture();
+    const uint32_t alphaDiagReferenceTexture = api->new_texture();
+    if (!alphaDiagTexture0 || !alphaDiagTexture1 ||
+        !alphaDiagReferenceTexture) {
+        sysLogPrintf(LOG_ERROR,
+            "GfxAPI scene: failed to allocate alpha-trilerp A/B textures");
+        ps2LogCheckpoint();
+        return false;
+    }
+
+    api->select_texture(0, alphaDiagTexture0, false);
+    api->upload_texture((const uint8_t *)sAlphaDiagTexture0,
+        API_SCENE_TEXTURE_W, API_SCENE_TEXTURE_H, false);
+    api->set_sampler_parameters(0, false, 2, 2, false);
+    api->select_texture(0, alphaDiagTexture1, false);
+    api->upload_texture((const uint8_t *)sAlphaDiagTexture1,
+        API_SCENE_TEXTURE_W, API_SCENE_TEXTURE_H, false);
+    api->set_sampler_parameters(0, false, 2, 2, false);
+    api->select_texture(0, alphaDiagReferenceTexture, false);
+    api->upload_texture((const uint8_t *)sAlphaDiagReference,
+        API_SCENE_TEXTURE_W, API_SCENE_TEXTURE_H, false);
+    api->set_sampler_parameters(0, false, 2, 2, false);
+    api->select_texture(0, textureId, false);
+#endif
+
     api->set_depth_range(0.0f, 1.0f);
     api->set_depth_mode(true, true, true, false, 0);
     api->set_viewport(0, 0, width, height);
@@ -380,6 +570,10 @@ bool ps2GfxApiSceneRun(int romStatus)
         "GfxAPI scene: MODULATEIA alpha-cutout smoke expects transparent checker cells to be discarded");
     sysLogPrintf(LOG_NOTE,
         "GfxAPI scene: DS2 smoke right=rotate left=move/zoom R1=fire+rumble L1=precision Cross=reset");
+#if defined(PERFECT_DARK_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT)
+    sysLogPrintf(LOG_WARNING,
+        "GfxAPI scene: Select toggles unvalidated alpha-trilerp A/B; left=GS graph right=CPU reference");
+#endif
     sysLogPrintf(LOG_NOTE,
         "GfxAPI scene: entering clip-space VBO -> Fast3D adapter -> GS core frame loop");
     ps2LogCheckpoint();
@@ -395,6 +589,9 @@ bool ps2GfxApiSceneRun(int romStatus)
     float offsetX = 0.0f;
     float cameraDistance = 4.6f;
     const float aspect = (float)width / (float)height;
+#if defined(PERFECT_DARK_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT)
+    bool alphaDiagActive = false;
+#endif
 
     for (;;) {
         wapi->handle_events();
@@ -411,6 +608,15 @@ bool ps2GfxApiSceneRun(int romStatus)
         const struct Ps2ShooterControls *controls = ps2ShooterControlsGet(0);
 
         if (controls && controls->connected) {
+#if defined(PERFECT_DARK_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT)
+            if (controls->pressed & PS2_ACTION_DEBUG) {
+                alphaDiagActive = !alphaDiagActive;
+                sysLogPrintf(LOG_WARNING,
+                    "GfxAPI alpha-trilerp A/B %s: left=GS graph right=CPU reference",
+                    alphaDiagActive ? "enabled" : "disabled");
+                ps2LogCheckpoint();
+            }
+#endif
             if (controls->pressed & PS2_ACTION_USE) {
                 sinY = 0.0f;
                 cosY = 1.0f;
@@ -446,15 +652,43 @@ bool ps2GfxApiSceneRun(int romStatus)
         buildCubeVbo(sinY, cosY, sinX, cosX, aspect, offsetX, cameraDistance);
 
         api->start_frame();
+        api->set_depth_mode(true, true, true, false, 0);
         api->clear_framebuffer(true, true);
 
         api->load_shader(untexturedShader);
         api->draw_triangles(sStatusVbo,
             sizeof(sStatusVbo) / sizeof(sStatusVbo[0]), API_SCENE_STATUS_VERTEX_COUNT / 3);
 
-        api->load_shader(texturedShader);
-        api->draw_triangles(sCubeVbo,
-            sizeof(sCubeVbo) / sizeof(sCubeVbo[0]), API_SCENE_DRAW_VERTEX_COUNT / 3);
+#if defined(PERFECT_DARK_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT)
+        if (alphaDiagActive) {
+            api->set_depth_mode(false, false, false, false, 0);
+            api->set_use_alpha(true, false);
+            api->select_texture(0, alphaDiagTexture0, false);
+            api->set_sampler_parameters(0, false, 2, 2, false);
+            api->select_texture(1, alphaDiagTexture1, false);
+            api->set_sampler_parameters(1, false, 2, 2, false);
+            api->load_shader(alphaDiagShader);
+            api->draw_triangles(sAlphaDiagGraphVbo,
+                sizeof(sAlphaDiagGraphVbo) / sizeof(sAlphaDiagGraphVbo[0]),
+                API_SCENE_ALPHA_DIAG_VERTICES / 3);
+
+            api->select_texture(0, alphaDiagReferenceTexture, false);
+            api->set_sampler_parameters(0, false, 2, 2, false);
+            api->load_shader(alphaDiagReferenceShader);
+            api->draw_triangles(sAlphaDiagReferenceVbo,
+                sizeof(sAlphaDiagReferenceVbo) /
+                    sizeof(sAlphaDiagReferenceVbo[0]),
+                API_SCENE_ALPHA_DIAG_VERTICES / 3);
+        } else
+#endif
+        {
+            api->select_texture(0, textureId, false);
+            api->set_sampler_parameters(0, false, 2, 2, false);
+            api->load_shader(texturedShader);
+            api->draw_triangles(sCubeVbo,
+                sizeof(sCubeVbo) / sizeof(sCubeVbo[0]),
+                API_SCENE_DRAW_VERTEX_COUNT / 3);
+        }
 
         api->end_frame();
         wapi->swap_buffers_begin();

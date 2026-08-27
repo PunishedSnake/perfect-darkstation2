@@ -332,6 +332,8 @@ This semantic layer should remain backend-independent where possible. PS2-specif
 - the graph first captures `TEXEL0.a * SHADE.a` and `TEXEL1.a * SHADE.a`, exposes each high byte through the PSMT8H identity view, and interpolates the scalar result by vertex LOD into the red lane of the scalar target. It separately reconstructs RGB as the existing opaque two-pass trilerp, copies scalar red into result alpha, then samples the completed RGBA target once through the caller's alpha/depth state;
 - workspace sampling converts integer-translated screen coordinates to normalized GS `STQ` by the fixed 128x64 target extent. A host test locks origin, center and far-edge mappings so the diagnostic path cannot silently confuse texel-space `UV` with normalized `STQ`;
 - **CURRENT IMPLEMENTATION:** normal builds still classify this recipe as unsupported because the low-lane channel shuffle has not passed its required real-hardware image A/B. `PD_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT=ON` is an explicit diagnostic opt-in that promotes only this classified graph; it is not the default gameplay configuration;
+- **CURRENT IMPLEMENTATION:** the opt-in bootstrap scene binds two deterministic RGBA8 inputs plus a CPU-precomputed reference. `Select` toggles the test, with the tiled GS graph on the left and the reference on the right. The reference models GS `>>7` modulation, vertex LOD and the adapter's 0..0x80 alpha convention, making channel swaps, clamp errors and gross quantization drift visible without reaching a game-level material;
+- CI cross-builds this opt-in configuration separately and publishes `pd-ps2-alpha-trilerp-diag`, keeping the ordinary `pd-ps2-bootstrap` artifact on the validation-gated renderer;
 - remaining dependent second-cycle equations remain explicit unsupported recipes, rather than receiving a visual approximation;
 - the fixed shader table holds 128 mode/option combinations so real level traversal does not exhaust the original 32-slot bring-up pool;
 - gsKit remains only in one-time CRT/screen bootstrap, system framebuffer/Z setup and block-rounded texture-size calculation;
@@ -485,6 +487,7 @@ PCSX2 is useful for correctness, packet/state inspection and fast iteration. It 
 - use the implemented PSMT8H plus identity-CLUT view when a pass consumes the high alpha byte of a CT32 target;
 - use the implemented page-local PSMT8 red-to-alpha blit to assemble a CT32 color result with the separately reconstructed alpha lane;
 - run the host-tested 128x64 tiled `MODULATEIA2` graph with `PD_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT=ON`, prove the channel-shuffle image on real hardware, then remove the validation gate. Individual framebuffer, view and writeback primitives are not treated as sufficient proof;
+- capture the bootstrap A/B screen after pressing `Select`: left is the live GS graph and right is the deterministic CPU reference. Record console model, video mode and build commit with the comparison because emulator agreement alone does not promote the gate;
 - extend the same explicit planning model to the remaining `CUSTOM_20..26`; these are still rejected until their framebuffer/depth/alpha equations are exact;
 - log unsupported recipes instead of silently approximating them.
 
