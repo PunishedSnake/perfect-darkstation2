@@ -115,3 +115,15 @@ extern "C" bool ps2GfxGetPassGraphTile(
     tile->height = y1 - y0;
     return true;
 }
+
+extern "C" struct Ps2GfxPassGraphSample ps2GfxMapPassGraphSample(
+    float screen_x, float screen_y, int tile_origin_x, int tile_origin_y)
+{
+    const struct Ps2GfxPassGraphSample sample = {
+        (screen_x - (float)tile_origin_x) /
+            (float)PS2_GFX_PASS_GRAPH_TILE_WIDTH,
+        (screen_y - (float)tile_origin_y) /
+            (float)PS2_GFX_PASS_GRAPH_TILE_HEIGHT,
+    };
+    return sample;
+}

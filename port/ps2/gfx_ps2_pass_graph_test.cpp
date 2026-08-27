@@ -60,11 +60,28 @@ static void test_rejects_empty_or_outside_geometry(void)
     assert(!ps2GfxDescribePassGraphTiles(&outside, &clip, &tiles));
 }
 
+static void test_maps_screen_pixels_to_normalized_stq(void)
+{
+    struct Ps2GfxPassGraphSample sample =
+        ps2GfxMapPassGraphSample(192.0f, 96.0f, 128, 64);
+    assert(sample.s == 0.5f);
+    assert(sample.t == 0.5f);
+
+    sample = ps2GfxMapPassGraphSample(128.0f, 64.0f, 128, 64);
+    assert(sample.s == 0.0f);
+    assert(sample.t == 0.0f);
+
+    sample = ps2GfxMapPassGraphSample(256.0f, 128.0f, 128, 64);
+    assert(sample.s == 1.0f);
+    assert(sample.t == 1.0f);
+}
+
 int main(void)
 {
     test_clips_and_partitions_large_triangle();
     test_respects_nonzero_scissor();
     test_rejects_empty_or_outside_geometry();
+    test_maps_screen_pixels_to_normalized_stq();
     puts("gfx_ps2_pass_graph tests passed");
     return 0;
 }

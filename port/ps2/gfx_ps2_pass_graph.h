@@ -31,6 +31,11 @@ struct Ps2GfxPassGraphTiles {
     uint32_t rows;
 };
 
+struct Ps2GfxPassGraphSample {
+    float s;
+    float t;
+};
+
 /*
  * Clip a screen-space triangle to the active framebuffer/scissor rectangle and
  * describe the fixed-size workspace tiles that cover its conservative pixel
@@ -44,6 +49,10 @@ bool ps2GfxDescribePassGraphTiles(
 bool ps2GfxGetPassGraphTile(
     const struct Ps2GfxPassGraphTiles *tiles, uint32_t index,
     struct Ps2GfxPassGraphRect *tile);
+
+/* GS STQ is normalized; convert a screen point into one workspace texture. */
+struct Ps2GfxPassGraphSample ps2GfxMapPassGraphSample(
+    float screen_x, float screen_y, int tile_origin_x, int tile_origin_y);
 
 #ifdef __cplusplus
 }

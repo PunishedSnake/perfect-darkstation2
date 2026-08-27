@@ -843,10 +843,13 @@ static void ps2_make_alpha_trilerp_workspace_triangle(
         const struct Ps2AlphaTrilerpVertex *vertex = &source[i];
         const float local_x = vertex->x - (float)origin_x;
         const float local_y = vertex->y - (float)origin_y;
+        const struct Ps2GfxPassGraphSample sample =
+            ps2GfxMapPassGraphSample(
+                vertex->x, vertex->y, origin_x, origin_y);
         output[i].rgbaq = ps2_pack_rgbaq(
             0x80u, 0x80u, 0x80u,
             use_vertex_lod ? vertex->lod : alpha, 1.0f);
-        output[i].st = ps2_pack_st(local_x, local_y);
+        output[i].st = ps2_pack_st(sample.s, sample.t);
         output[i].xyz2 = ps2_pack_xyz2(
             screen_position ? vertex->x : local_x,
             screen_position ? vertex->y : local_y,
