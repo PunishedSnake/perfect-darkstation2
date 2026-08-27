@@ -41,19 +41,47 @@ extern "C" bool ps2GsVramAllocatorInit(
 extern "C" bool ps2GsVramAllocatorAlloc(
     struct Ps2GsVramAllocator *allocator, uint32_t size, uint32_t *offset)
 {
+    return ps2GsVramAllocatorAllocAligned(
+        allocator, size, PS2_GS_VRAM_BLOCK_BYTES, offset);
+}
+
+extern "C" bool ps2GsVramAllocatorAllocAligned(
+    struct Ps2GsVramAllocator *allocator, uint32_t size,
+    uint32_t alignment, uint32_t *offset)
+{
     if (!allocator || !offset || size == 0u ||
-        size > PS2_GS_VRAM_BYTES - (PS2_GS_VRAM_BLOCK_BYTES - 1u)) {
+        size > PS2_GS_VRAM_BYTES - (PS2_GS_VRAM_BLOCK_BYTES - 1u) ||
+        alignment < PS2_GS_VRAM_BLOCK_BYTES ||
+        alignment > PS2_GS_VRAM_BYTES ||
+        (alignment & (alignment - 1u)) != 0u) {
         return false;
     }
 
     const uint32_t aligned_size = ps2GsVramAlignUp(size);
     uint16_t best = UINT16_MAX;
     uint32_t best_size = UINT32_MAX;
+    uint32_t best_offset = 0u;
     for (uint16_t i = 0; i < allocator->free_count; ++i) {
+        const uint32_t range_offset = allocator->free_ranges[i].offset;
         const uint32_t range_size = allocator->free_ranges[i].size;
-        if (range_size >= aligned_size && range_size < best_size) {
+        const uint32_t aligned_offset =
+            (range_offset + alignment - 1u) & ~(alignment - 1u);
+        if (aligned_offset < range_offset) {
+            continue;
+        }
+        const uint32_t prefix = aligned_offset - range_offset;
+        if (prefix > range_size || aligned_size > range_size - prefix) {
+            continue;
+        }
+        const uint32_t suffix = range_size - prefix - aligned_size;
+        if (prefix != 0u && suffix != 0u &&
+            allocator->free_count >= PS2_GS_VRAM_MAX_FREE_RANGES) {
+            continue;
+        }
+        if (range_size < best_size) {
             best = i;
             best_size = range_size;
+            best_offset = aligned_offset;
         }
     }
 
@@ -62,14 +90,31 @@ extern "C" bool ps2GsVramAllocatorAlloc(
     }
 
     struct Ps2GsVramRange *range = &allocator->free_ranges[best];
-    *offset = range->offset;
-    range->offset += aligned_size;
-    range->size -= aligned_size;
-    if (range->size == 0u) {
+    const uint32_t range_offset = range->offset;
+    const uint32_t range_size = range->size;
+    const uint32_t prefix = best_offset - range_offset;
+    const uint32_t suffix = range_size - prefix - aligned_size;
+    *offset = best_offset;
+
+    if (prefix == 0u && suffix == 0u) {
         for (uint16_t i = best + 1u; i < allocator->free_count; ++i) {
             allocator->free_ranges[i - 1u] = allocator->free_ranges[i];
         }
         --allocator->free_count;
+    } else if (prefix == 0u) {
+        range->offset = best_offset + aligned_size;
+        range->size = suffix;
+    } else if (suffix == 0u) {
+        range->size = prefix;
+    } else {
+        for (uint16_t i = allocator->free_count; i > best + 1u; --i) {
+            allocator->free_ranges[i] = allocator->free_ranges[i - 1u];
+        }
+        range->size = prefix;
+        allocator->free_ranges[best + 1u].offset =
+            best_offset + aligned_size;
+        allocator->free_ranges[best + 1u].size = suffix;
+        ++allocator->free_count;
     }
     return true;
 }

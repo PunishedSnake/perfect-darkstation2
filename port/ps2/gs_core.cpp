@@ -7,12 +7,14 @@
 
 #include "gs_core.h"
 #include "gs_native_queue.h"
+#include "gs_render_target_layout.h"
 #include "gs_texture_convert.h"
 #include "gs_vram_allocator.h"
 #include "log_ps2.h"
 #include "system.h"
 
 #define PS2_GS_MAX_TEXTURES 64
+#define PS2_GS_MAX_RENDER_TARGETS 4
 #define PS2_GS_MAX_RETIRED_BLOCKS (PS2_GS_MAX_TEXTURES * 2)
 #define PS2_GS_NATIVE_QUEUE_QW 16384u
 #define PS2_GS_SHARED_CLUT_COUNT 4u
@@ -42,8 +44,16 @@ struct Ps2GsSharedClut {
     uint32_t bytes;
 };
 
+struct Ps2GsRenderTargetSlot {
+    bool used;
+    uint32_t vram;
+    struct Ps2GsRenderTargetLayout layout;
+};
+
 static GSGLOBAL *s_gs;
 static struct Ps2GsTextureSlot s_textures[PS2_GS_MAX_TEXTURES];
+static struct Ps2GsRenderTargetSlot
+    s_render_targets[PS2_GS_MAX_RENDER_TARGETS];
 static struct Ps2GsVramAllocator s_vram_allocator;
 static struct Ps2GsRetiredVramBlock
     s_retired_vram[PS2_GS_MAX_RETIRED_BLOCKS];
@@ -57,6 +67,7 @@ static bool s_texture_alpha;
 static bool s_native_submit_failed;
 static bool s_native_finish_failed;
 static bool s_native_present_failed;
+static Ps2GsRenderTargetHandle s_active_render_target;
 static uint32_t s_loaded_clut_vram;
 static int s_loaded_clut_psm;
 static uint8_t s_fog_r;
@@ -76,6 +87,53 @@ static struct Ps2GsTextureSlot *ps2GsCoreTextureSlot(Ps2GsTextureHandle handle)
 
     struct Ps2GsTextureSlot *slot = &s_textures[handle - 1];
     return slot->used ? slot : NULL;
+}
+
+static struct Ps2GsRenderTargetSlot *ps2GsCoreRenderTargetSlot(
+    Ps2GsRenderTargetHandle handle)
+{
+    if (handle == PS2_GS_RENDER_TARGET_DEFAULT ||
+        handle > PS2_GS_MAX_RENDER_TARGETS) {
+        return NULL;
+    }
+
+    struct Ps2GsRenderTargetSlot *slot = &s_render_targets[handle - 1u];
+    return slot->used ? slot : NULL;
+}
+
+static uint32_t ps2GsCoreTargetWidth(void)
+{
+    struct Ps2GsRenderTargetSlot *slot =
+        ps2GsCoreRenderTargetSlot(s_active_render_target);
+    return slot ? slot->layout.width : (uint32_t)s_gs->Width;
+}
+
+static uint32_t ps2GsCoreTargetHeight(void)
+{
+    struct Ps2GsRenderTargetSlot *slot =
+        ps2GsCoreRenderTargetSlot(s_active_render_target);
+    return slot ? slot->layout.height : (uint32_t)s_gs->Height;
+}
+
+static uint32_t ps2GsCoreTargetVram(void)
+{
+    struct Ps2GsRenderTargetSlot *slot =
+        ps2GsCoreRenderTargetSlot(s_active_render_target);
+    return slot ? slot->vram :
+        s_gs->ScreenBuffer[s_gs->ActiveBuffer & 1u];
+}
+
+static uint32_t ps2GsCoreTargetFbw(void)
+{
+    struct Ps2GsRenderTargetSlot *slot =
+        ps2GsCoreRenderTargetSlot(s_active_render_target);
+    return slot ? slot->layout.fbw : (uint32_t)s_gs->Width / 64u;
+}
+
+static int ps2GsCoreTargetPsm(void)
+{
+    return s_active_render_target == PS2_GS_RENDER_TARGET_DEFAULT
+        ? s_gs->PSM : GS_PSM_CT32;
 }
 
 static bool ps2GsCoreReclaimRetiredVram(void)
@@ -189,6 +247,8 @@ static void ps2GsCoreWriteReg(struct Ps2GsPackedReg *dst, uint64_t value, uint64
 static uint64_t ps2GsCoreCurrentTestValue(int ztst_override)
 {
     const int ztst = ztst_override >= 0 ? ztst_override : s_gs->Test->ZTST;
+    const int zte = s_active_render_target == PS2_GS_RENDER_TARGET_DEFAULT
+        ? s_gs->Test->ZTE : 0;
     return GS_SETREG_TEST(
         s_gs->Test->ATE,
         s_gs->Test->ATST,
@@ -196,7 +256,7 @@ static uint64_t ps2GsCoreCurrentTestValue(int ztst_override)
         s_gs->Test->AFAIL,
         s_gs->Test->DATE,
         s_gs->Test->DATM,
-        s_gs->Test->ZTE,
+        zte,
         ztst);
 }
 
@@ -212,7 +272,8 @@ static void ps2GsCoreEmitTest(void)
 
 static void ps2GsCoreEmitZbufWriteMask(void)
 {
-    if (!s_gs->ZBuffering) {
+    if (!s_gs->ZBuffering ||
+        s_active_render_target != PS2_GS_RENDER_TARGET_DEFAULT) {
         return;
     }
 
@@ -230,7 +291,7 @@ static uint32_t ps2GsCoreAlphaFrameMask(void)
         return 0;
     }
 
-    switch (s_gs->PSM) {
+    switch (ps2GsCoreTargetPsm()) {
         case PS2_GS_PSM_CT32:
             return 0xff000000u;
         case PS2_GS_PSM_CT16:
@@ -251,9 +312,9 @@ static void ps2GsCoreEmitFrameMask(void)
 
     ps2GsCoreWriteReg(p,
         GS_SETREG_FRAME_1(
-            s_gs->ScreenBuffer[s_gs->ActiveBuffer & 1u] / 8192u,
-            s_gs->Width / 64u,
-            s_gs->PSM,
+            ps2GsCoreTargetVram() / PS2_GS_FRAMEBUFFER_ALIGNMENT,
+            ps2GsCoreTargetFbw(),
+            ps2GsCoreTargetPsm(),
             ps2GsCoreAlphaFrameMask()),
         GS_FRAME_1 + s_gs->PrimContext);
 }
@@ -321,9 +382,23 @@ static void ps2GsCoreEmitFullScissor(void)
     struct Ps2GsPackedReg *p = ps2GsCoreReserve(1);
     if (p) {
         ps2GsCoreWriteReg(p,
-            GS_SETREG_SCISSOR(0, s_gs->Width - 1, 0, s_gs->Height - 1),
+            GS_SETREG_SCISSOR(
+                0, ps2GsCoreTargetWidth() - 1u,
+                0, ps2GsCoreTargetHeight() - 1u),
             GS_SCISSOR_1 + s_gs->PrimContext);
     }
+}
+
+static void ps2GsCoreEmitRenderTargetState(void)
+{
+    if (!s_frame_building) {
+        return;
+    }
+
+    ps2GsCoreEmitFrameMask();
+    ps2GsCoreEmitFullScissor();
+    ps2GsCoreEmitTest();
+    ps2GsCoreEmitZbufWriteMask();
 }
 
 static int ps2GsCoreTextureExponent(uint32_t size)
@@ -401,11 +476,13 @@ extern "C" bool ps2GsCoreInit(const struct Ps2GsCreateInfo *info)
     s_native_submit_failed = false;
     s_native_finish_failed = false;
     s_native_present_failed = false;
+    s_active_render_target = PS2_GS_RENDER_TARGET_DEFAULT;
     ps2GsCoreInvalidateClutCache();
     s_fog_r = 0;
     s_fog_g = 0;
     s_fog_b = 0;
     memset(s_textures, 0, sizeof(s_textures));
+    memset(s_render_targets, 0, sizeof(s_render_targets));
     memset(s_retired_vram, 0, sizeof(s_retired_vram));
     memset(s_shared_cluts, 0, sizeof(s_shared_cluts));
     s_retired_vram_count = 0;
@@ -582,6 +659,9 @@ extern "C" void ps2GsCorePresent(void)
             ps2LogCheckpoint();
             s_native_present_failed = true;
         }
+    } else {
+        /* Native present materializes the default FRAME/SCISSOR registers. */
+        s_active_render_target = PS2_GS_RENDER_TARGET_DEFAULT;
     }
 }
 
@@ -598,7 +678,9 @@ extern "C" void ps2GsCoreClear(bool clear_color, bool clear_depth)
      * Fog is explicitly disabled for the clear primitive so persistent material
      * state from the previous frame cannot tint the render target.
      */
-    const uint32_t slices = ((uint32_t)s_gs->Width + 63u) / 64u;
+    const uint32_t target_width = ps2GsCoreTargetWidth();
+    const uint32_t target_height = ps2GsCoreTargetHeight();
+    const uint32_t slices = (target_width + 63u) / 64u;
     const uint32_t register_count = 4u + slices * 2u;
     struct Ps2GsPackedReg *p = ps2GsCoreReserve(register_count);
     if (!p) {
@@ -628,12 +710,13 @@ extern "C" void ps2GsCoreClear(bool clear_color, bool clear_depth)
     for (uint32_t slice = 0; slice < slices; ++slice) {
         const int x0 = (int)(slice * 64u);
         int x1 = x0 + 64;
-        if (x1 > s_gs->Width) {
-            x1 = s_gs->Width;
+        if ((uint32_t)x1 > target_width) {
+            x1 = (int)target_width;
         }
 
         ps2GsCoreWriteReg(&p[out++], ps2GsCoreMakeXyz2(x0, 0, 0), GS_XYZ2);
-        ps2GsCoreWriteReg(&p[out++], ps2GsCoreMakeXyz2(x1, s_gs->Height, 0), GS_XYZ2);
+        ps2GsCoreWriteReg(&p[out++],
+            ps2GsCoreMakeXyz2(x1, (int)target_height, 0), GS_XYZ2);
     }
 
     ps2GsCoreWriteReg(&p[out++],
@@ -654,8 +737,10 @@ extern "C" void ps2GsCoreSetScissor(int x, int y, int width, int height)
 
     if (x0 < 0) x0 = 0;
     if (y0 < 0) y0 = 0;
-    if (x1 >= s_gs->Width) x1 = s_gs->Width - 1;
-    if (y1 >= s_gs->Height) y1 = s_gs->Height - 1;
+    const int target_width = (int)ps2GsCoreTargetWidth();
+    const int target_height = (int)ps2GsCoreTargetHeight();
+    if (x1 >= target_width) x1 = target_width - 1;
+    if (y1 >= target_height) y1 = target_height - 1;
 
     if (!s_frame_building || x0 > x1 || y0 > y1) {
         return;
@@ -761,6 +846,126 @@ extern "C" void ps2GsCoreSetTextureClamp(uint32_t cms, uint32_t cmt)
     if (s_frame_building) {
         ps2GsCoreEmitClamp();
     }
+}
+
+extern "C" Ps2GsRenderTargetHandle ps2GsCoreCreateRenderTarget(
+    uint32_t width, uint32_t height)
+{
+    if (!s_gs) {
+        return PS2_GS_RENDER_TARGET_DEFAULT;
+    }
+
+    struct Ps2GsRenderTargetLayout layout;
+    if (!ps2GsDescribeCt32RenderTarget(width, height, &layout)) {
+        return PS2_GS_RENDER_TARGET_DEFAULT;
+    }
+
+    uint32_t slot_index = PS2_GS_MAX_RENDER_TARGETS;
+    for (uint32_t i = 0; i < PS2_GS_MAX_RENDER_TARGETS; ++i) {
+        if (!s_render_targets[i].used) {
+            slot_index = i;
+            break;
+        }
+    }
+    if (slot_index == PS2_GS_MAX_RENDER_TARGETS) {
+        sysLogPrintf(LOG_ERROR,
+            "GS core: render-target table exhausted (%u)",
+            (unsigned int)PS2_GS_MAX_RENDER_TARGETS);
+        ps2LogCheckpoint();
+        return PS2_GS_RENDER_TARGET_DEFAULT;
+    }
+
+    uint32_t vram = 0u;
+    if (!ps2GsVramAllocatorAllocAligned(&s_vram_allocator,
+            layout.bytes, PS2_GS_FRAMEBUFFER_ALIGNMENT, &vram)) {
+        if (!ps2GsCoreDrainAndFence() ||
+            !ps2GsVramAllocatorAllocAligned(&s_vram_allocator,
+                layout.bytes, PS2_GS_FRAMEBUFFER_ALIGNMENT, &vram)) {
+            struct Ps2GsVramStats stats;
+            ps2GsVramAllocatorGetStats(&s_vram_allocator, &stats);
+            sysLogPrintf(LOG_ERROR,
+                "GS core: CT32 render-target allocation failed size=%u "
+                "(%ux%u) free=%u largest=%u",
+                layout.bytes, width, height,
+                stats.free_bytes, stats.largest_free_bytes);
+            ps2LogCheckpoint();
+            return PS2_GS_RENDER_TARGET_DEFAULT;
+        }
+    }
+
+    struct Ps2GsRenderTargetSlot *slot = &s_render_targets[slot_index];
+    memset(slot, 0, sizeof(*slot));
+    slot->used = true;
+    slot->vram = vram;
+    slot->layout = layout;
+    sysLogPrintf(LOG_NOTE,
+        "GS core: CT32 render target id=%u vram=%08x size=%u (%ux%u FBW=%u)",
+        (unsigned int)(slot_index + 1u), vram, layout.bytes,
+        width, height, layout.fbw);
+    ps2LogCheckpoint();
+    return (Ps2GsRenderTargetHandle)(slot_index + 1u);
+}
+
+extern "C" bool ps2GsCoreBindRenderTarget(
+    Ps2GsRenderTargetHandle handle)
+{
+    if (!s_gs || !ps2GsCoreRenderTargetSlot(handle)) {
+        return false;
+    }
+
+    s_active_render_target = handle;
+    ps2GsCoreEmitRenderTargetState();
+    return true;
+}
+
+extern "C" void ps2GsCoreBindDefaultRenderTarget(void)
+{
+    if (!s_gs) {
+        return;
+    }
+
+    s_active_render_target = PS2_GS_RENDER_TARGET_DEFAULT;
+    ps2GsCoreEmitRenderTargetState();
+}
+
+extern "C" bool ps2GsCoreReleaseRenderTarget(
+    Ps2GsRenderTargetHandle handle)
+{
+    struct Ps2GsRenderTargetSlot *slot = ps2GsCoreRenderTargetSlot(handle);
+    if (!slot || handle == s_active_render_target) {
+        return false;
+    }
+    if (!ps2GsCoreEnsureRetireCapacity(1u)) {
+        sysLogPrintf(LOG_ERROR,
+            "GS core: render-target retirement fence failed id=%u",
+            (unsigned int)handle);
+        ps2LogCheckpoint();
+        return false;
+    }
+
+    ps2GsCoreRetireVram(slot->vram, slot->layout.bytes);
+    memset(slot, 0, sizeof(*slot));
+    return true;
+}
+
+extern "C" uint32_t ps2GsCoreGetRenderTargetWidth(
+    Ps2GsRenderTargetHandle handle)
+{
+    if (handle == PS2_GS_RENDER_TARGET_DEFAULT) {
+        return s_gs ? (uint32_t)s_gs->Width : 0u;
+    }
+    struct Ps2GsRenderTargetSlot *slot = ps2GsCoreRenderTargetSlot(handle);
+    return slot ? slot->layout.width : 0u;
+}
+
+extern "C" uint32_t ps2GsCoreGetRenderTargetHeight(
+    Ps2GsRenderTargetHandle handle)
+{
+    if (handle == PS2_GS_RENDER_TARGET_DEFAULT) {
+        return s_gs ? (uint32_t)s_gs->Height : 0u;
+    }
+    struct Ps2GsRenderTargetSlot *slot = ps2GsCoreRenderTargetSlot(handle);
+    return slot ? slot->layout.height : 0u;
 }
 
 extern "C" Ps2GsTextureHandle ps2GsCoreCreateTexture(void)

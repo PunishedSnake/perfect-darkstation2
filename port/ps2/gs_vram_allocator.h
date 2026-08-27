@@ -18,11 +18,12 @@ struct Ps2GsVramRange {
 };
 
 /*
- * Fixed-metadata allocator for the GS-local texture pool.
+ * Fixed-metadata allocator for the project-owned GS-local resource pool.
  *
- * The system framebuffer/Z prefix is excluded at init. Texture allocations are
- * block-rounded to the 256-byte GS base-pointer unit. Free ranges stay sorted
- * and are coalesced immediately, avoiding heap allocation in the render path.
+ * The system framebuffer/Z prefix is excluded at init. Ordinary allocations
+ * are block-rounded to the 256-byte texture base-pointer unit; callers such as
+ * render targets can request a stricter power-of-two alignment. Free ranges
+ * stay sorted and are coalesced immediately without render-path heap use.
  */
 struct Ps2GsVramAllocator {
     uint32_t begin;
@@ -42,6 +43,9 @@ bool ps2GsVramAllocatorInit(struct Ps2GsVramAllocator *allocator,
     uint32_t begin, uint32_t end);
 bool ps2GsVramAllocatorAlloc(struct Ps2GsVramAllocator *allocator,
     uint32_t size, uint32_t *offset);
+/* Alignment must be a power of two and at least one 256-byte GS block. */
+bool ps2GsVramAllocatorAllocAligned(struct Ps2GsVramAllocator *allocator,
+    uint32_t size, uint32_t alignment, uint32_t *offset);
 bool ps2GsVramAllocatorFree(struct Ps2GsVramAllocator *allocator,
     uint32_t offset, uint32_t size);
 void ps2GsVramAllocatorGetStats(const struct Ps2GsVramAllocator *allocator,

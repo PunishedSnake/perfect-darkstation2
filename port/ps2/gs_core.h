@@ -44,6 +44,9 @@ struct Ps2GsCreateInfo {
 typedef uint16_t Ps2GsTextureHandle;
 #define PS2_GS_TEXTURE_INVALID ((Ps2GsTextureHandle)0)
 
+typedef uint8_t Ps2GsRenderTargetHandle;
+#define PS2_GS_RENDER_TARGET_DEFAULT ((Ps2GsRenderTargetHandle)0)
+
 /*
  * Packet-ready register record.
  *
@@ -95,6 +98,19 @@ void ps2GsCoreSetFog(bool enable, uint8_t r, uint8_t g, uint8_t b);
 /* TEX0.TCC is texture-function state, independent of primitive alpha blending. */
 void ps2GsCoreSetTextureAlpha(bool enable);
 void ps2GsCoreSetTextureClamp(uint32_t cms, uint32_t cmt);
+
+/*
+ * Transient CT32 render targets use page-rounded, 8192-byte-aligned VRAM.
+ * Offscreen targets intentionally disable Z until they are rebound to the
+ * default draw buffer; they do not alias the screen-sized system Z buffer.
+ */
+Ps2GsRenderTargetHandle ps2GsCoreCreateRenderTarget(
+    uint32_t width, uint32_t height);
+bool ps2GsCoreBindRenderTarget(Ps2GsRenderTargetHandle handle);
+void ps2GsCoreBindDefaultRenderTarget(void);
+bool ps2GsCoreReleaseRenderTarget(Ps2GsRenderTargetHandle handle);
+uint32_t ps2GsCoreGetRenderTargetWidth(Ps2GsRenderTargetHandle handle);
+uint32_t ps2GsCoreGetRenderTargetHeight(Ps2GsRenderTargetHandle handle);
 
 /*
  * Texture residency. Handles are logical GS resources backed by the native

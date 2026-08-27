@@ -66,6 +66,34 @@ static void test_bounds_and_exhaustion(void)
         PS2_GS_VRAM_BYTES, 0x100u));
 }
 
+static void test_framebuffer_alignment_split_and_coalescing(void)
+{
+    Ps2GsVramAllocator allocator{};
+    assert(ps2GsVramAllocatorInit(&allocator, 0x100u, 0x10000u));
+
+    uint32_t prefix = 0u;
+    assert(ps2GsVramAllocatorAlloc(&allocator, 0x100u, &prefix));
+    assert(prefix == 0x100u);
+
+    uint32_t framebuffer = 0u;
+    assert(ps2GsVramAllocatorAllocAligned(
+        &allocator, 0x2300u, 0x2000u, &framebuffer));
+    assert(framebuffer == 0x2000u);
+    assert((framebuffer & 0x1fffu) == 0u);
+    assert(allocator.free_count == 2u);
+
+    assert(ps2GsVramAllocatorFree(&allocator, framebuffer, 0x2300u));
+    assert(ps2GsVramAllocatorFree(&allocator, prefix, 0x100u));
+    assert(allocator.free_count == 1u);
+    assert(allocator.free_ranges[0].offset == 0x100u);
+    assert(allocator.free_ranges[0].size == 0xff00u);
+
+    assert(!ps2GsVramAllocatorAllocAligned(
+        &allocator, 0x100u, 0x1800u, &framebuffer));
+    assert(!ps2GsVramAllocatorAllocAligned(
+        &allocator, 0x100u, 0x80u, &framebuffer));
+}
+
 static void test_maximum_fragmentation_metadata(void)
 {
     constexpr uint32_t block_count = 256u;
@@ -98,6 +126,7 @@ int main(void)
     test_alignment_best_fit_and_coalescing();
     test_fragment_reuse_and_reject_double_free();
     test_bounds_and_exhaustion();
+    test_framebuffer_alignment_split_and_coalescing();
     test_maximum_fragmentation_metadata();
     puts("gs_vram_allocator tests passed");
     return 0;

@@ -303,6 +303,10 @@ This semantic layer should remain backend-independent where possible. PS2-specif
 - upload chains end with `TEXFLUSH` and do not insert GS `FINISH`;
 - draw/state submission serializes on GIF channel ownership, preserving upload -> TEXFLUSH -> dependent draw order;
 - a fixed-metadata project allocator owns the post-framebuffer texture region of the 4 MiB GS VRAM and uses 256-byte block alignment;
+- **POTWIERDZONE:** `FRAME.FBP` addresses local memory in 8192-byte units; current gsKit likewise rounds system-buffer allocations to 8192 bytes. The project allocator now supports explicit power-of-two alignment instead of assuming every GS resource is a texture;
+- **CURRENT IMPLEMENTATION:** transient PSMCT32 render targets use complete 64x32 GS pages, an 8192-byte-aligned base and the same reclaimable VRAM pool as textures. Four fixed metadata slots encode producer/consumer lifetime without an EE heap allocation;
+- binding a transient target emits native `FRAME`, full-target `SCISSOR` and `TEST` state. Z is disabled while offscreen because the screen-sized system Z buffer does not share the target's arbitrary `FBW`; rebinding the default target restores persistent Z state;
+- render-target release uses the existing fence-delayed retired-block queue. The block cannot return to the allocator until earlier GS consumers are complete, and an active target cannot be released;
 - texture replacement is transactional: a new residency is uploaded before the old baked `TEX0` address is retired;
 - retired blocks are reclaimed only after an explicit native GS `FINISH` fence proves that previous consumers are done;
 - normal draw and upload submission does not wait for `FINISH`; fences occur at PCRTC publication and under genuine texture-allocation pressure;
@@ -316,7 +320,7 @@ This semantic layer should remain backend-independent where possible. PS2-specif
 - opaque `CUSTOM_17/19 -> CUSTOM_18` color is reconstructed as `ENV * SHADE` followed by `TEXEL0 * SHADE`, blended by per-vertex `SHADE_ALPHA`;
 - the interpolation pass disables Z writes, preserves framebuffer alpha through `FRAME.FBMSK`, and restores depth/blend/clamp state after submission;
 - PS2 detail textures default on and the PS2-only Fast3D seam exposes the explicit tile pair because the GS path does not own OpenGL-style generated mip chains;
-- alpha-bearing `TRILERP/MODULATEIA2` remains explicit unsupported: GS blends RGB with source alpha but writes source alpha directly, so exact interpolated output alpha requires an intermediate render target or a different decomposition;
+- alpha-bearing `TRILERP/MODULATEIA2` remains explicit unsupported: GS blends RGB with source alpha but writes source alpha directly. The aligned CT32 transient-target core now exists, but target-to-texture transition, channel extraction and the final exact algebra are not yet promoted;
 - remaining dependent second-cycle equations remain explicit unsupported recipes, rather than receiving a visual approximation;
 - the fixed shader table holds 128 mode/option combinations so real level traversal does not exhaust the original 32-slot bring-up pool;
 - gsKit remains only in one-time CRT/screen bootstrap, system framebuffer/Z setup and block-rounded texture-size calculation;
@@ -465,7 +469,9 @@ PCSX2 is useful for correctness, packet/state inspection and fast iteration. It 
 - map supported recipes to GS state, including exact final-cycle and `PASS2` collapse before adding any extra draw;
 - reconstruct opaque `TRILERP -> PASS2/MODULATEI2` through the implemented `TEXEL0` base pass plus `TEXEL1` source-alpha interpolation pass;
 - reconstruct opaque `CUSTOM_17/19 -> CUSTOM_18` through the implemented solid `ENV` base plus `TEXEL0` source-alpha interpolation pass;
-- extend the same explicit planning model to alpha-bearing `MODULATEIA2` and the remaining `CUSTOM_20..26`; these are still rejected until their framebuffer/depth/alpha equations are exact;
+- use the implemented page-aligned CT32 transient-target core as the ownership layer for exact alpha-bearing work;
+- prove the render-target-to-texture cache transition and alpha channel extraction before enabling `MODULATEIA2`; framebuffer allocation alone is not treated as a valid combiner implementation;
+- extend the same explicit planning model to the remaining `CUSTOM_20..26`; these are still rejected until their framebuffer/depth/alpha equations are exact;
 - log unsupported recipes instead of silently approximating them.
 
 ### M5: VIF1/VU1 geometry path
