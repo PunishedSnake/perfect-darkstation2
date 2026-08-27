@@ -27,6 +27,9 @@ struct Ps2PadPort {
     uint8_t actuator_count;
     uint8_t rumble_small;
     uint8_t rumble_large;
+    int last_libpad_state;
+    bool read_ok;
+    uint32_t successful_reads;
     struct Ps2PadState state;
 };
 
@@ -39,7 +42,46 @@ struct Ps2PadPort {
 static unsigned char s_pad_rpc_area[PS2_PAD_MAX_PLAYERS][PS2_PAD_RPC_BYTES]
     __attribute__((aligned(64)));
 static struct Ps2PadPort s_ports[PS2_PAD_MAX_PLAYERS];
+static bool s_pad_rpc_initialized;
 static bool s_pad_initialized;
+static int s_sio2_module_result = -1;
+static int s_pad_module_result = -1;
+
+static int ps2PadEnsureModule(const char *name, const char *rom_path)
+{
+    int result = SifSearchModuleByName(name);
+    if (result >= 0) {
+        sysLogPrintf(LOG_NOTE,
+            "PAD: reuse resident IOP module %s id=%d", name, result);
+        return result;
+    }
+
+    result = SifLoadModule(rom_path, 0, NULL);
+    if (result >= 0) {
+        sysLogPrintf(LOG_NOTE,
+            "PAD: loaded IOP module %s from %s id=%d",
+            name, rom_path, result);
+        return result;
+    }
+
+    /*
+     * Some loaders report a duplicate load as an error. Re-query before
+     * declaring the backend unavailable; the resident RPC server is the
+     * actual dependency, not ownership of the module load operation.
+     */
+    const int resident = SifSearchModuleByName(name);
+    if (resident >= 0) {
+        sysLogPrintf(LOG_WARNING,
+            "PAD: %s load returned %d but resident module id=%d is usable",
+            rom_path, result, resident);
+        return resident;
+    }
+
+    sysLogPrintf(LOG_ERROR,
+        "PAD: failed to provide IOP module %s from %s (%d)",
+        name, rom_path, result);
+    return result;
+}
 
 static int16_t ps2PadAxisHorizontal(uint8_t raw)
 {
@@ -59,6 +101,7 @@ static void ps2PadResetLiveState(struct Ps2PadPort *port, bool emit_release)
     if (emit_release) {
         port->state.released = old_held;
     }
+    port->read_ok = false;
 }
 
 static bool ps2PadModeTableHasDualShock(int player)
@@ -160,6 +203,7 @@ static void ps2PadUpdatePort(int player)
     }
 
     const int pad_state = padGetState(player, 0);
+    port->last_libpad_state = pad_state;
     if (pad_state == PAD_STATE_DISCONN || pad_state == PAD_STATE_ERROR) {
         if (port->was_connected) {
             sysLogPrintf(LOG_WARNING, "PAD%d: controller disconnected", player + 1);
@@ -175,7 +219,8 @@ static void ps2PadUpdatePort(int player)
         return;
     }
 
-    if (pad_state != PAD_STATE_STABLE) {
+    /* The official PS2SDK PADMAN sample accepts FINDCTP1 as readable too. */
+    if (pad_state != PAD_STATE_STABLE && pad_state != PAD_STATE_FINDCTP1) {
         return;
     }
 
@@ -192,6 +237,7 @@ static void ps2PadUpdatePort(int player)
 
     struct padButtonStatus buttons;
     if (padRead(player, 0, &buttons) == 0) {
+        port->read_ok = false;
         return;
     }
 
@@ -206,6 +252,8 @@ static void ps2PadUpdatePort(int player)
     port->state.ly = ps2PadAxisVertical(buttons.ljoy_v);
     port->state.rx = ps2PadAxisHorizontal(buttons.rjoy_h);
     port->state.ry = ps2PadAxisVertical(buttons.rjoy_v);
+    port->read_ok = true;
+    ++port->successful_reads;
 }
 
 bool ps2PadInit(void)
@@ -216,20 +264,23 @@ bool ps2PadInit(void)
 
     memset(s_ports, 0, sizeof(s_ports));
     memset(s_pad_rpc_area, 0, sizeof(s_pad_rpc_area));
+    for (int player = 0; player < PS2_PAD_MAX_PLAYERS; ++player) {
+        s_ports[player].last_libpad_state = PAD_STATE_DISCONN;
+    }
 
     /* Current PS2SDK padx sample uses the ROM extended SIO2/PAD modules. */
     sceSifInitRpc(0);
 
-    int module = SifLoadModule("rom0:XSIO2MAN", 0, NULL);
-    if (module < 0) {
-        sysLogPrintf(LOG_ERROR, "PAD: failed to load rom0:XSIO2MAN (%d)", module);
+    s_sio2_module_result =
+        ps2PadEnsureModule("sio2man", "rom0:XSIO2MAN");
+    if (s_sio2_module_result < 0) {
         ps2LogCheckpoint();
         return false;
     }
 
-    module = SifLoadModule("rom0:XPADMAN", 0, NULL);
-    if (module < 0) {
-        sysLogPrintf(LOG_ERROR, "PAD: failed to load rom0:XPADMAN (%d)", module);
+    s_pad_module_result =
+        ps2PadEnsureModule("padman", "rom0:XPADMAN");
+    if (s_pad_module_result < 0) {
         ps2LogCheckpoint();
         return false;
     }
@@ -239,6 +290,7 @@ bool ps2PadInit(void)
         ps2LogCheckpoint();
         return false;
     }
+    s_pad_rpc_initialized = true;
 
     int opened = 0;
     for (int player = 0; player < PS2_PAD_MAX_PLAYERS; ++player) {
@@ -262,7 +314,7 @@ bool ps2PadInit(void)
 
 void ps2PadShutdown(void)
 {
-    if (!s_pad_initialized) {
+    if (!s_pad_rpc_initialized) {
         return;
     }
 
@@ -275,6 +327,7 @@ void ps2PadShutdown(void)
     }
 
     padEnd();
+    s_pad_rpc_initialized = false;
     s_pad_initialized = false;
 }
 
@@ -295,6 +348,29 @@ const struct Ps2PadState *ps2PadGetState(int player)
         return NULL;
     }
     return &s_ports[player].state;
+}
+
+bool ps2PadGetDiagnostics(int player, struct Ps2PadDiagnostics *diagnostics)
+{
+    if (!diagnostics || player < 0 || player >= PS2_PAD_MAX_PLAYERS) {
+        return false;
+    }
+
+    const struct Ps2PadPort *port = &s_ports[player];
+    diagnostics->backend_initialized = s_pad_rpc_initialized;
+    diagnostics->port_open = port->opened;
+    diagnostics->transport_ready =
+        port->stage == PS2_PAD_STAGE_READY &&
+        (port->last_libpad_state == PAD_STATE_STABLE ||
+         port->last_libpad_state == PAD_STATE_FINDCTP1);
+    diagnostics->read_ok = port->read_ok;
+    diagnostics->libpad_state = port->last_libpad_state;
+    diagnostics->configure_stage = (uint8_t)port->stage;
+    diagnostics->successful_reads = port->successful_reads;
+    diagnostics->raw_held = port->state.held;
+    diagnostics->sio2_module_result = s_sio2_module_result;
+    diagnostics->pad_module_result = s_pad_module_result;
+    return true;
 }
 
 void ps2PadSetRumble(int player, uint8_t small_motor, uint8_t large_motor)

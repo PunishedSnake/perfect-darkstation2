@@ -21,7 +21,7 @@
     (API_SCENE_FACE_COUNT * API_SCENE_TRIANGLES_PER_FACE * API_SCENE_VERTICES_PER_TRIANGLE)
 /* clip4 + tex2 + INPUT1 rgba4, matching Fast3D MODULATEIA VBO layout */
 #define API_SCENE_TEXTURED_STRIDE 10
-#define API_SCENE_STATUS_VERTEX_COUNT 12
+#define API_SCENE_STATUS_VERTEX_COUNT 18
 #define API_SCENE_UNTEXTURED_STRIDE 7
 
 #if defined(PERFECT_DARK_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT)
@@ -404,7 +404,7 @@ static void writeStatusQuad(
 }
 
 static void buildStatusVbo(int romStatus,
-    const struct Ps2ShooterControls *controls, uint32_t frameCounter,
+    const struct Ps2PadDiagnostics *padDiagnostics, uint32_t frameCounter,
     bool diagnosticActive)
 {
     float *dst = sStatusVbo;
@@ -422,42 +422,61 @@ static void buildStatusVbo(int romStatus,
         romB = 0.25f;
     }
 
-    writeStatusQuad(&dst, -0.84f, -0.79f, romR, romG, romB);
+    writeStatusQuad(&dst, -0.88f, -0.83f, romR, romG, romB);
 
-    float inputR = 0.18f;
-    float inputG = 0.18f;
-    float inputB = 0.22f;
-    if (controls && controls->connected) {
-        inputR = 0.20f;
-        inputG = 0.80f;
-        inputB = 0.95f;
-
-        if (controls->held & PS2_ACTION_AIM) {
-            inputR = 0.30f;
-            inputG = 0.50f;
-            inputB = 1.0f;
+    /*
+     * PAD bring-up ladder, deliberately independent from the heartbeat:
+     * red=backend absent, orange=RPC init only, yellow=port open,
+     * blue=PADMAN transport ready, cyan=padRead succeeds,
+     * magenta=any raw button held, white=raw Select held.
+     */
+    float padR = 1.0f;
+    float padG = 0.10f;
+    float padB = 0.10f;
+    if (padDiagnostics && padDiagnostics->backend_initialized) {
+        padR = 1.0f;
+        padG = 0.42f;
+        padB = 0.08f;
+        if (padDiagnostics->port_open) {
+            padR = 1.0f;
+            padG = 0.86f;
+            padB = 0.08f;
         }
-        if (controls->held & PS2_ACTION_ALT_FIRE) {
-            inputR = 0.95f;
-            inputG = 0.25f;
-            inputB = 0.85f;
+        if (padDiagnostics->transport_ready) {
+            padR = 0.18f;
+            padG = 0.38f;
+            padB = 1.0f;
         }
-        if (controls->held & PS2_ACTION_FIRE) {
-            inputR = 1.0f;
-            inputG = 0.18f;
-            inputB = 0.12f;
+        if (padDiagnostics->read_ok || padDiagnostics->successful_reads != 0u) {
+            padR = 0.12f;
+            padG = 0.92f;
+            padB = 0.95f;
+        }
+        if (padDiagnostics->raw_held != 0u) {
+            padR = 0.95f;
+            padG = 0.12f;
+            padB = 0.88f;
+        }
+        if ((padDiagnostics->raw_held & PS2_PAD_SELECT) != 0u) {
+            padR = 1.0f;
+            padG = 1.0f;
+            padB = 1.0f;
         }
     }
+    writeStatusQuad(&dst, -0.76f, -0.71f, padR, padG, padB);
 
+    float heartbeatR = 0.10f;
+    float heartbeatG = 0.10f;
+    float heartbeatB = 0.12f;
     if (diagnosticActive) {
         /* A visible pulse proves the CPU/frame loop is still alive. */
         const float pulse = (frameCounter & 16u) != 0u ? 1.0f : 0.30f;
-        inputR = 0.15f * pulse;
-        inputG = 0.95f * pulse;
-        inputB = 0.35f * pulse;
+        heartbeatR = 0.15f * pulse;
+        heartbeatG = 0.95f * pulse;
+        heartbeatB = 0.35f * pulse;
     }
-
-    writeStatusQuad(&dst, -0.73f, -0.68f, inputR, inputG, inputB);
+    writeStatusQuad(&dst, -0.64f, -0.59f,
+        heartbeatR, heartbeatG, heartbeatB);
 }
 
 static void advanceRotation(float *sinValue, float *cosValue, float sinStep, float cosStep)
@@ -613,6 +632,8 @@ bool ps2GfxApiSceneRun(int romStatus)
 #if defined(PERFECT_DARK_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT)
     sysLogPrintf(LOG_WARNING,
         "GfxAPI scene: Select toggles unvalidated alpha-trilerp A/B; left=GS graph right=CPU reference");
+    sysLogPrintf(LOG_WARNING,
+        "GfxAPI scene: status bars top-to-bottom ROM, PAD, heartbeat; PAD red/orange/yellow/blue/cyan/magenta/white");
 #endif
     sysLogPrintf(LOG_NOTE,
         "GfxAPI scene: entering clip-space VBO -> Fast3D adapter -> GS core frame loop");
@@ -653,17 +674,68 @@ bool ps2GfxApiSceneRun(int romStatus)
          */
         ps2ShooterControlsUpdate();
         const struct Ps2ShooterControls *controls = ps2ShooterControlsGet(0);
+        struct Ps2PadDiagnostics padDiagnostics[PS2_PAD_MAX_PLAYERS] = { 0 };
+        const struct Ps2PadDiagnostics *visiblePadDiagnostics = NULL;
+        int visiblePadScore = -1;
+        bool rawDebugPressed = false;
+
+        for (int player = 0; player < PS2_PAD_MAX_PLAYERS; ++player) {
+            if (!ps2PadGetDiagnostics(player, &padDiagnostics[player])) {
+                continue;
+            }
+
+            const struct Ps2PadState *rawPad = ps2PadGetState(player);
+            if (rawPad && (rawPad->pressed & PS2_PAD_SELECT) != 0u) {
+                rawDebugPressed = true;
+            }
+
+            int score = padDiagnostics[player].backend_initialized ? 1 : 0;
+            if (padDiagnostics[player].port_open) score = 2;
+            if (padDiagnostics[player].transport_ready) score = 3;
+            if (padDiagnostics[player].read_ok ||
+                padDiagnostics[player].successful_reads != 0u) score = 4;
+            if (padDiagnostics[player].raw_held != 0u) score = 5;
+            if ((padDiagnostics[player].raw_held & PS2_PAD_SELECT) != 0u) score = 6;
+            if (score > visiblePadScore) {
+                visiblePadScore = score;
+                visiblePadDiagnostics = &padDiagnostics[player];
+            }
+        }
+
+        /* One durable snapshot makes a failed hardware bring-up actionable. */
+        if (frameCounter == 120u) {
+            for (int player = 0; player < PS2_PAD_MAX_PLAYERS; ++player) {
+                const struct Ps2PadDiagnostics *diag = &padDiagnostics[player];
+                sysLogPrintf(LOG_NOTE,
+                    "PAD%d snapshot: init=%d open=%d ready=%d read=%d state=%d stage=%u reads=%u held=%04x sio2=%d padman=%d",
+                    player + 1,
+                    diag->backend_initialized ? 1 : 0,
+                    diag->port_open ? 1 : 0,
+                    diag->transport_ready ? 1 : 0,
+                    diag->read_ok ? 1 : 0,
+                    diag->libpad_state,
+                    (unsigned int)diag->configure_stage,
+                    (unsigned int)diag->successful_reads,
+                    (unsigned int)(diag->raw_held & 0xffffu),
+                    diag->sio2_module_result,
+                    diag->pad_module_result);
+            }
+            ps2LogCheckpoint();
+        }
+
+#if defined(PERFECT_DARK_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT)
+        if (rawDebugPressed) {
+            alphaDiagActive = !alphaDiagActive;
+            sysLogPrintf(LOG_WARNING,
+                "GfxAPI raw Select toggled alpha-trilerp A/B %s: left=GS graph right=CPU reference",
+                alphaDiagActive ? "enabled" : "disabled");
+            ps2LogCheckpoint();
+        }
+#else
+        (void)rawDebugPressed;
+#endif
 
         if (controls && controls->connected) {
-#if defined(PERFECT_DARK_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT)
-            if (controls->pressed & PS2_ACTION_DEBUG) {
-                alphaDiagActive = !alphaDiagActive;
-                sysLogPrintf(LOG_WARNING,
-                    "GfxAPI alpha-trilerp A/B %s: left=GS graph right=CPU reference",
-                    alphaDiagActive ? "enabled" : "disabled");
-                ps2LogCheckpoint();
-            }
-#endif
             if (controls->pressed & PS2_ACTION_USE) {
                 sinY = 0.0f;
                 cosY = 1.0f;
@@ -695,7 +767,7 @@ bool ps2GfxApiSceneRun(int romStatus)
             advanceRotation(&sinX, &cosX, sinStepX, cosStepX);
         }
 
-        buildStatusVbo(romStatus, controls, frameCounter,
+        buildStatusVbo(romStatus, visiblePadDiagnostics, frameCounter,
 #if defined(PERFECT_DARK_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT)
             alphaDiagActive
 #else

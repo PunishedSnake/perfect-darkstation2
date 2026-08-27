@@ -44,6 +44,19 @@ struct Ps2PadState {
     int16_t ry;
 };
 
+struct Ps2PadDiagnostics {
+    bool backend_initialized;
+    bool port_open;
+    bool transport_ready;
+    bool read_ok;
+    int libpad_state;
+    uint8_t configure_stage;
+    uint32_t successful_reads;
+    uint32_t raw_held;
+    int sio2_module_result;
+    int pad_module_result;
+};
+
 /*
  * Physical PADMAN/libpad backend. This is deliberately below Perfect Dark's
  * semantic controller mapping so native DualShock 2 input is not flattened
@@ -53,6 +66,7 @@ bool ps2PadInit(void);
 void ps2PadShutdown(void);
 void ps2PadUpdate(void);
 const struct Ps2PadState *ps2PadGetState(int player);
+bool ps2PadGetDiagnostics(int player, struct Ps2PadDiagnostics *diagnostics);
 
 /* Cached actuator update: repeated identical values do not issue another RPC. */
 void ps2PadSetRumble(int player, uint8_t small_motor, uint8_t large_motor);
