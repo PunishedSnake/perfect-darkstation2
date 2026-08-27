@@ -29,6 +29,7 @@
 #include "gfx_cc.h"
 #include "gfx_window_manager_api.h"
 #include "gfx_rendering_api.h"
+#include "gfx_primitive_depth.h"
 #include "gfx_screen_config.h"
 
 uintptr_t gfxFramebuffer;
@@ -189,6 +190,8 @@ static struct RDP {
     bool tex_detail;
 
     uint8_t prim_lod_fraction;
+    uint16_t primitive_depth_z;
+    uint16_t primitive_depth_dz;
     struct RGBA env_color, prim_color, fog_color, fill_color, grayscale_color;
     struct XYWidthHeight viewport, scissor;
     bool viewport_or_scissor_changed;
@@ -1441,6 +1444,9 @@ static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx, bo
 
     for (int i = 0; i < 3; i++) {
         float z = v_arr[i]->z, w = v_arr[i]->w;
+        if (depth_source_prim) {
+            z = gfx_primitive_depth_to_clip_z(rdp.primitive_depth_z, w);
+        }
         if (clip_parameters.z_is_from_0_to_1) {
             z = (z + w) / 2.0f;
         }
@@ -1983,6 +1989,11 @@ static void gfx_dp_set_prim_color(uint8_t m, uint8_t l, uint8_t r, uint8_t g, ui
 
 }
 
+static void gfx_dp_set_prim_depth(uint16_t z, uint16_t dz) {
+    rdp.primitive_depth_z = z;
+    rdp.primitive_depth_dz = dz;
+}
+
 static void gfx_dp_set_fog_color(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
     rdp.fog_color.r = r;
     rdp.fog_color.g = g;
@@ -2386,6 +2397,9 @@ static void gfx_run_dl(Gfx* cmd) {
                 break;
             case G_SETPRIMCOLOR:
                 gfx_dp_set_prim_color(C0(8, 8), C0(0, 8), C1(24, 8), C1(16, 8), C1(8, 8), C1(0, 8));
+                break;
+            case G_SETPRIMDEPTH:
+                gfx_dp_set_prim_depth(C1(16, 16), C1(0, 16));
                 break;
             case G_SETFOGCOLOR:
                 gfx_dp_set_fog_color(C1(24, 8), C1(16, 8), C1(8, 8), C1(0, 8));

@@ -485,6 +485,9 @@ PCSX2 is useful for correctness, packet/state inspection and fast iteration. It 
 
 ### M4: RDP state coverage
 
+- consume `G_SETPRIMDEPTH` in the shared Fast3D interpreter and replace clip Z
+  with the RDP's 15-bit primitive depth whenever `G_ZS_PRIM` is active; the GS
+  then receives the same constant depth through the normal reversed-Z mapping;
 - inventory actual combiner/render/blender recipes, with the model path's `TRILERP`, `CUSTOM_17..26`, `MODULATEI/IA` and `PASS2` families as the first concrete set;
 - map supported recipes to GS state, including exact final-cycle and `PASS2` collapse before adding any extra draw;
 - reconstruct opaque `TRILERP -> PASS2/MODULATEI2` through the implemented `TEXEL0` base pass plus `TEXEL1` source-alpha interpolation pass;

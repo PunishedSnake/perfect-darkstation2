@@ -58,6 +58,12 @@ jobs:
         run: |
           g++ -std=c++20 -Wall -Wextra -Werror \
             -Iport/fast3d \
+            port/fast3d/tests/gfx_primitive_depth_test.cpp \
+            -o /tmp/gfx_primitive_depth_test
+          /tmp/gfx_primitive_depth_test
+
+          g++ -std=c++20 -Wall -Wextra -Werror \
+            -Iport/fast3d \
             port/fast3d/rdp_tmem.cpp \
             port/fast3d/rdp_tmem_runtime.cpp \
             port/fast3d/tests/rdp_tmem_test.cpp \

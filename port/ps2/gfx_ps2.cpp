@@ -142,7 +142,6 @@ static enum FilteringMode s_filter_mode = FILTER_LINEAR;
 static enum MipmapFilteringMode s_mipmap_filter = MIPMAP_DISABLED;
 static int s_anisotropy = 1;
 static bool s_warned_framebuffer;
-static bool s_warned_depth_prim;
 static bool s_warned_mipmap;
 static bool s_logged_native_rgba16;
 static bool s_logged_native_ci4;
@@ -495,6 +494,7 @@ static void ps2_set_sampler_parameters(int sampler, bool linear_filter, uint32_t
 static void ps2_set_depth_mode(bool depth_test, bool depth_update, bool depth_compare,
                                bool depth_source_prim, uint16_t zmode)
 {
+    (void)depth_source_prim;
     (void)zmode;
 
     s_depth_test = depth_test;
@@ -502,11 +502,6 @@ static void ps2_set_depth_mode(bool depth_test, bool depth_update, bool depth_co
     s_depth_compare = depth_compare;
     ps2GsCoreSetDepthMode(depth_test, depth_update, depth_compare);
 
-    if (depth_source_prim && !s_warned_depth_prim) {
-        sysLogPrintf(LOG_WARNING,
-            "GfxPS2 primitive depth source requested; bring-up backend still consumes per-vertex clip Z");
-        s_warned_depth_prim = true;
-    }
 }
 
 static void ps2_set_depth_range(float znear, float zfar)
