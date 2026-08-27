@@ -46,6 +46,8 @@ struct Ps2GsSharedClut {
 
 struct Ps2GsRenderTargetSlot {
     bool used;
+    bool has_contents;
+    bool texture_cache_dirty;
     uint32_t vram;
     struct Ps2GsRenderTargetLayout layout;
 };
@@ -413,6 +415,16 @@ static int ps2GsCoreTextureExponent(uint32_t size)
     return exponent;
 }
 
+static void ps2GsCoreMarkActiveRenderTargetWritten(void)
+{
+    struct Ps2GsRenderTargetSlot *slot =
+        ps2GsCoreRenderTargetSlot(s_active_render_target);
+    if (slot) {
+        slot->has_contents = true;
+        slot->texture_cache_dirty = true;
+    }
+}
+
 static uint64_t ps2GsCoreMakeXyz2(int x, int y, uint32_t z)
 {
     int fx = x * 16 + s_gs->OffsetX;
@@ -722,6 +734,7 @@ extern "C" void ps2GsCoreClear(bool clear_color, bool clear_depth)
     ps2GsCoreWriteReg(&p[out++],
         ps2GsCoreCurrentTestValue(-1),
         GS_TEST_1 + s_gs->PrimContext);
+    ps2GsCoreMarkActiveRenderTargetWritten();
 }
 
 extern "C" void ps2GsCoreSetScissor(int x, int y, int width, int height)
@@ -1482,37 +1495,40 @@ extern "C" void ps2GsCoreDrawColorTriangles(const struct Ps2GsColorVertex *verti
         GS_PRIM);
 
     memcpy(&p[1], vertices, (size_t)vertex_count * sizeof(*vertices));
+    ps2GsCoreMarkActiveRenderTargetWritten();
 }
 
-extern "C" void ps2GsCoreDrawTexturedTriangles(Ps2GsTextureHandle handle,
-    const struct Ps2GsTexturedVertex *vertices, uint32_t vertex_count)
+static bool ps2GsCoreDrawTexturedTrianglesInternal(GSTEXTURE *tex,
+    const struct Ps2GsTexturedVertex *vertices, uint32_t vertex_count,
+    bool texture_flush, const struct Ps2GsRenderTargetTextureView *target_view)
 {
-    if (!s_gs || !s_frame_building || !vertices || vertex_count == 0) {
-        return;
+    if (!tex || !vertices || vertex_count == 0u) {
+        return false;
     }
 
-    struct Ps2GsTextureSlot *slot = ps2GsCoreTextureSlot(handle);
-    if (!slot || !slot->uploaded) {
-        return;
-    }
-
-    GSTEXTURE *tex = &slot->texture;
     const bool indexed = tex->PSM == GS_PSM_T4 || tex->PSM == GS_PSM_T8;
     const bool load_clut = indexed &&
         (s_loaded_clut_vram != tex->VramClut ||
          s_loaded_clut_psm != tex->ClutPSM);
-    const int tw = ps2GsCoreTextureExponent(tex->Width);
-    const int th = ps2GsCoreTextureExponent(tex->Height);
-    const uint32_t register_count = 3u + vertex_count * 3u;
+    const int tw = target_view ? target_view->tw :
+        ps2GsCoreTextureExponent(tex->Width);
+    const int th = target_view ? target_view->th :
+        ps2GsCoreTextureExponent(tex->Height);
+    const uint32_t register_count = 3u + vertex_count * 3u +
+        (texture_flush ? 1u : 0u) + (target_view ? 2u : 0u);
     struct Ps2GsPackedReg *p = ps2GsCoreReserve(register_count);
     if (!p) {
-        return;
+        return false;
     }
 
-    ps2GsCoreWriteReg(&p[0],
+    uint32_t out = 0u;
+    if (texture_flush) {
+        ps2GsCoreWriteReg(&p[out++], 0u, GS_TEXFLUSH);
+    }
+    ps2GsCoreWriteReg(&p[out++],
         GS_SETREG_TEX1(0, 0, tex->Filter, tex->Filter, 0, 0, 0),
         GS_TEX1_1 + s_gs->PrimContext);
-    ps2GsCoreWriteReg(&p[1],
+    ps2GsCoreWriteReg(&p[out++],
         GS_SETREG_TEX0(
             tex->Vram / 256,
             tex->TBW,
@@ -1527,7 +1543,18 @@ extern "C" void ps2GsCoreDrawTexturedTriangles(Ps2GsTextureHandle handle,
             0,
             load_clut ? GS_CLUT_STOREMODE_LOAD : GS_CLUT_STOREMODE_NOLOAD),
         GS_TEX0_1 + s_gs->PrimContext);
-    ps2GsCoreWriteReg(&p[2],
+    if (target_view) {
+        ps2GsCoreWriteReg(&p[out++],
+            GS_SETREG_CLAMP(
+                GS_CMODE_REGION_CLAMP,
+                GS_CMODE_REGION_CLAMP,
+                0u,
+                target_view->clamp_max_u,
+                0u,
+                target_view->clamp_max_v),
+            GS_CLAMP_1 + s_gs->PrimContext);
+    }
+    ps2GsCoreWriteReg(&p[out++],
         GS_SETREG_PRIM(
             GS_PRIM_PRIM_TRIANGLE,
             1,
@@ -1540,9 +1567,76 @@ extern "C" void ps2GsCoreDrawTexturedTriangles(Ps2GsTextureHandle handle,
             0),
         GS_PRIM);
 
-    memcpy(&p[3], vertices, (size_t)vertex_count * sizeof(*vertices));
+    memcpy(&p[out], vertices, (size_t)vertex_count * sizeof(*vertices));
+    out += vertex_count * 3u;
+    if (target_view) {
+        ps2GsCoreWriteReg(&p[out++],
+            GS_SETREG_CLAMP(
+                s_gs->Clamp->WMS,
+                s_gs->Clamp->WMT,
+                s_gs->Clamp->MINU,
+                s_gs->Clamp->MAXU,
+                s_gs->Clamp->MINV,
+                s_gs->Clamp->MAXV),
+            GS_CLAMP_1 + s_gs->PrimContext);
+    }
     if (indexed) {
         s_loaded_clut_vram = tex->VramClut;
         s_loaded_clut_psm = tex->ClutPSM;
     }
+    ps2GsCoreMarkActiveRenderTargetWritten();
+    return true;
+}
+
+extern "C" void ps2GsCoreDrawTexturedTriangles(Ps2GsTextureHandle handle,
+    const struct Ps2GsTexturedVertex *vertices, uint32_t vertex_count)
+{
+    if (!s_gs || !s_frame_building || !vertices || vertex_count == 0u) {
+        return;
+    }
+
+    struct Ps2GsTextureSlot *slot = ps2GsCoreTextureSlot(handle);
+    if (!slot || !slot->uploaded) {
+        return;
+    }
+
+    ps2GsCoreDrawTexturedTrianglesInternal(
+        &slot->texture, vertices, vertex_count, false, NULL);
+}
+
+extern "C" bool ps2GsCoreDrawRenderTargetTriangles(
+    Ps2GsRenderTargetHandle source,
+    const struct Ps2GsTexturedVertex *vertices, uint32_t vertex_count,
+    bool linear_filter)
+{
+    if (!s_gs || !s_frame_building || !vertices || vertex_count == 0u ||
+        source == s_active_render_target) {
+        return false;
+    }
+
+    struct Ps2GsRenderTargetSlot *slot = ps2GsCoreRenderTargetSlot(source);
+    struct Ps2GsRenderTargetTextureView view;
+    if (!slot || !slot->has_contents ||
+        !ps2GsDescribeCt32RenderTargetTextureView(
+            &slot->layout, &view)) {
+        return false;
+    }
+
+    GSTEXTURE texture;
+    memset(&texture, 0, sizeof(texture));
+    texture.Width = (int)slot->layout.width;
+    texture.Height = (int)slot->layout.height;
+    texture.PSM = GS_PSM_CT32;
+    texture.Vram = slot->vram;
+    texture.TBW = (int)view.tbw;
+    texture.Filter = linear_filter ? GS_FILTER_LINEAR : GS_FILTER_NEAREST;
+
+    if (!ps2GsCoreDrawTexturedTrianglesInternal(
+            &texture, vertices, vertex_count,
+            slot->texture_cache_dirty, &view)) {
+        return false;
+    }
+
+    slot->texture_cache_dirty = false;
+    return true;
 }

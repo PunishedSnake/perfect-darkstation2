@@ -38,10 +38,56 @@ static void test_invalid_layouts(void)
     assert(!ps2GsDescribeCt32RenderTarget(1u, 1u, NULL));
 }
 
+static void test_ct32_texture_views(void)
+{
+    Ps2GsRenderTargetLayout layout{};
+    Ps2GsRenderTargetTextureView view{};
+
+    assert(ps2GsDescribeCt32RenderTarget(1u, 1u, &layout));
+    assert(ps2GsDescribeCt32RenderTargetTextureView(&layout, &view));
+    assert(view.tbw == 1u);
+    assert(view.tw == 0u);
+    assert(view.th == 0u);
+    assert(view.clamp_max_u == 0u);
+    assert(view.clamp_max_v == 0u);
+
+    assert(ps2GsDescribeCt32RenderTarget(65u, 33u, &layout));
+    assert(ps2GsDescribeCt32RenderTargetTextureView(&layout, &view));
+    assert(view.tbw == 2u);
+    assert(view.tw == 7u);
+    assert(view.th == 6u);
+    assert(view.clamp_max_u == 64u);
+    assert(view.clamp_max_v == 32u);
+
+    assert(ps2GsDescribeCt32RenderTarget(1024u, 1024u, &layout));
+    assert(ps2GsDescribeCt32RenderTargetTextureView(&layout, &view));
+    assert(view.tbw == 16u);
+    assert(view.tw == 10u);
+    assert(view.th == 10u);
+    assert(view.clamp_max_u == 1023u);
+    assert(view.clamp_max_v == 1023u);
+}
+
+static void test_invalid_texture_views(void)
+{
+    Ps2GsRenderTargetLayout layout{};
+    Ps2GsRenderTargetTextureView view{};
+
+    assert(!ps2GsDescribeCt32RenderTargetTextureView(NULL, &view));
+    assert(!ps2GsDescribeCt32RenderTargetTextureView(&layout, NULL));
+    assert(!ps2GsDescribeCt32RenderTargetTextureView(&layout, &view));
+
+    assert(ps2GsDescribeCt32RenderTarget(64u, 32u, &layout));
+    ++layout.bytes;
+    assert(!ps2GsDescribeCt32RenderTargetTextureView(&layout, &view));
+}
+
 int main(void)
 {
     test_ct32_page_footprints();
     test_invalid_layouts();
+    test_ct32_texture_views();
+    test_invalid_texture_views();
     puts("gs_render_target_layout tests passed");
     return 0;
 }
