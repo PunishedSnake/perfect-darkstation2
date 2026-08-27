@@ -9,6 +9,11 @@ endif()
 
 project(pd_ps2_bootstrap C CXX)
 
+option(PD_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT
+  "Enable alpha-trilerp pass graph before real-PS2 channel-blit A/B validation"
+  OFF
+)
+
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_EXTENSIONS OFF)
 set(CMAKE_CXX_STANDARD 20)
@@ -170,6 +175,7 @@ add_executable(pd_ps2_bootstrap
   gfx_run_tmem_ps2.cpp
   gfx_ps2.cpp
   gfx_ps2_combiner.cpp
+  gfx_ps2_pass_graph.cpp
   gfx_window_ps2.c
   pad_ps2.c
   controls_ps2.c
@@ -182,6 +188,12 @@ add_executable(pd_ps2_bootstrap
   "${PD_ROOT}/port/fast3d/rdp_tmem_live.cpp"
   "${PD_ROOT}/port/fast3d/rdp_tmem_trace.cpp"
 )
+
+if(PD_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT)
+  target_compile_definitions(pd_ps2_bootstrap PRIVATE
+    PERFECT_DARK_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT=1
+  )
+endif()
 
 target_include_directories(pd_ps2_bootstrap PRIVATE
   ${PD_PS2_COMMON_INCLUDE_DIRS}

@@ -27,20 +27,29 @@ enum Ps2AlphaRecipe {
     PS2_ALPHA_TEX0_MUL_INPUT1,
 };
 
+enum Ps2PassGraph {
+    PS2_PASS_GRAPH_DIRECT = 0,
+    PS2_PASS_GRAPH_OPAQUE_TRILERP,
+    PS2_PASS_GRAPH_OPAQUE_INPUT1_TEX0_LERP,
+    PS2_PASS_GRAPH_ALPHA_TRILERP_MODULATE,
+};
+
 struct Ps2CombinerPlan {
     bool supported;
     bool textured;
     bool texture_alpha;
+    bool hardware_validation_required;
     uint8_t color_cycle;
     uint8_t alpha_cycle;
     enum Ps2ColorRecipe color_recipe;
     enum Ps2AlphaRecipe alpha_recipe;
+    enum Ps2PassGraph pass_graph;
 };
 
 /*
  * Reduce an upstream Fast3D combiner to an exact GS recipe. Independent final
- * cycles collapse to one pass; the explicitly classified opaque TEXEL0/TEXEL1
- * interpolation recipes carry a two-pass execution plan in color_recipe.
+ * cycles collapse to one pass. Equations that require ordered GS passes carry
+ * an explicit pass graph instead of overloading a scalar channel recipe.
  */
 bool ps2GfxPlanCombiner(const struct CCFeatures *features,
     struct Ps2CombinerPlan *plan);

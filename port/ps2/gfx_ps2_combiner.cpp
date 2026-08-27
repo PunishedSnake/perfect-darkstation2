@@ -143,6 +143,17 @@ static bool ps2_is_tex01_lerp_cycle(const struct CCFeatures *f)
            f->c[0][0][3] == SHADER_TEXEL0;
 }
 
+static bool ps2_is_tex01_alpha_lerp_cycle(const struct CCFeatures *f)
+{
+    const uint8_t a = f->c[0][1][0];
+    const uint8_t b = f->c[0][1][1];
+    const uint8_t d = f->c[0][1][3];
+    return (a == SHADER_TEXEL1 || a == SHADER_TEXEL1A) &&
+           (b == SHADER_TEXEL0 || b == SHADER_TEXEL0A) &&
+           f->c[0][1][2] == SHADER_INPUT_1 &&
+           (d == SHADER_TEXEL0 || d == SHADER_TEXEL0A);
+}
+
 static bool ps2_plan_opaque_tex01_lerp(const struct CCFeatures *f,
     struct Ps2CombinerPlan *plan)
 {
@@ -171,7 +182,46 @@ static bool ps2_plan_opaque_tex01_lerp(const struct CCFeatures *f,
     plan->alpha_cycle = 0;
     plan->textured = true;
     plan->texture_alpha = false;
+    plan->pass_graph = PS2_PASS_GRAPH_OPAQUE_TRILERP;
     plan->supported = true;
+    return true;
+}
+
+static bool ps2_plan_alpha_tex01_lerp_modulate(
+    const struct CCFeatures *f, struct Ps2CombinerPlan *plan)
+{
+    if (!f->opt_2cyc || !f->opt_alpha || f->opt_fog ||
+        !ps2_is_tex01_lerp_cycle(f) ||
+        !ps2_is_tex01_alpha_lerp_cycle(f)) {
+        return false;
+    }
+
+    for (uint8_t channel = 0; channel < 2u; ++channel) {
+        if (!f->do_multiply[1][channel]) {
+            return false;
+        }
+        const uint8_t a = f->c[1][channel][0];
+        const uint8_t c = f->c[1][channel][2];
+        if (!((a == SHADER_COMBINED && c == SHADER_INPUT_2) ||
+              (a == SHADER_INPUT_2 && c == SHADER_COMBINED))) {
+            return false;
+        }
+    }
+
+    plan->color_recipe = PS2_COLOR_TEX01_LERP_INPUT1_MUL_INPUT2;
+    plan->alpha_recipe = PS2_ALPHA_UNSUPPORTED;
+    plan->color_cycle = 1;
+    plan->alpha_cycle = 1;
+    plan->textured = true;
+    plan->texture_alpha = true;
+    plan->pass_graph = PS2_PASS_GRAPH_ALPHA_TRILERP_MODULATE;
+    /*
+     * The complete tiled pass graph is available to opt-in hardware builds,
+     * but the low-byte PSMCT32 -> PSMT8 shuffle remains a real-PS2 image A/B
+     * gate. Keep normal builds explicit-unsupported until that proof exists.
+     */
+    plan->hardware_validation_required = true;
+    plan->supported = false;
     return true;
 }
 
@@ -212,6 +262,7 @@ static bool ps2_plan_opaque_input1_tex0_lerp(const struct CCFeatures *f,
     plan->alpha_cycle = 0;
     plan->textured = true;
     plan->texture_alpha = false;
+    plan->pass_graph = PS2_PASS_GRAPH_OPAQUE_INPUT1_TEX0_LERP;
     plan->supported = true;
     return true;
 }
@@ -232,6 +283,10 @@ bool ps2GfxPlanCombiner(const struct CCFeatures *f,
     }
 
     if (ps2_plan_opaque_tex01_lerp(f, plan)) {
+        return true;
+    }
+
+    if (ps2_plan_alpha_tex01_lerp_modulate(f, plan)) {
         return true;
     }
 

@@ -7,6 +7,7 @@
 #include "gfx_rendering_api.h"
 #include "gfx_ps2.h"
 #include "gfx_ps2_combiner.h"
+#include "gfx_ps2_pass_graph.h"
 #include "gs_core.h"
 #include "rdp_tmem_live.h"
 #include "system.h"
@@ -41,6 +42,10 @@
  *   - INPUT1
  *   - TEXEL0
  *   - TEXEL0 * INPUT1
+ *
+ * Alpha-bearing TEXEL0/TEXEL1 trilerp has a tiled CT32 execution graph. It is
+ * compiled and host-tested but remains an explicit diagnostic opt-in until the
+ * low-lane channel shuffle passes its real-hardware image A/B gate.
  *
  * GS texture MODULATE uses 0x80 as unity and multiplies with >>7. RGBA32 alpha
  * remains in 0..255, while native PSMCT16 alpha is expanded to the same range
@@ -98,11 +103,26 @@ struct Ps2TextureSamplerState {
     uint32_t cmt;
 };
 
+struct Ps2AlphaTrilerpVertex {
+    float x;
+    float y;
+    float inv_w;
+    float tex_u[2];
+    float tex_v[2];
+    int z;
+    uint8_t shade_r;
+    uint8_t shade_g;
+    uint8_t shade_b;
+    uint8_t shade_a;
+    uint8_t lod;
+};
+
 static struct ShaderProgram s_shaders[PS2_GFX_MAX_SHADERS];
 static struct ShaderProgram *s_shader;
 static Ps2GsTextureHandle s_selected_texture[2];
 static int s_active_texture_tile;
 static struct Ps2Viewport s_viewport;
+static struct Ps2Viewport s_scissor;
 static float s_depth_near = 0.0f;
 static float s_depth_far = 1.0f;
 static bool s_depth_test = true;
@@ -124,9 +144,18 @@ static bool s_logged_native_rgba16;
 static bool s_logged_native_ci4;
 static bool s_logged_native_ci8;
 static bool s_logged_native_intensity[4];
+static bool s_warned_alpha_trilerp_workspace;
+static bool s_warned_alpha_trilerp_modulate;
+#if defined(PERFECT_DARK_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT)
+static bool s_logged_unvalidated_channel_blit;
+#endif
+static Ps2GsRenderTargetHandle s_alpha_trilerp_color_target;
+static Ps2GsRenderTargetHandle s_alpha_trilerp_scalar_target;
 
 static struct Ps2GsTexturedVertex s_stq_vertices[2][PS2_GFX_TRANSLATE_VERTS];
 static struct Ps2GsColorVertex s_color_vertices[PS2_GFX_TRANSLATE_VERTS];
+static struct Ps2AlphaTrilerpVertex
+    s_alpha_trilerp_vertices[PS2_GFX_TRANSLATE_VERTS];
 
 static const char *ps2_get_name(void)
 {
@@ -160,7 +189,7 @@ static void ps2_log_shader_recipe(int slot, const struct ShaderProgram *prg)
 
     sysLogPrintf(plan->supported ? LOG_NOTE : LOG_WARNING,
         "GfxPS2 shader %02d id=%016llx/%08x supported=%d tex=%d%d inputs=%d "
-        "cycle=%u/%u recipe=%d/%d tcc=%d rgb=[%u,%u,%u,%u] a=[%u,%u,%u,%u] "
+        "cycle=%u/%u recipe=%d/%d graph=%d gate=%d tcc=%d rgb=[%u,%u,%u,%u] a=[%u,%u,%u,%u] "
         "opts=a%d f%d e%d n%d 2c%d at%d inv%d g%d b%d",
         slot,
         (unsigned long long)prg->shader_id0,
@@ -173,6 +202,8 @@ static void ps2_log_shader_recipe(int slot, const struct ShaderProgram *prg)
         alpha_cycle,
         (int)plan->color_recipe,
         (int)plan->alpha_recipe,
+        (int)plan->pass_graph,
+        plan->hardware_validation_required ? 1 : 0,
         plan->texture_alpha ? 1 : 0,
         f->c[color_cycle][0][0], f->c[color_cycle][0][1],
         f->c[color_cycle][0][2], f->c[color_cycle][0][3],
@@ -238,6 +269,19 @@ static struct ShaderProgram *ps2_create_and_load_new_shader(uint64_t shader_id0,
             prg->shader_id1 = shader_id1;
             gfx_cc_get_features(shader_id0, shader_id1, &prg->features);
             ps2GfxPlanCombiner(&prg->features, &prg->plan);
+
+#if defined(PERFECT_DARK_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT)
+            if (prg->plan.hardware_validation_required &&
+                prg->plan.pass_graph ==
+                    PS2_PASS_GRAPH_ALPHA_TRILERP_MODULATE) {
+                prg->plan.supported = true;
+                if (!s_logged_unvalidated_channel_blit) {
+                    sysLogPrintf(LOG_WARNING,
+                        "GfxPS2 enabling unvalidated CT32 channel-blit pass graph");
+                    s_logged_unvalidated_channel_blit = true;
+                }
+            }
+#endif
 
             ps2_log_shader_recipe(i, prg);
 
@@ -472,6 +516,10 @@ static void ps2_set_viewport(int x, int y, int width, int height)
 
 static void ps2_set_scissor(int x, int y, int width, int height)
 {
+    s_scissor.x = x;
+    s_scissor.y = y;
+    s_scissor.width = width;
+    s_scissor.height = height;
     ps2GsCoreSetScissor(x, y, width, height);
 }
 
@@ -729,6 +777,263 @@ static void ps2_draw_opaque_input1_tex0_lerp(uint32_t vertex_count)
     ps2_trilerp_restore_state();
 }
 
+static bool ps2_ensure_alpha_trilerp_workspace(void)
+{
+    if (s_alpha_trilerp_color_target == PS2_GS_RENDER_TARGET_DEFAULT) {
+        s_alpha_trilerp_color_target = ps2GsCoreCreateRenderTarget(
+            PS2_GFX_PASS_GRAPH_TILE_WIDTH,
+            PS2_GFX_PASS_GRAPH_TILE_HEIGHT);
+    }
+    if (s_alpha_trilerp_color_target != PS2_GS_RENDER_TARGET_DEFAULT &&
+        s_alpha_trilerp_scalar_target == PS2_GS_RENDER_TARGET_DEFAULT) {
+        s_alpha_trilerp_scalar_target = ps2GsCoreCreateRenderTarget(
+            PS2_GFX_PASS_GRAPH_TILE_WIDTH,
+            PS2_GFX_PASS_GRAPH_TILE_HEIGHT);
+    }
+    if (s_alpha_trilerp_color_target != PS2_GS_RENDER_TARGET_DEFAULT &&
+        s_alpha_trilerp_scalar_target != PS2_GS_RENDER_TARGET_DEFAULT) {
+        return true;
+    }
+
+    if (s_alpha_trilerp_color_target != PS2_GS_RENDER_TARGET_DEFAULT) {
+        (void)ps2GsCoreReleaseRenderTarget(s_alpha_trilerp_color_target);
+        s_alpha_trilerp_color_target = PS2_GS_RENDER_TARGET_DEFAULT;
+    }
+    if (!s_warned_alpha_trilerp_workspace) {
+        sysLogPrintf(LOG_ERROR,
+            "GfxPS2 alpha-trilerp workspace allocation failed (%dx%d x2 CT32)",
+            PS2_GFX_PASS_GRAPH_TILE_WIDTH,
+            PS2_GFX_PASS_GRAPH_TILE_HEIGHT);
+        s_warned_alpha_trilerp_workspace = true;
+    }
+    return false;
+}
+
+static void ps2_make_alpha_trilerp_texture_triangle(
+    const struct Ps2AlphaTrilerpVertex *source, int texture_index,
+    int origin_x, int origin_y, bool capture_alpha, bool lerp_color,
+    struct Ps2GsTexturedVertex output[3])
+{
+    for (uint32_t i = 0u; i < 3u; ++i) {
+        const struct Ps2AlphaTrilerpVertex *vertex = &source[i];
+        const uint8_t red = capture_alpha ? 0x80u : vertex->shade_r;
+        const uint8_t green = capture_alpha ? 0x80u : vertex->shade_g;
+        const uint8_t blue = capture_alpha ? 0x80u : vertex->shade_b;
+        const uint8_t alpha = capture_alpha ? vertex->shade_a :
+            (lerp_color ? vertex->lod : 0x80u);
+        output[i].rgbaq = ps2_pack_rgbaq(
+            red, green, blue, alpha, vertex->inv_w);
+        output[i].st = ps2_pack_st(
+            vertex->tex_u[texture_index] * vertex->inv_w,
+            vertex->tex_v[texture_index] * vertex->inv_w);
+        output[i].xyz2 = ps2_pack_xyz2(
+            vertex->x - (float)origin_x,
+            vertex->y - (float)origin_y,
+            vertex->z);
+    }
+}
+
+static void ps2_make_alpha_trilerp_workspace_triangle(
+    const struct Ps2AlphaTrilerpVertex *source,
+    int origin_x, int origin_y, uint8_t alpha, bool use_vertex_lod,
+    bool screen_position,
+    struct Ps2GsTexturedVertex output[3])
+{
+    for (uint32_t i = 0u; i < 3u; ++i) {
+        const struct Ps2AlphaTrilerpVertex *vertex = &source[i];
+        const float local_x = vertex->x - (float)origin_x;
+        const float local_y = vertex->y - (float)origin_y;
+        output[i].rgbaq = ps2_pack_rgbaq(
+            0x80u, 0x80u, 0x80u,
+            use_vertex_lod ? vertex->lod : alpha, 1.0f);
+        output[i].st = ps2_pack_st(local_x, local_y);
+        output[i].xyz2 = ps2_pack_xyz2(
+            screen_position ? vertex->x : local_x,
+            screen_position ? vertex->y : local_y,
+            vertex->z);
+    }
+}
+
+static void ps2_restore_alpha_trilerp_state(void)
+{
+    ps2GsCoreBindDefaultRenderTarget();
+    ps2GsCoreSetScissor(
+        s_scissor.x, s_scissor.y, s_scissor.width, s_scissor.height);
+    ps2GsCoreSetDepthMode(s_depth_test, s_depth_update, s_depth_compare);
+    ps2GsCoreSetAlphaWrite(true);
+    ps2GsCoreSetAlphaBlend(s_alpha_blend);
+    ps2GsCoreSetAlphaTest(
+        s_shader && s_shader->features.opt_alpha_threshold,
+        s_shader && s_shader->features.opt_alpha_threshold ?
+            PS2_GFX_ALPHA_THRESHOLD : 0u);
+    ps2GsCoreSetFog(false, 0u, 0u, 0u);
+    ps2GsCoreSetTextureAlpha(true);
+    ps2GsCoreSetTextureClamp(s_sampler_cms[0], s_sampler_cmt[0]);
+}
+
+static bool ps2_draw_alpha_trilerp_tile(
+    const struct Ps2AlphaTrilerpVertex *triangle,
+    const struct Ps2GfxPassGraphRect *tile)
+{
+    struct Ps2GsTexturedVertex texture0_alpha[3];
+    struct Ps2GsTexturedVertex texture1_alpha[3];
+    struct Ps2GsTexturedVertex texture0_color[3];
+    struct Ps2GsTexturedVertex texture1_color[3];
+    struct Ps2GsTexturedVertex alpha_base[3];
+    struct Ps2GsTexturedVertex alpha_lerp[3];
+    struct Ps2GsTexturedVertex composite[3];
+    ps2_make_alpha_trilerp_texture_triangle(
+        triangle, 0, tile->x, tile->y, true, false, texture0_alpha);
+    ps2_make_alpha_trilerp_texture_triangle(
+        triangle, 1, tile->x, tile->y, true, false, texture1_alpha);
+    ps2_make_alpha_trilerp_texture_triangle(
+        triangle, 0, tile->x, tile->y, false, false, texture0_color);
+    ps2_make_alpha_trilerp_texture_triangle(
+        triangle, 1, tile->x, tile->y, false, true, texture1_color);
+    ps2_make_alpha_trilerp_workspace_triangle(
+        triangle, tile->x, tile->y, 0x80u, false, false, alpha_base);
+    ps2_make_alpha_trilerp_workspace_triangle(
+        triangle, tile->x, tile->y, 0u, true, false, alpha_lerp);
+    ps2_make_alpha_trilerp_workspace_triangle(
+        triangle, tile->x, tile->y, 0x80u, false, true, composite);
+
+    ps2GsCoreSetAlphaWrite(true);
+    ps2GsCoreSetAlphaTest(false, 0u);
+    ps2GsCoreSetFog(false, 0u, 0u, 0u);
+    ps2GsCoreSetDepthMode(false, false, false);
+    ps2GsCoreSetAlphaBlend(false);
+    ps2GsCoreSetTextureAlpha(true);
+
+    if (!ps2GsCoreBindRenderTarget(s_alpha_trilerp_color_target)) {
+        return false;
+    }
+    ps2GsCoreClear(true, false);
+    ps2GsCoreSetTextureClamp(s_sampler_cms[0], s_sampler_cmt[0]);
+    ps2GsCoreDrawTexturedTriangles(
+        s_selected_texture[0], texture0_alpha, 3u);
+
+    if (!ps2GsCoreBindRenderTarget(s_alpha_trilerp_scalar_target)) {
+        return false;
+    }
+    ps2GsCoreClear(true, false);
+    ps2GsCoreSetTextureAlpha(false);
+    if (!ps2GsCoreDrawRenderTargetAlphaTriangles(
+            s_alpha_trilerp_color_target, alpha_base, 3u, false)) {
+        return false;
+    }
+
+    if (!ps2GsCoreBindRenderTarget(s_alpha_trilerp_color_target)) {
+        return false;
+    }
+    ps2GsCoreSetTextureAlpha(true);
+    ps2GsCoreSetTextureClamp(s_sampler_cms[1], s_sampler_cmt[1]);
+    ps2GsCoreDrawTexturedTriangles(
+        s_selected_texture[1], texture1_alpha, 3u);
+
+    if (!ps2GsCoreBindRenderTarget(s_alpha_trilerp_scalar_target)) {
+        return false;
+    }
+    ps2GsCoreSetTextureAlpha(false);
+    ps2GsCoreSetAlphaBlend(true);
+    if (!ps2GsCoreDrawRenderTargetAlphaTriangles(
+            s_alpha_trilerp_color_target, alpha_lerp, 3u, false)) {
+        return false;
+    }
+
+    if (!ps2GsCoreBindRenderTarget(s_alpha_trilerp_color_target)) {
+        return false;
+    }
+    ps2GsCoreSetAlphaBlend(false);
+    ps2GsCoreSetTextureAlpha(false);
+    ps2GsCoreSetTextureClamp(s_sampler_cms[0], s_sampler_cmt[0]);
+    ps2GsCoreDrawTexturedTriangles(
+        s_selected_texture[0], texture0_color, 3u);
+    ps2GsCoreSetAlphaWrite(false);
+    ps2GsCoreSetAlphaBlend(true);
+    ps2GsCoreSetTextureClamp(s_sampler_cms[1], s_sampler_cmt[1]);
+    ps2GsCoreDrawTexturedTriangles(
+        s_selected_texture[1], texture1_color, 3u);
+    ps2GsCoreSetAlphaWrite(true);
+    ps2GsCoreSetAlphaBlend(false);
+    if (!ps2GsCoreBlitRenderTargetRedToActiveAlpha(
+            s_alpha_trilerp_scalar_target)) {
+        return false;
+    }
+
+    ps2GsCoreBindDefaultRenderTarget();
+    ps2GsCoreSetScissor(tile->x, tile->y, tile->width, tile->height);
+    ps2GsCoreSetDepthMode(s_depth_test, s_depth_update, s_depth_compare);
+    ps2GsCoreSetAlphaTest(
+        s_shader->features.opt_alpha_threshold,
+        s_shader->features.opt_alpha_threshold ?
+            PS2_GFX_ALPHA_THRESHOLD : 0u);
+    ps2GsCoreSetTextureAlpha(true);
+    ps2GsCoreSetAlphaBlend(s_alpha_blend);
+    return ps2GsCoreDrawRenderTargetTriangles(
+        s_alpha_trilerp_color_target, composite, 3u, false);
+}
+
+static bool ps2_draw_alpha_trilerp(uint32_t vertex_count)
+{
+    if (s_modulate) {
+        if (!s_warned_alpha_trilerp_modulate) {
+            sysLogPrintf(LOG_WARNING,
+                "GfxPS2 alpha-trilerp rejects destination-color blend mode");
+            s_warned_alpha_trilerp_modulate = true;
+        }
+        return false;
+    }
+    if (!ps2_ensure_alpha_trilerp_workspace()) {
+        return false;
+    }
+
+    int clip_x0 = s_scissor.x > 0 ? s_scissor.x : 0;
+    int clip_y0 = s_scissor.y > 0 ? s_scissor.y : 0;
+    int clip_x1 = s_scissor.x + s_scissor.width;
+    int clip_y1 = s_scissor.y + s_scissor.height;
+    const int screen_width = ps2GsCoreGetWidth();
+    const int screen_height = ps2GsCoreGetHeight();
+    if (clip_x1 > screen_width) clip_x1 = screen_width;
+    if (clip_y1 > screen_height) clip_y1 = screen_height;
+    if (clip_x0 >= clip_x1 || clip_y0 >= clip_y1) {
+        return true;
+    }
+    const struct Ps2GfxPassGraphRect clip = {
+        clip_x0, clip_y0, clip_x1 - clip_x0, clip_y1 - clip_y0,
+    };
+
+    bool success = true;
+    for (uint32_t vertex = 0u; vertex < vertex_count && success; vertex += 3u) {
+        struct Ps2GfxPassGraphTriangle geometry = {};
+        for (uint32_t i = 0u; i < 3u; ++i) {
+            geometry.x[i] = s_alpha_trilerp_vertices[vertex + i].x;
+            geometry.y[i] = s_alpha_trilerp_vertices[vertex + i].y;
+        }
+        struct Ps2GfxPassGraphTiles tiles = {};
+        if (!ps2GfxDescribePassGraphTiles(&geometry, &clip, &tiles)) {
+            continue;
+        }
+
+        const uint32_t tile_count = tiles.columns * tiles.rows;
+        for (uint32_t tile_index = 0u;
+             tile_index < tile_count && success; ++tile_index) {
+            struct Ps2GfxPassGraphRect tile = {};
+            success = ps2GfxGetPassGraphTile(
+                &tiles, tile_index, &tile) &&
+                ps2_draw_alpha_trilerp_tile(
+                    &s_alpha_trilerp_vertices[vertex], &tile);
+        }
+    }
+
+    ps2_restore_alpha_trilerp_state();
+    if (!success && !s_warned_alpha_trilerp_workspace) {
+        sysLogPrintf(LOG_ERROR,
+            "GfxPS2 alpha-trilerp pass graph submission failed");
+        s_warned_alpha_trilerp_workspace = true;
+    }
+    return success;
+}
+
 static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_vbo_num_tris)
 {
     if (!ps2GsCoreIsReady() || !s_shader || !buf_vbo || buf_vbo_num_tris == 0) {
@@ -753,14 +1058,19 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
         return;
     }
 
-    const bool opaque_trilerp =
+    const bool alpha_trilerp = s_shader->plan.pass_graph ==
+        PS2_PASS_GRAPH_ALPHA_TRILERP_MODULATE;
+    const bool opaque_trilerp = s_shader->plan.pass_graph ==
+        PS2_PASS_GRAPH_OPAQUE_TRILERP &&
         ps2_color_recipe_is_opaque_trilerp(s_shader->plan.color_recipe);
-    const bool opaque_input1_tex0_lerp =
+    const bool opaque_input1_tex0_lerp = s_shader->plan.pass_graph ==
+        PS2_PASS_GRAPH_OPAQUE_INPUT1_TEX0_LERP &&
         ps2_color_recipe_is_opaque_input1_tex0_lerp(
             s_shader->plan.color_recipe);
     if (s_shader->plan.textured &&
         (!ps2GsCoreTextureReady(s_selected_texture[0]) ||
-         (opaque_trilerp && !ps2GsCoreTextureReady(s_selected_texture[1])))) {
+         ((opaque_trilerp || alpha_trilerp) &&
+          !ps2GsCoreTextureReady(s_selected_texture[1])))) {
         return;
     }
 
@@ -889,7 +1199,24 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
                 packed_position = ps2_pack_xyz2(sx, sy, iz);
             }
 
-            if (opaque_trilerp) {
+            if (alpha_trilerp) {
+                struct Ps2AlphaTrilerpVertex *vertex =
+                    &s_alpha_trilerp_vertices[i];
+                vertex->x = sx;
+                vertex->y = sy;
+                vertex->inv_w = inv_w;
+                vertex->tex_u[0] = tex_u[0];
+                vertex->tex_u[1] = tex_u[1];
+                vertex->tex_v[0] = tex_v[0];
+                vertex->tex_v[1] = tex_v[1];
+                vertex->z = iz;
+                vertex->shade_r = ps2_modulate_component(input[1][0]);
+                vertex->shade_g = ps2_modulate_component(input[1][1]);
+                vertex->shade_b = ps2_modulate_component(input[1][2]);
+                vertex->shade_a =
+                    ps2_texture_alpha_fragment_component(input[1][3]);
+                vertex->lod = ps2_modulate_component(input[0][0]);
+            } else if (opaque_trilerp) {
                 uint8_t shade_r = 0x80;
                 uint8_t shade_g = 0x80;
                 uint8_t shade_b = 0x80;
@@ -947,7 +1274,9 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
             }
         }
 
-        if (opaque_trilerp) {
+        if (alpha_trilerp) {
+            (void)ps2_draw_alpha_trilerp((uint32_t)batch_vertices);
+        } else if (opaque_trilerp) {
             ps2_draw_opaque_trilerp((uint32_t)batch_vertices);
         } else if (opaque_input1_tex0_lerp) {
             ps2_draw_opaque_input1_tex0_lerp((uint32_t)batch_vertices);
@@ -970,6 +1299,7 @@ static void ps2_reset_viewport(void)
         s_viewport.y = 0;
         s_viewport.width = 0;
         s_viewport.height = 0;
+        s_scissor = s_viewport;
         return;
     }
 
@@ -977,6 +1307,7 @@ static void ps2_reset_viewport(void)
     s_viewport.y = 0;
     s_viewport.width = ps2GsCoreGetWidth();
     s_viewport.height = ps2GsCoreGetHeight();
+    s_scissor = s_viewport;
 }
 
 static void ps2_init(void)

@@ -87,6 +87,7 @@ static void test_one_cycle_modulate(void)
     assert(result.alpha_recipe == PS2_ALPHA_TEX0_MUL_INPUT1);
     assert(result.textured);
     assert(result.texture_alpha);
+    assert(!result.hardware_validation_required);
 }
 
 static void test_two_cycle_independent_final_cycle(void)
@@ -181,6 +182,7 @@ static void test_opaque_trilerp_pass2(void)
     assert(result.alpha_recipe == PS2_ALPHA_OPAQUE);
     assert(result.textured);
     assert(!result.texture_alpha);
+    assert(result.pass_graph == PS2_PASS_GRAPH_OPAQUE_TRILERP);
 }
 
 static void test_opaque_trilerp_modulate(void)
@@ -197,7 +199,7 @@ static void test_opaque_trilerp_modulate(void)
     assert(result.alpha_recipe == PS2_ALPHA_OPAQUE);
 }
 
-static void test_alpha_trilerp_remains_unsupported(void)
+static void test_alpha_trilerp_modulate_pass_graph(void)
 {
     struct CombinerBuilder builder{};
     builder.options = SHADER_OPT_2CYC | SHADER_OPT_ALPHA;
@@ -208,6 +210,40 @@ static void test_alpha_trilerp_remains_unsupported(void)
 
     const struct Ps2CombinerPlan result = plan(&builder);
     assert(!result.supported);
+    assert(result.color_recipe ==
+        PS2_COLOR_TEX01_LERP_INPUT1_MUL_INPUT2);
+    assert(result.alpha_recipe == PS2_ALPHA_UNSUPPORTED);
+    assert(result.textured);
+    assert(result.texture_alpha);
+    assert(result.hardware_validation_required);
+    assert(result.pass_graph == PS2_PASS_GRAPH_ALPHA_TRILERP_MODULATE);
+}
+
+static void test_alpha_trilerp_rejects_mismatched_final_channels(void)
+{
+    struct CombinerBuilder builder{};
+    builder.options = SHADER_OPT_2CYC | SHADER_OPT_ALPHA;
+    set_tex01_lerp(&builder, 0, 0);
+    set_tex01_lerp(&builder, 0, 1);
+    set_multiply(&builder, 1, 0, SHADER_COMBINED, SHADER_INPUT_2);
+    set_single(&builder, 1, 1, SHADER_COMBINED);
+
+    assert(!plan(&builder).supported);
+}
+
+static void test_alpha_trilerp_rejects_fogged_graph(void)
+{
+    struct CombinerBuilder builder{};
+    builder.options = SHADER_OPT_2CYC | SHADER_OPT_ALPHA | SHADER_OPT_FOG;
+    set_tex01_lerp(&builder, 0, 0);
+    set_tex01_lerp(&builder, 0, 1);
+    set_multiply(&builder, 1, 0, SHADER_COMBINED, SHADER_INPUT_2);
+    set_multiply(&builder, 1, 1, SHADER_COMBINED, SHADER_INPUT_2);
+
+    const struct Ps2CombinerPlan result = plan(&builder);
+    assert(!result.supported);
+    assert(result.pass_graph == PS2_PASS_GRAPH_DIRECT);
+    assert(!result.hardware_validation_required);
 }
 
 static void test_opaque_env_tex0_lerp_modulate(void)
@@ -291,7 +327,9 @@ int main(void)
     test_combined_dependency_requires_multipass();
     test_opaque_trilerp_pass2();
     test_opaque_trilerp_modulate();
-    test_alpha_trilerp_remains_unsupported();
+    test_alpha_trilerp_modulate_pass_graph();
+    test_alpha_trilerp_rejects_mismatched_final_channels();
+    test_alpha_trilerp_rejects_fogged_graph();
     test_opaque_env_tex0_lerp_modulate();
     test_opaque_env_tex0_lerp_pass2();
     test_alpha_env_tex0_lerp_remains_unsupported();
