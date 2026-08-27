@@ -149,6 +149,56 @@ static void test_gs_texture_buffer_width_alignment(void)
     assert(ps2GsTextureBufferWidth(1024u, true) == 16u);
 }
 
+static uint32_t intensity_clut_source_index(uint32_t destination,
+    uint32_t entry_count)
+{
+    return entry_count == 256u &&
+        ((destination & 0x18u) == 0x08u ||
+         (destination & 0x18u) == 0x10u)
+        ? destination ^ 0x18u : destination;
+}
+
+static void test_n64_intensity_cluts(void)
+{
+    uint32_t clut[256] = {};
+
+    assert(ps2GsBuildN64IntensityClut(PS2_GS_N64_IA4, clut, 16u));
+    for (uint32_t i = 0; i < 16u; ++i) {
+        const uint32_t intensity = (i >> 1u) * 0x24u;
+        const uint32_t alpha = (i & 1u) != 0u ? 0xffu : 0u;
+        assert(clut[i] == intensity * 0x00010101u + (alpha << 24u));
+    }
+
+    assert(ps2GsBuildN64IntensityClut(PS2_GS_N64_I4, clut, 16u));
+    for (uint32_t i = 0; i < 16u; ++i) {
+        const uint32_t intensity = i * 0x11u;
+        assert(clut[i] == intensity * 0x01010101u);
+    }
+
+    assert(ps2GsBuildN64IntensityClut(PS2_GS_N64_IA8, clut, 256u));
+    for (uint32_t destination = 0; destination < 256u; ++destination) {
+        const uint32_t source = intensity_clut_source_index(
+            destination, 256u);
+        const uint32_t intensity = (source >> 4u) * 0x11u;
+        const uint32_t alpha = (source & 0x0fu) * 0x11u;
+        assert(clut[destination] ==
+            intensity * 0x00010101u + (alpha << 24u));
+    }
+
+    assert(ps2GsBuildN64IntensityClut(PS2_GS_N64_I8, clut, 256u));
+    for (uint32_t destination = 0; destination < 256u; ++destination) {
+        const uint32_t source = intensity_clut_source_index(
+            destination, 256u);
+        assert(clut[destination] == source * 0x01010101u);
+    }
+
+    assert(!ps2GsBuildN64IntensityClut(PS2_GS_N64_IA4, clut, 256u));
+    assert(!ps2GsBuildN64IntensityClut(PS2_GS_N64_IA8, clut, 16u));
+    assert(!ps2GsBuildN64IntensityClut(
+        (enum Ps2GsN64IntensityEncoding)99, clut, 256u));
+    assert(!ps2GsBuildN64IntensityClut(PS2_GS_N64_I8, NULL, 256u));
+}
+
 int main(void)
 {
     test_primary_colors_and_alpha();
@@ -157,6 +207,7 @@ int main(void)
     test_ci4_nibble_order();
     test_rgba16_palette_conversion_and_csm1_order();
     test_gs_texture_buffer_width_alignment();
+    test_n64_intensity_cluts();
     puts("gs_texture_convert tests passed");
     return 0;
 }

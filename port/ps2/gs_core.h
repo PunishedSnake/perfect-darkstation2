@@ -27,6 +27,13 @@ enum Ps2GsDepthStorageMode {
     PS2_GS_PSMZ_16S = 0x0a,
 };
 
+enum Ps2GsN64IntensityEncoding {
+    PS2_GS_N64_IA4,
+    PS2_GS_N64_IA8,
+    PS2_GS_N64_I4,
+    PS2_GS_N64_I8,
+};
+
 struct Ps2GsCreateInfo {
     int color_psm;
     int depth_psm;
@@ -105,6 +112,10 @@ bool ps2GsCoreUploadTextureN64Ci(Ps2GsTextureHandle handle,
     const uint8_t *indices, uint32_t width, uint32_t height,
     uint8_t index_bits, const uint16_t *palette_rgba5551,
     uint32_t palette_count);
+/* IA4/IA8/I4/I8 use immutable shared CT32 CSM1 palettes. */
+bool ps2GsCoreUploadTextureN64Intensity(Ps2GsTextureHandle handle,
+    const uint8_t *texels, uint32_t width, uint32_t height,
+    enum Ps2GsN64IntensityEncoding encoding);
 void ps2GsCoreSetTextureFilter(Ps2GsTextureHandle handle, bool linear_filter);
 void ps2GsCoreReleaseTexture(Ps2GsTextureHandle handle);
 

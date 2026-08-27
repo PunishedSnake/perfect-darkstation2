@@ -305,7 +305,7 @@ extern "C" bool ps2GsNativeQueueUploadTexture(GSGLOBAL *gs,
         (texture->PSM == GS_PSM_T8 &&
             encoding == PS2_GS_NATIVE_UPLOAD_T8) ||
         (texture->PSM == GS_PSM_T4 &&
-            encoding == PS2_GS_NATIVE_UPLOAD_N64_CI4);
+            encoding == PS2_GS_NATIVE_UPLOAD_N64_T4);
     if (!valid_contract) {
         sysLogPrintf(LOG_ERROR,
             "GS native queue: invalid IMAGE source contract psm=0x%x encoding=%d",
@@ -366,7 +366,7 @@ extern "C" bool ps2GsNativeQueueUploadTexture(GSGLOBAL *gs,
                 texture->Width * texture->Height)) {
             return false;
         }
-    } else if (encoding == PS2_GS_NATIVE_UPLOAD_N64_CI4) {
+    } else if (encoding == PS2_GS_NATIVE_UPLOAD_N64_T4) {
         if (!ps2GsConvertN64Ci4ToGsT4(
                 (const uint8_t *)texture->Mem, slot->payload,
                 source_bytes)) {

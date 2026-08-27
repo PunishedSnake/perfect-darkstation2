@@ -64,6 +64,8 @@
 #define PS2_GFX_ALPHA_THRESHOLD 4u
 #define PS2_GFX_N64_FMT_RGBA 0u
 #define PS2_GFX_N64_FMT_CI 2u
+#define PS2_GFX_N64_FMT_IA 3u
+#define PS2_GFX_N64_FMT_I 4u
 #define PS2_GFX_N64_SIZ_4B 0u
 #define PS2_GFX_N64_SIZ_8B 1u
 #define PS2_GFX_N64_SIZ_16B 2u
@@ -121,6 +123,7 @@ static bool s_warned_mipmap;
 static bool s_logged_native_rgba16;
 static bool s_logged_native_ci4;
 static bool s_logged_native_ci8;
+static bool s_logged_native_intensity[4];
 
 static struct Ps2GsTexturedVertex s_stq_vertices[2][PS2_GFX_TRANSLATE_VERTS];
 static struct Ps2GsColorVertex s_color_vertices[PS2_GFX_TRANSLATE_VERTS];
@@ -353,6 +356,31 @@ extern "C" bool gfxPs2UploadTmemTexture(
             sysLogPrintf(LOG_NOTE,
                 "GfxPS2 native texture path: exact N64 RGBA16 -> GS PSMCT16");
             s_logged_native_rgba16 = true;
+        }
+        return true;
+    }
+
+    if ((format == PS2_GFX_N64_FMT_IA ||
+         format == PS2_GFX_N64_FMT_I) &&
+        (size == PS2_GFX_N64_SIZ_4B ||
+         size == PS2_GFX_N64_SIZ_8B)) {
+        const bool four_bit = size == PS2_GFX_N64_SIZ_4B;
+        const enum Ps2GsN64IntensityEncoding encoding =
+            format == PS2_GFX_N64_FMT_IA
+                ? (four_bit ? PS2_GS_N64_IA4 : PS2_GS_N64_IA8)
+                : (four_bit ? PS2_GS_N64_I4 : PS2_GS_N64_I8);
+        const uint32_t width = four_bit
+            ? view->line_size_bytes * 2u : view->line_size_bytes;
+        if (!ps2GsCoreUploadTextureN64Intensity(
+                handle, view->texels, width, height, encoding)) {
+            return false;
+        }
+        if (!s_logged_native_intensity[(uint32_t)encoding]) {
+            sysLogPrintf(LOG_NOTE,
+                "GfxPS2 native texture path: exact N64 %s%u -> GS PSMT%u/shared CT32 CSM1",
+                format == PS2_GFX_N64_FMT_IA ? "IA" : "I",
+                four_bit ? 4u : 8u, four_bit ? 4u : 8u);
+            s_logged_native_intensity[(uint32_t)encoding] = true;
         }
         return true;
     }

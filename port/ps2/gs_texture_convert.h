@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "gs_core.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -26,6 +28,13 @@ bool ps2GsConvertN64Ci4ToGsT4(const uint8_t *source,
  */
 bool ps2GsConvertN64Rgba16PaletteToGsCt16(const uint16_t *source,
     uint8_t *destination, uint32_t entry_count);
+
+/*
+ * Build an exact RGBA32 CSM1 CLUT for a native N64 intensity texture.
+ * Four-bit formats require 16 entries; eight-bit formats require 256.
+ */
+bool ps2GsBuildN64IntensityClut(enum Ps2GsN64IntensityEncoding encoding,
+    uint32_t *destination, uint32_t entry_count);
 
 /*
  * GS TBW is expressed in 64-pixel units. PSMT4/PSMT8 buffers additionally

@@ -261,13 +261,16 @@ Current/candidate policy by class, subject to actual Perfect Dark content profil
 
 ```text
 CI4 / CI8 RGBA TLUT -> PSMT4 / PSMT8 + PSMCT16 CSM1 CLUT active
+IA4 / IA8 / I4 / I8 -> PSMT4 / PSMT8 + shared PSMCT32 CSM1 CLUT active
 RGBA16         -> exact live-TMEM view -> PSMCT16 active path
-IA / I         -> preserve compact semantics where practical
+IA16           -> RGBA32 compatibility fallback
 large imagery  -> IPU experiment candidate
 runtime RGBA32 -> native GIF IMAGE baseline, then remove copies if measured worthwhile
 ```
 
-CI index data and its CLUT are allocated, uploaded and published as one logical residency. CI4 upload reverses the two indices in each source byte for GS low-nibble-first PSMT4 addressing. CI8 index bytes are copied directly. Indexed TBW uses the GS 128-pixel buffer-width alignment, while direct-color formats retain 64-pixel alignment. The RGBA5551 palette is converted to PSMCT16 and the 256-entry CI8 case is permuted to CSM1 order. The core reloads the internal CLUT cache only when the bound indexed residency changes. IA16 palettes still take the RGBA32 compatibility path to retain their eight-bit alpha. This is not yet a final format table; actual N64 texture usage in Perfect Dark must still drive further promotion.
+CI index data and its CLUT are allocated, uploaded and published as one logical residency. CI4 upload reverses the two indices in each source byte for GS low-nibble-first PSMT4 addressing. CI8 index bytes are copied directly. Indexed TBW uses the GS 128-pixel buffer-width alignment, while direct-color formats retain 64-pixel alignment. The RGBA5551 palette is converted to PSMCT16 and the 256-entry CI8 case is permuted to CSM1 order.
+
+IA4/IA8/I4/I8 preserve the portable Fast3D importer's exact RGBA expansion through four immutable PSMCT32 palettes. Each palette is materialized lazily once and shared by every texture of that encoding; only the compact PSMT4/PSMT8 index plane belongs to the texture slot. This retains I-format intensity-as-alpha and IA-format independent alpha without a four-byte-per-texel expansion. The core keys the GS CLUT cache by actual VRAM address and pixel format, so switching between handles sharing a palette does not reload it, while any mutable CI palette upload invalidates the key. IA16 textures and IA16 TLUTs still take the RGBA32 compatibility path because their independent eight-bit intensity and alpha cannot be represented by a 256-entry palette or PSMCT16.
 
 ## 6. TMEM semantic requirement
 
@@ -305,6 +308,7 @@ This semantic layer should remain backend-independent where possible. PS2-specif
 - normal draw and upload submission does not wait for `FINISH`; fences occur at PCRTC publication and under genuine texture-allocation pressure;
 - the PS2 Fast3D cache is capped at the backend's 64 texture handles so eviction can recycle handles instead of exhausting the backend table;
 - exact live-TMEM N64 RGBA5551 textures are converted directly into GS A1B5G5R5 staging and reside as PSMCT16, halving their IMAGE payload and local-memory footprint relative to the RGBA32 baseline;
+- exact IA4/IA8/I4/I8 textures remain compact PSMT4/PSMT8 index planes and select one of four lazy immutable PSMCT32 CSM1 palettes shared across all texture handles;
 - TEXA expands the PSMCT16 alpha bit to the same 0..255 texture-alpha convention used by the existing combiner adapter;
 - the project owns the per-frame VSync wait, `DISPFB2` publication, draw-buffer selection and native `FRAME`/`SCISSOR` packet;
 - a host-tested combiner planner reduces exact two-cycle modes to one GS pass when the final channel is independent of `COMBINED` or merely passes the first-cycle result through;
@@ -319,7 +323,7 @@ This semantic layer should remain backend-independent where possible. PS2-specif
 - RGBA32/PSMCT32 remains the compatibility fallback for other formats and any TMEM view whose exactness is not proved;
 - the hot frame loop is native in command, texture and presentation transport, but one-time initialization is not yet gsKit-independent.
 
-Remaining renderer milestones include native indexed texture residency, measured GS state batching and combiner coverage, VIF1/VU1 geometry batches, and replacement of the remaining one-time gsKit CRT/system-buffer bootstrap where doing so has a concrete ownership or performance benefit.
+Remaining renderer milestones include exact IA16 handling, measured GS state batching and combiner coverage, VIF1/VU1 geometry batches, and replacement of the remaining one-time gsKit CRT/system-buffer bootstrap where doing so has a concrete ownership or performance benefit.
 
 ## 8. Bottleneck hypothesis ordering
 
@@ -452,7 +456,8 @@ PCSX2 is useful for correctness, packet/state inspection and fast iteration. It 
 - transactional reupload/resize with fence-delayed retirement;
 - exact RGBA16 -> PSMCT16 direct residency, with RGBA32 fallback;
 - exact CI4/CI8 plus RGBA16 TLUT residency as paired texture/CLUT blocks;
-- continue the format inventory before promoting IA/I and IA16-TLUT assets.
+- exact IA4/IA8/I4/I8 residency through shared immutable CT32 palettes;
+- retain IA16 and IA16-TLUT assets on RGBA32 until an exact compact representation is proved.
 
 ### M4: RDP state coverage
 
