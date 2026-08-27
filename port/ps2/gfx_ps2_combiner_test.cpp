@@ -219,6 +219,64 @@ static void test_alpha_trilerp_modulate_pass_graph(void)
     assert(result.pass_graph == PS2_PASS_GRAPH_ALPHA_TRILERP_MODULATE);
 }
 
+static void test_custom25_independent_alpha_pass_graph(void)
+{
+    struct CombinerBuilder builder{};
+    builder.options = SHADER_OPT_2CYC | SHADER_OPT_ALPHA | SHADER_OPT_FOG;
+    set_tex01_lerp(&builder, 0, 0);
+    set_single(&builder, 0, 1, SHADER_INPUT_1);
+    set_multiply(&builder, 1, 0, SHADER_COMBINED, SHADER_INPUT_2);
+    set_multiply(&builder, 1, 1, SHADER_COMBINED, SHADER_INPUT_2);
+
+    const struct Ps2CombinerPlan result = plan(&builder);
+    assert(result.supported);
+    assert(result.color_recipe ==
+        PS2_COLOR_TEX01_LERP_INPUT1_MUL_INPUT2);
+    assert(result.alpha_recipe == PS2_ALPHA_INPUT1_MUL_INPUT2);
+    assert(result.textured);
+    assert(!result.texture_alpha);
+    assert(!result.hardware_validation_required);
+    assert(result.pass_graph ==
+        PS2_PASS_GRAPH_TRILERP_INDEPENDENT_ALPHA);
+}
+
+static void test_custom26_tex0_independent_alpha_pass_graph(void)
+{
+    struct CombinerBuilder builder{};
+    builder.options = SHADER_OPT_2CYC | SHADER_OPT_ALPHA | SHADER_OPT_FOG;
+    set_tex01_lerp(&builder, 0, 0);
+    set_multiply(&builder, 0, 1, SHADER_TEXEL0, SHADER_INPUT_1);
+    set_multiply(&builder, 1, 0, SHADER_COMBINED, SHADER_INPUT_2);
+    set_multiply(&builder, 1, 1, SHADER_COMBINED, SHADER_INPUT_2);
+
+    const struct Ps2CombinerPlan result = plan(&builder);
+    assert(result.supported);
+    assert(result.color_recipe ==
+        PS2_COLOR_TEX01_LERP_INPUT1_MUL_INPUT2);
+    assert(result.alpha_recipe ==
+        PS2_ALPHA_TEX0_MUL_INPUT1_MUL_INPUT2);
+    assert(result.textured);
+    assert(result.texture_alpha);
+    assert(!result.hardware_validation_required);
+    assert(result.pass_graph ==
+        PS2_PASS_GRAPH_TRILERP_INDEPENDENT_ALPHA);
+}
+
+static void test_custom24_nonlinear_alpha_remains_unsupported(void)
+{
+    struct CombinerBuilder builder{};
+    builder.options = SHADER_OPT_2CYC | SHADER_OPT_ALPHA | SHADER_OPT_FOG;
+    set_tex01_lerp(&builder, 0, 0);
+    builder.c[0][1][0] = SHADER_1;
+    builder.c[0][1][1] = SHADER_INPUT_1;
+    builder.c[0][1][2] = SHADER_INPUT_2;
+    builder.c[0][1][3] = SHADER_0;
+    set_multiply(&builder, 1, 0, SHADER_COMBINED, SHADER_INPUT_2);
+    set_multiply(&builder, 1, 1, SHADER_COMBINED, SHADER_INPUT_1);
+
+    assert(!plan(&builder).supported);
+}
+
 static void test_alpha_trilerp_rejects_mismatched_final_channels(void)
 {
     struct CombinerBuilder builder{};
@@ -328,6 +386,9 @@ int main(void)
     test_opaque_trilerp_pass2();
     test_opaque_trilerp_modulate();
     test_alpha_trilerp_modulate_pass_graph();
+    test_custom25_independent_alpha_pass_graph();
+    test_custom26_tex0_independent_alpha_pass_graph();
+    test_custom24_nonlinear_alpha_remains_unsupported();
     test_alpha_trilerp_rejects_mismatched_final_channels();
     test_alpha_trilerp_rejects_fogged_graph();
     test_opaque_env_tex0_lerp_modulate();
