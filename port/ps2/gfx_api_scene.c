@@ -26,7 +26,9 @@
 
 #if defined(PERFECT_DARK_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT)
 #define API_SCENE_ALPHA_DIAG_STRIDE 16
-#define API_SCENE_ALPHA_DIAG_VERTICES 6
+#define API_SCENE_ALPHA_DIAG_VERTICES 3
+#define API_SCENE_ALPHA_DIAG_PANEL_W 128
+#define API_SCENE_ALPHA_DIAG_PANEL_H 64
 #endif
 
 struct api_scene_vec3 {
@@ -216,31 +218,59 @@ static void writeAlphaDiagReferenceVertex(float **dst, float x, float y,
     *dst = p;
 }
 
-static void buildAlphaDiagVbos(void)
+static float alphaDiagScreenToClipX(float x, int width)
 {
-    static const uint8_t indices[6] = { 0, 1, 2, 0, 2, 3 };
-    static const float uv[4][2] = {
-        { 0.0f, 1.0f }, { 1.0f, 1.0f },
-        { 1.0f, 0.0f }, { 0.0f, 0.0f },
+    return 2.0f * (float)x / (float)width - 1.0f;
+}
+
+static float alphaDiagScreenToClipY(float y, int height)
+{
+    return 1.0f - 2.0f * (float)y / (float)height;
+}
+
+static void buildAlphaDiagVbos(int width, int height)
+{
+    /*
+     * Isolate one 128x64 workspace tile and one triangle. The previous
+     * full-size two-triangle panels mixed channel-shuffle correctness with
+     * multi-tile composition, shared-edge rasterisation and enough sprite
+     * traffic to make controller sampling appear hung on real hardware.
+     */
+    const int graphX0 = 128;
+    const int graphX1 = graphX0 + API_SCENE_ALPHA_DIAG_PANEL_W;
+    const int referenceX0 = width - 256;
+    const int referenceX1 = referenceX0 + API_SCENE_ALPHA_DIAG_PANEL_W;
+    const int y0 = ((height - API_SCENE_ALPHA_DIAG_PANEL_H) / 2 /
+        API_SCENE_ALPHA_DIAG_PANEL_H) * API_SCENE_ALPHA_DIAG_PANEL_H;
+    const int y1 = y0 + API_SCENE_ALPHA_DIAG_PANEL_H;
+    const float graphPosition[3][2] = {
+        { alphaDiagScreenToClipX((float)graphX0 + 0.25f, width),
+          alphaDiagScreenToClipY((float)y1 - 0.25f, height) },
+        { alphaDiagScreenToClipX((float)graphX1 - 0.25f, width),
+          alphaDiagScreenToClipY((float)y1 - 0.25f, height) },
+        { alphaDiagScreenToClipX((float)graphX1 - 0.25f, width),
+          alphaDiagScreenToClipY((float)y0 + 0.25f, height) },
     };
-    static const float graphPosition[4][2] = {
-        { -0.92f, -0.62f }, { -0.06f, -0.62f },
-        { -0.06f,  0.62f }, { -0.92f,  0.62f },
+    const float referencePosition[3][2] = {
+        { alphaDiagScreenToClipX((float)referenceX0 + 0.25f, width),
+          alphaDiagScreenToClipY((float)y1 - 0.25f, height) },
+        { alphaDiagScreenToClipX((float)referenceX1 - 0.25f, width),
+          alphaDiagScreenToClipY((float)y1 - 0.25f, height) },
+        { alphaDiagScreenToClipX((float)referenceX1 - 0.25f, width),
+          alphaDiagScreenToClipY((float)y0 + 0.25f, height) },
     };
-    static const float referencePosition[4][2] = {
-        { 0.06f, -0.62f }, { 0.92f, -0.62f },
-        { 0.92f,  0.62f }, { 0.06f,  0.62f },
+    static const float uv[3][2] = {
+        { 0.0f, 1.0f }, { 1.0f, 1.0f }, { 1.0f, 0.0f },
     };
     float *graph = sAlphaDiagGraphVbo;
     float *reference = sAlphaDiagReferenceVbo;
-    for (int i = 0; i < 6; ++i) {
-        const uint8_t index = indices[i];
+    for (int i = 0; i < API_SCENE_ALPHA_DIAG_VERTICES; ++i) {
         writeAlphaDiagGraphVertex(&graph,
-            graphPosition[index][0], graphPosition[index][1],
-            uv[index][0], uv[index][1], uv[index][0]);
+            graphPosition[i][0], graphPosition[i][1],
+            uv[i][0], uv[i][1], uv[i][0]);
         writeAlphaDiagReferenceVertex(&reference,
-            referencePosition[index][0], referencePosition[index][1],
-            uv[index][0], uv[index][1]);
+            referencePosition[i][0], referencePosition[i][1],
+            uv[i][0], uv[i][1]);
     }
 }
 
@@ -373,7 +403,9 @@ static void writeStatusQuad(
     writeUntexturedVertex(dst, -0.78f, y1, 0.96f, r, g, b);
 }
 
-static void buildStatusVbo(int romStatus, const struct Ps2ShooterControls *controls)
+static void buildStatusVbo(int romStatus,
+    const struct Ps2ShooterControls *controls, uint32_t frameCounter,
+    bool diagnosticActive)
 {
     float *dst = sStatusVbo;
     float romR = 0.95f;
@@ -415,6 +447,14 @@ static void buildStatusVbo(int romStatus, const struct Ps2ShooterControls *contr
             inputG = 0.18f;
             inputB = 0.12f;
         }
+    }
+
+    if (diagnosticActive) {
+        /* A visible pulse proves the CPU/frame loop is still alive. */
+        const float pulse = (frameCounter & 16u) != 0u ? 1.0f : 0.30f;
+        inputR = 0.15f * pulse;
+        inputG = 0.95f * pulse;
+        inputB = 0.35f * pulse;
     }
 
     writeStatusQuad(&dst, -0.73f, -0.68f, inputR, inputG, inputB);
@@ -526,7 +566,7 @@ bool ps2GfxApiSceneRun(int romStatus)
 
 #if defined(PERFECT_DARK_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT)
     buildAlphaDiagTextures();
-    buildAlphaDiagVbos();
+    buildAlphaDiagVbos(width, height);
     const uint32_t alphaDiagTexture0 = api->new_texture();
     const uint32_t alphaDiagTexture1 = api->new_texture();
     const uint32_t alphaDiagReferenceTexture = api->new_texture();
@@ -598,6 +638,7 @@ bool ps2GfxApiSceneRun(int romStatus)
      */
     bool alphaDiagActive = true;
 #endif
+    uint32_t frameCounter = 0u;
 
     for (;;) {
         wapi->handle_events();
@@ -654,7 +695,13 @@ bool ps2GfxApiSceneRun(int romStatus)
             advanceRotation(&sinX, &cosX, sinStepX, cosStepX);
         }
 
-        buildStatusVbo(romStatus, controls);
+        buildStatusVbo(romStatus, controls, frameCounter,
+#if defined(PERFECT_DARK_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT)
+            alphaDiagActive
+#else
+            false
+#endif
+        );
         buildCubeVbo(sinY, cosY, sinX, cosX, aspect, offsetX, cameraDistance);
 
         api->start_frame();
@@ -700,5 +747,6 @@ bool ps2GfxApiSceneRun(int romStatus)
         wapi->swap_buffers_begin();
         api->finish_render();
         wapi->swap_buffers_end();
+        ++frameCounter;
     }
 }
