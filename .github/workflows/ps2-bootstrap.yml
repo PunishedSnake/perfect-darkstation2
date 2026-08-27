@@ -154,9 +154,9 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/port/ps2/ps2dev-toolchain.cmake" \
             -DPD_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT=ON
           cmake --build build-ps2-alpha-diag -j2 --verbose
-          test -f build-ps2-alpha-diag/pd-ps2-bootstrap.elf
+          test -f build-ps2-alpha-diag/pd-ps2-alpha-trilerp-diag.elf
           mips64r5900el-ps2-elf-size \
-            build-ps2-alpha-diag/pd-ps2-bootstrap.elf
+            build-ps2-alpha-diag/pd-ps2-alpha-trilerp-diag.elf
 
       - name: Upload bootstrap ELF
         uses: actions/upload-artifact@v4
@@ -170,6 +170,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: pd-ps2-alpha-trilerp-diag
-          path: build-ps2-alpha-diag/pd-ps2-bootstrap.elf
+          path: build-ps2-alpha-diag/pd-ps2-alpha-trilerp-diag.elf
           if-no-files-found: error
           retention-days: 14

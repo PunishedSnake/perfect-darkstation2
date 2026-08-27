@@ -590,7 +590,13 @@ bool ps2GfxApiSceneRun(int romStatus)
     float cameraDistance = 4.6f;
     const float aspect = (float)width / (float)height;
 #if defined(PERFECT_DARK_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT)
-    bool alphaDiagActive = false;
+    /*
+     * A diagnostic binary must identify itself without relying on controller
+     * input.  Start on the A/B screen and let Select return to the baseline
+     * cube.  This also makes accidentally launching the ordinary bootstrap
+     * immediately obvious on real hardware.
+     */
+    bool alphaDiagActive = true;
 #endif
 
     for (;;) {

@@ -220,8 +220,14 @@ target_link_directories(pd_ps2_bootstrap PRIVATE "${GSKIT}/lib")
 # libpadx matches the ROM XPADMAN module used by the current PS2SDK padx sample.
 target_link_libraries(pd_ps2_bootstrap PRIVATE gskit dmakit padx z kernel)
 
+if(PD_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT)
+  set(PD_PS2_BOOTSTRAP_OUTPUT_NAME "pd-ps2-alpha-trilerp-diag")
+else()
+  set(PD_PS2_BOOTSTRAP_OUTPUT_NAME "pd-ps2-bootstrap")
+endif()
+
 set_target_properties(pd_ps2_bootstrap PROPERTIES
-  OUTPUT_NAME "pd-ps2-bootstrap"
+  OUTPUT_NAME "${PD_PS2_BOOTSTRAP_OUTPUT_NAME}"
   SUFFIX ".elf"
 )
 
