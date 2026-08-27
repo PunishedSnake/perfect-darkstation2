@@ -130,8 +130,9 @@ static bool ps2_alpha_recipe_textured(enum Ps2AlphaRecipe recipe)
 static bool ps2_common_options_supported(const struct CCFeatures *f)
 {
     /* Alpha threshold and fog already have exact fixed-function mappings. */
-    return (!f->opt_texture_edge || f->opt_alpha) && !f->opt_noise &&
-           !f->opt_invisible && !f->opt_grayscale && !f->opt_blur &&
+    return (!f->opt_texture_edge || f->opt_alpha) &&
+           (!f->opt_invisible || f->opt_alpha) && !f->opt_noise &&
+           !f->opt_grayscale && !f->opt_blur &&
            (!f->opt_alpha_threshold || f->opt_alpha);
 }
 
@@ -171,6 +172,7 @@ static bool ps2_plan_opaque_tex01_lerp(const struct CCFeatures *f,
     struct Ps2CombinerPlan *plan)
 {
     if (!f->opt_2cyc || f->opt_alpha || f->opt_texture_edge ||
+        f->opt_invisible ||
         !ps2_is_tex01_lerp_cycle(f)) {
         return false;
     }
@@ -205,7 +207,7 @@ static bool ps2_plan_alpha_tex01_lerp_modulate(
     const struct CCFeatures *f, struct Ps2CombinerPlan *plan)
 {
     if (!f->opt_2cyc || !f->opt_alpha || f->opt_fog ||
-        f->opt_texture_edge ||
+        f->opt_texture_edge || f->opt_invisible ||
         !ps2_is_tex01_lerp_cycle(f) ||
         !ps2_is_tex01_alpha_lerp_cycle(f)) {
         return false;
@@ -244,7 +246,7 @@ static bool ps2_plan_tex01_lerp_independent_alpha(
     const struct CCFeatures *f, struct Ps2CombinerPlan *plan)
 {
     if (!f->opt_2cyc || !f->opt_alpha ||
-        f->opt_texture_edge ||
+        f->opt_texture_edge || f->opt_invisible ||
         !ps2_is_tex01_lerp_cycle(f) ||
         !ps2_cycle_multiplies_combined_by_input2(f, 0u) ||
         !ps2_cycle_multiplies_combined_by_input2(f, 1u)) {
@@ -293,6 +295,7 @@ static bool ps2_plan_opaque_input1_tex0_lerp(const struct CCFeatures *f,
     struct Ps2CombinerPlan *plan)
 {
     if (!f->opt_2cyc || f->opt_alpha || f->opt_texture_edge ||
+        f->opt_invisible ||
         !ps2_is_input1_tex0_lerp_cycle(f)) {
         return false;
     }

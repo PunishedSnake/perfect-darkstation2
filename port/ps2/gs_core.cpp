@@ -66,6 +66,7 @@ static uint32_t s_shared_clut_staging[256] __attribute__((aligned(64)));
 static uint32_t s_retired_vram_count;
 static bool s_frame_building;
 static bool s_depth_update = true;
+static bool s_color_write = true;
 static bool s_alpha_write = true;
 static bool s_framebuffer_alpha_force;
 static bool s_texture_alpha;
@@ -339,9 +340,15 @@ static void ps2GsCoreEmitZbufWriteMask(void)
     }
 }
 
-static uint32_t ps2GsCoreAlphaFrameMask(void)
+static uint32_t ps2GsCoreFrameMask(void)
 {
-    if (s_alpha_write || !s_gs) {
+    if (!s_gs) {
+        return 0;
+    }
+    if (!s_color_write) {
+        return 0xffffffffu;
+    }
+    if (s_alpha_write) {
         return 0;
     }
 
@@ -369,7 +376,7 @@ static void ps2GsCoreEmitFrameMask(void)
             ps2GsCoreTargetVram() / PS2_GS_FRAMEBUFFER_ALIGNMENT,
             ps2GsCoreTargetFbw(),
             ps2GsCoreTargetPsm(),
-            ps2GsCoreAlphaFrameMask()),
+            ps2GsCoreFrameMask()),
         GS_FRAME_1 + s_gs->PrimContext);
 }
 
@@ -554,6 +561,7 @@ extern "C" bool ps2GsCoreInit(const struct Ps2GsCreateInfo *info)
     s_gs = gs;
     s_frame_building = false;
     s_depth_update = true;
+    s_color_write = true;
     s_alpha_write = true;
     s_framebuffer_alpha_force = false;
     s_texture_alpha = false;
@@ -887,6 +895,18 @@ extern "C" void ps2GsCoreSetAlphaWrite(bool enable)
     }
 
     s_alpha_write = enable;
+    if (s_frame_building) {
+        ps2GsCoreEmitFrameMask();
+    }
+}
+
+extern "C" void ps2GsCoreSetColorWrite(bool enable)
+{
+    if (!s_gs || s_color_write == enable) {
+        return;
+    }
+
+    s_color_write = enable;
     if (s_frame_building) {
         ps2GsCoreEmitFrameMask();
     }
@@ -1820,7 +1840,7 @@ static bool ps2GsCoreRestoreChannelBlitState(
             ps2GsCoreTargetVram() / PS2_GS_FRAMEBUFFER_ALIGNMENT,
             ps2GsCoreTargetFbw(),
             ps2GsCoreTargetPsm(),
-            ps2GsCoreAlphaFrameMask()),
+            ps2GsCoreFrameMask()),
         GS_FRAME_1 + s_gs->PrimContext);
     ps2GsCoreWriteReg(&p[1],
         GS_SETREG_SCISSOR(

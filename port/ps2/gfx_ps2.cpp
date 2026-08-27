@@ -1247,6 +1247,10 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
 
     bool fog_color_emitted = false;
     const bool texture_edge = s_shader->features.opt_texture_edge;
+    const bool invisible = s_shader->features.opt_invisible;
+    if (invisible) {
+        ps2GsCoreSetColorWrite(false);
+    }
     if (texture_edge) {
         /*
          * Fast3D's portable contract discards alpha <= 0.19 and promotes every
@@ -1493,6 +1497,9 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
             s_shader->features.opt_alpha_threshold ?
                 PS2_GFX_ALPHA_THRESHOLD : 0u);
     }
+    if (invisible) {
+        ps2GsCoreSetColorWrite(true);
+    }
 }
 
 static void ps2_reset_viewport(void)
@@ -1538,6 +1545,7 @@ static void ps2_init(void)
     s_logged_native_rgba16 = false;
     ps2GsCoreSetAlphaTest(false, 0u);
     ps2GsCoreSetFramebufferAlphaForce(false);
+    ps2GsCoreSetColorWrite(true);
     ps2GsCoreSetFog(false, 0u, 0u, 0u);
     ps2GsCoreSetTextureAlpha(false);
     ps2_reset_viewport();

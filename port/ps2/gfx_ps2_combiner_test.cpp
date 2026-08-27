@@ -112,6 +112,27 @@ static void test_texture_edge_requires_alpha(void)
     assert(!plan(&builder).supported);
 }
 
+static void test_one_cycle_invisible_depth_only(void)
+{
+    struct CombinerBuilder builder{};
+    builder.options = SHADER_OPT_ALPHA | SHADER_OPT_INVISIBLE;
+    set_multiply(&builder, 0, 0, SHADER_TEXEL0, SHADER_INPUT_1);
+    set_multiply(&builder, 0, 1, SHADER_TEXEL0, SHADER_INPUT_1);
+
+    const struct Ps2CombinerPlan result = plan(&builder);
+    assert(result.supported);
+    assert(result.pass_graph == PS2_PASS_GRAPH_DIRECT);
+}
+
+static void test_invisible_requires_alpha_contract(void)
+{
+    struct CombinerBuilder builder{};
+    builder.options = SHADER_OPT_INVISIBLE;
+    set_multiply(&builder, 0, 0, SHADER_TEXEL0, SHADER_INPUT_1);
+
+    assert(!plan(&builder).supported);
+}
+
 static void test_two_cycle_independent_final_cycle(void)
 {
     struct CombinerBuilder builder{};
@@ -402,6 +423,8 @@ int main(void)
     test_one_cycle_modulate();
     test_one_cycle_texture_edge();
     test_texture_edge_requires_alpha();
+    test_one_cycle_invisible_depth_only();
+    test_invisible_requires_alpha_contract();
     test_two_cycle_independent_final_cycle();
     test_two_cycle_pass2_uses_first_cycle();
     test_multiply_by_one_is_pass2();
