@@ -298,6 +298,7 @@ This semantic layer should remain backend-independent where possible. PS2-specif
 **CURRENT IMPLEMENTATION:**
 
 - frame/state/primitive PATH3 commands use a project-owned native GIF PACKED A+D queue;
+- **CURRENT IMPLEMENTATION:** ordinary state and primitive reservations may spill across any number of the two alternating PATH3 command arenas in one logical frame. A spill submits the full arena, begins the other one and continues in-order with persistent GS register state; it waits only for GIF-channel ownership and never inserts `FINISH`. Single packets larger than an arena remain a hard error, with host-tested boundary arithmetic preventing unsigned-capacity wraparound;
 - texture uploads use project-owned GIF IMAGE source chains with two persistent staging slots;
 - upload staging is prepared before claiming the GIF channel, following `submit early, wait late` as far as dependency allows;
 - upload chains end with `TEXFLUSH` and do not insert GS `FINISH`;

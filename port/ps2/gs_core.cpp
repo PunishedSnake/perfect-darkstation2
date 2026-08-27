@@ -5,6 +5,7 @@
 #include <dmaKit.h>
 #include <gsKit.h>
 
+#include "gs_command_budget.h"
 #include "gs_core.h"
 #include "gs_native_queue.h"
 #include "gs_render_target_layout.h"
@@ -71,6 +72,8 @@ static bool s_texture_alpha;
 static bool s_native_submit_failed;
 static bool s_native_finish_failed;
 static bool s_native_present_failed;
+static bool s_logged_command_arena_spill;
+static bool s_logged_oversized_command;
 static Ps2GsRenderTargetHandle s_active_render_target;
 static uint32_t s_loaded_clut_vram;
 static int s_loaded_clut_psm;
@@ -240,8 +243,42 @@ static void ps2GsCoreInvalidateClutCache(void)
 
 static struct Ps2GsPackedReg *ps2GsCoreReserve(uint32_t register_count)
 {
-    if (!s_frame_building) {
+    if (!s_frame_building || register_count == 0u) {
         return NULL;
+    }
+
+    const uint32_t used_qw = ps2GsNativeQueueUsedQwords();
+    const uint32_t capacity_qw = ps2GsNativeQueueCapacityQwords();
+    const enum Ps2GsCommandBudgetDecision decision =
+        ps2GsClassifyCommandReservation(
+            used_qw, capacity_qw, register_count);
+    if (decision == PS2_GS_COMMAND_TOO_LARGE) {
+        if (!s_logged_oversized_command) {
+            sysLogPrintf(LOG_ERROR,
+                "GS core: single command packet exceeds arena registers=%u capacity=%u QW",
+                register_count, capacity_qw);
+            ps2LogCheckpoint();
+            s_logged_oversized_command = true;
+        }
+        return NULL;
+    }
+    if (decision == PS2_GS_COMMAND_SPILL) {
+        /*
+         * This is a GIF-channel ownership boundary, not a GS dependency.
+         * Register state persists across ordered PATH3 DMA submissions, so the
+         * next arena continues the same frame without replay or FINISH.
+         */
+        if (!ps2GsNativeQueueSubmit()) {
+            return NULL;
+        }
+        ps2GsNativeQueueBeginFrame();
+        if (!s_logged_command_arena_spill) {
+            sysLogPrintf(LOG_NOTE,
+                "GS core: command arena spill enabled used=%u request=%u capacity=%u QW",
+                used_qw, register_count + 1u, capacity_qw);
+            ps2LogCheckpoint();
+            s_logged_command_arena_spill = true;
+        }
     }
     return ps2GsNativeQueueReserveAd(register_count);
 }
@@ -252,21 +289,6 @@ static struct Ps2GsPackedReg *ps2GsCoreReserveChunk(uint32_t register_count)
         return NULL;
     }
 
-    const uint32_t required_qw = register_count + 1u;
-    const uint32_t capacity_qw = ps2GsNativeQueueCapacityQwords();
-    const uint32_t used_qw = ps2GsNativeQueueUsedQwords();
-    if (required_qw > capacity_qw) {
-        return NULL;
-    }
-    if (used_qw <= capacity_qw &&
-        required_qw <= capacity_qw - used_qw) {
-        return ps2GsCoreReserve(register_count);
-    }
-
-    if (!ps2GsNativeQueueSubmit()) {
-        return NULL;
-    }
-    ps2GsNativeQueueBeginFrame();
     return ps2GsCoreReserve(register_count);
 }
 
@@ -538,6 +560,8 @@ extern "C" bool ps2GsCoreInit(const struct Ps2GsCreateInfo *info)
     s_native_submit_failed = false;
     s_native_finish_failed = false;
     s_native_present_failed = false;
+    s_logged_command_arena_spill = false;
+    s_logged_oversized_command = false;
     s_active_render_target = PS2_GS_RENDER_TARGET_DEFAULT;
     ps2GsCoreInvalidateClutCache();
     s_fog_r = 0;

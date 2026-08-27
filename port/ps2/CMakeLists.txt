@@ -165,6 +165,7 @@ add_executable(pd_ps2_bootstrap
   bootstrap.c
   system_ps2.c
   video_diag.c
+  gs_command_budget.cpp
   gs_core.cpp
   gs_native_queue.cpp
   gs_render_target_layout.cpp

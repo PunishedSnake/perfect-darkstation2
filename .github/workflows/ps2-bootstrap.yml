@@ -73,8 +73,15 @@ jobs:
             -o /tmp/rdp_tmem_live_test
           /tmp/rdp_tmem_live_test
 
-      - name: Test GS VRAM allocator
+      - name: Test GS command budget and VRAM allocator
         run: |
+          g++ -std=c++20 -Wall -Wextra -Werror \
+            -Iport/ps2 \
+            port/ps2/gs_command_budget.cpp \
+            port/ps2/gs_command_budget_test.cpp \
+            -o /tmp/gs_command_budget_test
+          /tmp/gs_command_budget_test
+
           g++ -std=c++20 -Wall -Wextra -Werror \
             -Iport/ps2 \
             port/ps2/gs_vram_allocator.cpp \
