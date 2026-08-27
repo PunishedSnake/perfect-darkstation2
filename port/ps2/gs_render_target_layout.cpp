@@ -60,3 +60,27 @@ extern "C" bool ps2GsDescribeCt32RenderTargetTextureView(
     view->th = ps2GsTextureExponent(layout->height);
     return true;
 }
+
+extern "C" bool ps2GsMapCt32PixelChannelToT8Page(
+    uint32_t x, uint32_t y, enum Ps2GsCt32Channel channel,
+    struct Ps2GsT8PageCoordinate *coordinate)
+{
+    if (!coordinate || x >= 64u || y >= 32u ||
+        channel > PS2_GS_CT32_CHANNEL_ALPHA) {
+        return false;
+    }
+
+    const bool right_lane = channel == PS2_GS_CT32_CHANNEL_BLUE ||
+        channel == PS2_GS_CT32_CHANNEL_ALPHA;
+    const bool lower_lane = channel == PS2_GS_CT32_CHANNEL_GREEN ||
+        channel == PS2_GS_CT32_CHANNEL_ALPHA;
+    const uint32_t v = (y & ~1u) * 2u + (y & 1u) +
+        (lower_lane ? 2u : 0u);
+    const uint32_t column_xor =
+        (v & 4u) ^ ((v & 2u) << 1u);
+
+    coordinate->u = (x & ~7u) * 2u +
+        (right_lane ? 8u : 0u) + ((x & 7u) ^ column_xor);
+    coordinate->v = v;
+    return true;
+}

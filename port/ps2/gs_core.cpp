@@ -76,6 +76,10 @@ static int s_loaded_clut_psm;
 static uint8_t s_fog_r;
 static uint8_t s_fog_g;
 static uint8_t s_fog_b;
+static uint32_t s_scissor_x0;
+static uint32_t s_scissor_x1;
+static uint32_t s_scissor_y0;
+static uint32_t s_scissor_y1;
 
 static_assert(sizeof(Ps2GsColorVertex) == sizeof(GSPRIMPOINT),
     "packet-ready color vertex must match current gsKit A+D source layout");
@@ -241,6 +245,30 @@ static struct Ps2GsPackedReg *ps2GsCoreReserve(uint32_t register_count)
     return ps2GsNativeQueueReserveAd(register_count);
 }
 
+static struct Ps2GsPackedReg *ps2GsCoreReserveChunk(uint32_t register_count)
+{
+    if (!s_frame_building || register_count == 0u) {
+        return NULL;
+    }
+
+    const uint32_t required_qw = register_count + 1u;
+    const uint32_t capacity_qw = ps2GsNativeQueueCapacityQwords();
+    const uint32_t used_qw = ps2GsNativeQueueUsedQwords();
+    if (required_qw > capacity_qw) {
+        return NULL;
+    }
+    if (used_qw <= capacity_qw &&
+        required_qw <= capacity_qw - used_qw) {
+        return ps2GsCoreReserve(register_count);
+    }
+
+    if (!ps2GsNativeQueueSubmit()) {
+        return NULL;
+    }
+    ps2GsNativeQueueBeginFrame();
+    return ps2GsCoreReserve(register_count);
+}
+
 static void ps2GsCoreWriteReg(struct Ps2GsPackedReg *dst, uint64_t value, uint64_t reg)
 {
     dst->value = value;
@@ -380,16 +408,25 @@ static void ps2GsCoreEmitTextureAlphaExpansion(void)
     }
 }
 
-static void ps2GsCoreEmitFullScissor(void)
+static void ps2GsCoreEmitScissor(void)
 {
     struct Ps2GsPackedReg *p = ps2GsCoreReserve(1);
     if (p) {
         ps2GsCoreWriteReg(p,
             GS_SETREG_SCISSOR(
-                0, ps2GsCoreTargetWidth() - 1u,
-                0, ps2GsCoreTargetHeight() - 1u),
+                s_scissor_x0, s_scissor_x1,
+                s_scissor_y0, s_scissor_y1),
             GS_SCISSOR_1 + s_gs->PrimContext);
     }
+}
+
+static void ps2GsCoreSetFullScissor(void)
+{
+    s_scissor_x0 = 0u;
+    s_scissor_x1 = ps2GsCoreTargetWidth() - 1u;
+    s_scissor_y0 = 0u;
+    s_scissor_y1 = ps2GsCoreTargetHeight() - 1u;
+    ps2GsCoreEmitScissor();
 }
 
 static void ps2GsCoreEmitRenderTargetState(void)
@@ -399,7 +436,7 @@ static void ps2GsCoreEmitRenderTargetState(void)
     }
 
     ps2GsCoreEmitFrameMask();
-    ps2GsCoreEmitFullScissor();
+    ps2GsCoreSetFullScissor();
     ps2GsCoreEmitTest();
     ps2GsCoreEmitZbufWriteMask();
 }
@@ -494,6 +531,10 @@ extern "C" bool ps2GsCoreInit(const struct Ps2GsCreateInfo *info)
     s_fog_r = 0;
     s_fog_g = 0;
     s_fog_b = 0;
+    s_scissor_x0 = 0u;
+    s_scissor_x1 = (uint32_t)gs->Width - 1u;
+    s_scissor_y0 = 0u;
+    s_scissor_y1 = (uint32_t)gs->Height - 1u;
     memset(s_textures, 0, sizeof(s_textures));
     memset(s_render_targets, 0, sizeof(s_render_targets));
     memset(s_retired_vram, 0, sizeof(s_retired_vram));
@@ -615,7 +656,7 @@ extern "C" void ps2GsCoreBeginFrame(void)
     s_frame_building = true;
 
     /* Materialize persistent state into the new command arena. */
-    ps2GsCoreEmitFullScissor();
+    ps2GsCoreSetFullScissor();
     ps2GsCoreEmitTest();
     ps2GsCoreEmitZbufWriteMask();
     ps2GsCoreEmitFrameMask();
@@ -675,6 +716,10 @@ extern "C" void ps2GsCorePresent(void)
     } else {
         /* Native present materializes the default FRAME/SCISSOR registers. */
         s_active_render_target = PS2_GS_RENDER_TARGET_DEFAULT;
+        s_scissor_x0 = 0u;
+        s_scissor_x1 = (uint32_t)s_gs->Width - 1u;
+        s_scissor_y0 = 0u;
+        s_scissor_y1 = (uint32_t)s_gs->Height - 1u;
     }
 }
 
@@ -760,12 +805,11 @@ extern "C" void ps2GsCoreSetScissor(int x, int y, int width, int height)
         return;
     }
 
-    struct Ps2GsPackedReg *p = ps2GsCoreReserve(1);
-    if (p) {
-        ps2GsCoreWriteReg(p,
-            GS_SETREG_SCISSOR(x0, x1, y0, y1),
-            GS_SCISSOR_1 + s_gs->PrimContext);
-    }
+    s_scissor_x0 = (uint32_t)x0;
+    s_scissor_x1 = (uint32_t)x1;
+    s_scissor_y0 = (uint32_t)y0;
+    s_scissor_y1 = (uint32_t)y1;
+    ps2GsCoreEmitScissor();
 }
 
 extern "C" void ps2GsCoreSetDepthMode(bool depth_test, bool depth_update, bool depth_compare)
@@ -1707,4 +1751,240 @@ extern "C" bool ps2GsCoreDrawRenderTargetAlphaTriangles(
 {
     return ps2GsCoreDrawRenderTargetView(
         source, vertices, vertex_count, linear_filter, GS_PSM_T8H);
+}
+
+static bool ps2GsCoreRestoreChannelBlitState(
+    uint32_t scissor_x0, uint32_t scissor_x1,
+    uint32_t scissor_y0, uint32_t scissor_y1)
+{
+    s_scissor_x0 = scissor_x0;
+    s_scissor_x1 = scissor_x1;
+    s_scissor_y0 = scissor_y0;
+    s_scissor_y1 = scissor_y1;
+
+    struct Ps2GsPackedReg *p = ps2GsCoreReserveChunk(4u);
+    if (!p) {
+        return false;
+    }
+    ps2GsCoreWriteReg(&p[0],
+        GS_SETREG_FRAME_1(
+            ps2GsCoreTargetVram() / PS2_GS_FRAMEBUFFER_ALIGNMENT,
+            ps2GsCoreTargetFbw(),
+            ps2GsCoreTargetPsm(),
+            ps2GsCoreAlphaFrameMask()),
+        GS_FRAME_1 + s_gs->PrimContext);
+    ps2GsCoreWriteReg(&p[1],
+        GS_SETREG_SCISSOR(
+            s_scissor_x0, s_scissor_x1,
+            s_scissor_y0, s_scissor_y1),
+        GS_SCISSOR_1 + s_gs->PrimContext);
+    ps2GsCoreWriteReg(&p[2],
+        ps2GsCoreCurrentTestValue(-1),
+        GS_TEST_1 + s_gs->PrimContext);
+    ps2GsCoreWriteReg(&p[3],
+        GS_SETREG_CLAMP(
+            s_gs->Clamp->WMS,
+            s_gs->Clamp->WMT,
+            s_gs->Clamp->MINU,
+            s_gs->Clamp->MAXU,
+            s_gs->Clamp->MINV,
+            s_gs->Clamp->MAXV),
+        GS_CLAMP_1 + s_gs->PrimContext);
+    return true;
+}
+
+extern "C" bool ps2GsCoreBlitRenderTargetRedToActiveAlpha(
+    Ps2GsRenderTargetHandle source)
+{
+    if (!s_gs || !s_frame_building ||
+        s_active_render_target == PS2_GS_RENDER_TARGET_DEFAULT ||
+        source == s_active_render_target) {
+        return false;
+    }
+
+    struct Ps2GsRenderTargetSlot *source_slot =
+        ps2GsCoreRenderTargetSlot(source);
+    struct Ps2GsRenderTargetSlot *destination_slot =
+        ps2GsCoreRenderTargetSlot(s_active_render_target);
+    if (!source_slot || !destination_slot ||
+        !source_slot->has_contents || !destination_slot->has_contents ||
+        source_slot->layout.width != destination_slot->layout.width ||
+        source_slot->layout.height != destination_slot->layout.height ||
+        source_slot->layout.fbw != destination_slot->layout.fbw) {
+        return false;
+    }
+
+    struct Ps2GsSharedClut *shared = NULL;
+    if (!ps2GsCoreEnsureSharedAlphaIdentityClut(&shared)) {
+        return false;
+    }
+
+    const uint32_t saved_scissor_x0 = s_scissor_x0;
+    const uint32_t saved_scissor_x1 = s_scissor_x1;
+    const uint32_t saved_scissor_y0 = s_scissor_y0;
+    const uint32_t saved_scissor_y1 = s_scissor_y1;
+    s_scissor_x0 = 0u;
+    s_scissor_x1 = destination_slot->layout.width - 1u;
+    s_scissor_y0 = 0u;
+    s_scissor_y1 = destination_slot->layout.height - 1u;
+
+    const bool texture_flush = source_slot->texture_cache_dirty;
+    const uint32_t setup_register_count = texture_flush ? 7u : 6u;
+    struct Ps2GsPackedReg *setup =
+        ps2GsCoreReserveChunk(setup_register_count);
+    if (!setup) {
+        s_scissor_x0 = saved_scissor_x0;
+        s_scissor_x1 = saved_scissor_x1;
+        s_scissor_y0 = saved_scissor_y0;
+        s_scissor_y1 = saved_scissor_y1;
+        return false;
+    }
+
+    uint32_t setup_out = 0u;
+    if (texture_flush) {
+        ps2GsCoreWriteReg(&setup[setup_out++], 0u, GS_TEXFLUSH);
+    }
+    ps2GsCoreWriteReg(&setup[setup_out++],
+        GS_SETREG_TEX1(0, 0, GS_FILTER_NEAREST, GS_FILTER_NEAREST,
+            0, 0, 0),
+        GS_TEX1_1 + s_gs->PrimContext);
+    ps2GsCoreWriteReg(&setup[setup_out++],
+        GS_SETREG_FRAME_1(
+            destination_slot->vram / PS2_GS_FRAMEBUFFER_ALIGNMENT,
+            destination_slot->layout.fbw,
+            GS_PSM_CT32,
+            0x00ffffffu),
+        GS_FRAME_1 + s_gs->PrimContext);
+    ps2GsCoreWriteReg(&setup[setup_out++],
+        GS_SETREG_SCISSOR(
+            s_scissor_x0, s_scissor_x1,
+            s_scissor_y0, s_scissor_y1),
+        GS_SCISSOR_1 + s_gs->PrimContext);
+    ps2GsCoreWriteReg(&setup[setup_out++],
+        GS_SETREG_TEST(
+            0, PS2_GS_ATST_ALWAYS, 0, PS2_GS_AFAIL_KEEP,
+            0, 0, 0, 1),
+        GS_TEST_1 + s_gs->PrimContext);
+    ps2GsCoreWriteReg(&setup[setup_out++],
+        GS_SETREG_PRIM(
+            GS_PRIM_PRIM_SPRITE,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            s_gs->PrimContext,
+            0),
+        GS_PRIM);
+    ps2GsCoreWriteReg(&setup[setup_out++],
+        GS_SETREG_RGBAQ(0x80, 0x80, 0x80, 0x80, 0),
+        GS_RGBAQ);
+    source_slot->texture_cache_dirty = false;
+
+    bool load_clut = s_loaded_clut_vram != shared->vram ||
+        s_loaded_clut_psm != GS_PSM_CT32;
+    const uint32_t width = source_slot->layout.width;
+    const uint32_t height = source_slot->layout.height;
+    const uint32_t page_rows = (height + 31u) / 32u;
+    bool success = true;
+
+    for (uint32_t page_y = 0u; page_y < page_rows && success; ++page_y) {
+        const uint32_t destination_y = page_y * 32u;
+        const uint32_t page_height = height - destination_y < 32u ?
+            height - destination_y : 32u;
+
+        for (uint32_t page_x = 0u;
+             page_x < source_slot->layout.fbw && success; ++page_x) {
+            const uint32_t destination_x = page_x * 64u;
+            const uint32_t page_width = width - destination_x < 64u ?
+                width - destination_x : 64u;
+            const uint32_t tile_count =
+                ((page_width + 7u) / 8u) *
+                ((page_height + 1u) / 2u);
+            const uint32_t register_count = 1u + tile_count * 5u;
+            struct Ps2GsPackedReg *p =
+                tile_count != 0u ?
+                ps2GsCoreReserveChunk(register_count) : NULL;
+            if (!p) {
+                success = false;
+                break;
+            }
+
+            const uint32_t page_index =
+                page_y * source_slot->layout.fbw + page_x;
+            uint32_t out = 0u;
+            ps2GsCoreWriteReg(&p[out++],
+                GS_SETREG_TEX0(
+                    (source_slot->vram +
+                        page_index * PS2_GS_FRAMEBUFFER_ALIGNMENT) / 256u,
+                    2u,
+                    GS_PSM_T8,
+                    7u,
+                    6u,
+                    1u,
+                    0u,
+                    shared->vram / 256u,
+                    GS_PSM_CT32,
+                    0u,
+                    0u,
+                    load_clut ? GS_CLUT_STOREMODE_LOAD :
+                        GS_CLUT_STOREMODE_NOLOAD),
+                GS_TEX0_1 + s_gs->PrimContext);
+
+            for (uint32_t y = 0u; y < page_height; y += 2u) {
+                const uint32_t tile_height =
+                    page_height - y < 2u ? page_height - y : 2u;
+                for (uint32_t tile_x = 0u;
+                     tile_x < page_width; tile_x += 8u) {
+                    const uint32_t tile_width =
+                        page_width - tile_x < 8u ?
+                        page_width - tile_x : 8u;
+                    struct Ps2GsT8PageCoordinate first = {};
+                    (void)ps2GsMapCt32PixelChannelToT8Page(
+                        tile_x, y, PS2_GS_CT32_CHANNEL_RED, &first);
+                    const uint32_t raw_tile_x = tile_x * 2u;
+                    const uint32_t u_xor = first.u - raw_tile_x;
+                    const uint32_t x0 = destination_x + tile_x;
+                    const uint32_t y0 = destination_y + y;
+
+                    ps2GsCoreWriteReg(&p[out++],
+                        GS_SETREG_CLAMP(
+                            GS_CMODE_REGION_REPEAT,
+                            GS_CMODE_REGION_CLAMP,
+                            7u,
+                            raw_tile_x,
+                            first.v,
+                            first.v + tile_height - 1u),
+                        GS_CLAMP_1 + s_gs->PrimContext);
+                    ps2GsCoreWriteReg(&p[out++],
+                        GS_SETREG_UV(u_xor * 16u, first.v * 16u),
+                        GS_UV);
+                    ps2GsCoreWriteReg(&p[out++],
+                        ps2GsCoreMakeXyz2((int)x0, (int)y0, 0u),
+                        GS_XYZ2);
+                    ps2GsCoreWriteReg(&p[out++],
+                        GS_SETREG_UV(
+                            (u_xor + tile_width) * 16u,
+                            (first.v + tile_height) * 16u),
+                        GS_UV);
+                    ps2GsCoreWriteReg(&p[out++],
+                        ps2GsCoreMakeXyz2(
+                            (int)(x0 + tile_width),
+                            (int)(y0 + tile_height), 0u),
+                        GS_XYZ2);
+                }
+            }
+
+            s_loaded_clut_vram = shared->vram;
+            s_loaded_clut_psm = GS_PSM_CT32;
+            load_clut = false;
+            ps2GsCoreMarkActiveRenderTargetWritten();
+        }
+    }
+
+    const bool restored = ps2GsCoreRestoreChannelBlitState(
+        saved_scissor_x0, saved_scissor_x1,
+        saved_scissor_y0, saved_scissor_y1);
+    return success && restored;
 }

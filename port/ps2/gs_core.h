@@ -130,6 +130,14 @@ bool ps2GsCoreDrawRenderTargetAlphaTriangles(
     bool linear_filter);
 
 /*
+ * Copy the red byte of a completed CT32 source into the alpha byte of the
+ * active CT32 transient target. RGB is preserved and source/destination must
+ * be distinct, initialized targets with identical dimensions.
+ */
+bool ps2GsCoreBlitRenderTargetRedToActiveAlpha(
+    Ps2GsRenderTargetHandle source);
+
+/*
  * Texture residency. Handles are logical GS resources backed by the native
  * reclaimable VRAM pool. Allocation, upload and retirement are transactional.
  */

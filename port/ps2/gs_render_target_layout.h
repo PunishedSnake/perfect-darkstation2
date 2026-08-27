@@ -25,6 +25,18 @@ struct Ps2GsRenderTargetTextureView {
     uint8_t th;
 };
 
+enum Ps2GsCt32Channel {
+    PS2_GS_CT32_CHANNEL_RED,
+    PS2_GS_CT32_CHANNEL_GREEN,
+    PS2_GS_CT32_CHANNEL_BLUE,
+    PS2_GS_CT32_CHANNEL_ALPHA,
+};
+
+struct Ps2GsT8PageCoordinate {
+    uint32_t u;
+    uint32_t v;
+};
+
 /* Describe a PSMCT32 target as complete 64x32 GS pages. */
 bool ps2GsDescribeCt32RenderTarget(uint32_t width, uint32_t height,
     struct Ps2GsRenderTargetLayout *layout);
@@ -33,6 +45,11 @@ bool ps2GsDescribeCt32RenderTarget(uint32_t width, uint32_t height,
 bool ps2GsDescribeCt32RenderTargetTextureView(
     const struct Ps2GsRenderTargetLayout *layout,
     struct Ps2GsRenderTargetTextureView *view);
+
+/* Map one logical pixel lane in a 64x32 CT32 page to its 128x64 T8 view. */
+bool ps2GsMapCt32PixelChannelToT8Page(uint32_t x, uint32_t y,
+    enum Ps2GsCt32Channel channel,
+    struct Ps2GsT8PageCoordinate *coordinate);
 
 #ifdef __cplusplus
 }

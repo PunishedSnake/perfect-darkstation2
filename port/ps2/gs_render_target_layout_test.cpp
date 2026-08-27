@@ -82,12 +82,101 @@ static void test_invalid_texture_views(void)
     assert(!ps2GsDescribeCt32RenderTargetTextureView(&layout, &view));
 }
 
+static void decode_t8_page_coordinate(uint32_t u, uint32_t v,
+    uint32_t *x, uint32_t *y, Ps2GsCt32Channel *channel)
+{
+    *x = ((u & ~15u) >> 1u) | (u & 7u);
+    *y = ((v & ~3u) >> 1u) | (v & 1u);
+    *x ^= (v & 4u) ^ ((v & 2u) << 1u);
+
+    const bool right_lane = (u & 8u) != 0u;
+    const bool lower_lane = (v & 2u) != 0u;
+    if (lower_lane) {
+        *channel = right_lane ? PS2_GS_CT32_CHANNEL_ALPHA :
+            PS2_GS_CT32_CHANNEL_GREEN;
+    } else {
+        *channel = right_lane ? PS2_GS_CT32_CHANNEL_BLUE :
+            PS2_GS_CT32_CHANNEL_RED;
+    }
+}
+
+static void test_ct32_to_t8_page_channel_mapping(void)
+{
+    for (uint32_t y = 0u; y < 32u; ++y) {
+        for (uint32_t x = 0u; x < 64u; ++x) {
+            for (uint32_t lane = PS2_GS_CT32_CHANNEL_RED;
+                 lane <= PS2_GS_CT32_CHANNEL_ALPHA; ++lane) {
+                Ps2GsT8PageCoordinate coordinate{};
+                assert(ps2GsMapCt32PixelChannelToT8Page(
+                    x, y, (Ps2GsCt32Channel)lane, &coordinate));
+                assert(coordinate.u < 128u);
+                assert(coordinate.v < 64u);
+
+                uint32_t decoded_x = 0u;
+                uint32_t decoded_y = 0u;
+                Ps2GsCt32Channel decoded_channel =
+                    PS2_GS_CT32_CHANNEL_RED;
+                decode_t8_page_coordinate(
+                    coordinate.u, coordinate.v,
+                    &decoded_x, &decoded_y, &decoded_channel);
+                assert(decoded_x == x);
+                assert(decoded_y == y);
+                assert(decoded_channel == (Ps2GsCt32Channel)lane);
+            }
+        }
+    }
+
+    Ps2GsT8PageCoordinate coordinate{};
+    assert(!ps2GsMapCt32PixelChannelToT8Page(
+        64u, 0u, PS2_GS_CT32_CHANNEL_RED, &coordinate));
+    assert(!ps2GsMapCt32PixelChannelToT8Page(
+        0u, 32u, PS2_GS_CT32_CHANNEL_RED, &coordinate));
+    assert(!ps2GsMapCt32PixelChannelToT8Page(
+        0u, 0u, (Ps2GsCt32Channel)4, &coordinate));
+    assert(!ps2GsMapCt32PixelChannelToT8Page(
+        0u, 0u, PS2_GS_CT32_CHANNEL_RED, NULL));
+}
+
+static void test_red_lane_region_repeat_mapping(void)
+{
+    for (uint32_t y = 0u; y < 32u; y += 2u) {
+        for (uint32_t tile_x = 0u; tile_x < 64u; tile_x += 8u) {
+            Ps2GsT8PageCoordinate first{};
+            assert(ps2GsMapCt32PixelChannelToT8Page(
+                tile_x, y, PS2_GS_CT32_CHANNEL_RED, &first));
+
+            const uint32_t raw_tile_x = tile_x * 2u;
+            const uint32_t u_xor = first.u - raw_tile_x;
+            assert(u_xor == 0u || u_xor == 4u);
+            for (uint32_t x = 0u; x < 8u; ++x) {
+                Ps2GsT8PageCoordinate coordinate{};
+                assert(ps2GsMapCt32PixelChannelToT8Page(
+                    tile_x + x, y, PS2_GS_CT32_CHANNEL_RED,
+                    &coordinate));
+                assert(coordinate.v == first.v);
+                const uint32_t region_repeat_u =
+                    ((u_xor + x) & 7u) | raw_tile_x;
+                assert(coordinate.u == region_repeat_u);
+            }
+
+            Ps2GsT8PageCoordinate second_row{};
+            assert(ps2GsMapCt32PixelChannelToT8Page(
+                tile_x, y + 1u, PS2_GS_CT32_CHANNEL_RED,
+                &second_row));
+            assert(second_row.u == first.u);
+            assert(second_row.v == first.v + 1u);
+        }
+    }
+}
+
 int main(void)
 {
     test_ct32_page_footprints();
     test_invalid_layouts();
     test_ct32_texture_views();
     test_invalid_texture_views();
+    test_ct32_to_t8_page_channel_mapping();
+    test_red_lane_region_repeat_mapping();
     puts("gs_render_target_layout tests passed");
     return 0;
 }
