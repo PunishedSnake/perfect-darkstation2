@@ -37,7 +37,7 @@ jobs:
 
     steps:
       - name: Install host-side build tools
-        run: apk add --no-cache bash cmake g++ git ninja python3
+        run: apk add --no-cache bash cmake g++ git ninja python3 zlib-dev
 
       - name: Checkout repository
         uses: actions/checkout@v4
