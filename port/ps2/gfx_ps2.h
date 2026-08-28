@@ -21,9 +21,13 @@ static inline uint8_t gfxPs2TextureMirrorVariant(uint8_t cms, uint8_t cmt)
 }
 
 static inline uint64_t gfxPs2TextureVariantIdentity(
-    uint64_t identity, uint8_t cms, uint8_t cmt)
+    uint64_t identity, uint8_t format, uint8_t cms, uint8_t cmt,
+    uint32_t palette_format)
 {
-    const uint64_t variant = gfxPs2TextureMirrorVariant(cms, cmt);
+    const uint64_t palette_variant = format == 2u
+        ? (uint64_t)((palette_format >> 14u) & 3u) : 0u;
+    const uint64_t variant = gfxPs2TextureMirrorVariant(cms, cmt) |
+        (palette_variant << 2u);
     identity ^= variant + UINT64_C(0x9e3779b97f4a7c15) +
         (identity << 6u) + (identity >> 2u);
     return identity;

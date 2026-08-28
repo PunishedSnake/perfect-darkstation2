@@ -65,6 +65,60 @@ static void test_all_rgba5551_values_preserve_channels(void)
     }
 }
 
+static void test_all_ia16_values_preserve_channels(void)
+{
+    for (uint32_t intensity = 0u; intensity <= UINT8_MAX; ++intensity) {
+        for (uint32_t alpha = 0u; alpha <= UINT8_MAX; ++alpha) {
+            const uint8_t source[] = {
+                (uint8_t)intensity, (uint8_t)alpha
+            };
+            uint8_t destination[4] = {};
+            assert(ps2GsConvertN64Ia16ToGsCt32(
+                source, destination, 1u, 1u, false, false));
+            assert(destination[0] == intensity);
+            assert(destination[1] == intensity);
+            assert(destination[2] == intensity);
+            assert(destination[3] == alpha);
+        }
+    }
+
+    assert(!ps2GsConvertN64Ia16ToGsCt32(
+        NULL, NULL, 1u, 1u, false, false));
+    uint8_t byte = 0u;
+    assert(!ps2GsConvertN64Ia16ToGsCt32(
+        &byte, &byte, 0u, 1u, false, false));
+}
+
+static void test_ia16_mirror(void)
+{
+    const uint8_t source[] = {
+        0x10u, 0x20u, 0x30u, 0x40u,
+        0x50u, 0x60u, 0x70u, 0x80u,
+    };
+    uint8_t output[64] = {};
+    const uint8_t expected[] = {
+        0x10u, 0x10u, 0x10u, 0x20u,
+        0x30u, 0x30u, 0x30u, 0x40u,
+        0x30u, 0x30u, 0x30u, 0x40u,
+        0x10u, 0x10u, 0x10u, 0x20u,
+        0x50u, 0x50u, 0x50u, 0x60u,
+        0x70u, 0x70u, 0x70u, 0x80u,
+        0x70u, 0x70u, 0x70u, 0x80u,
+        0x50u, 0x50u, 0x50u, 0x60u,
+        0x50u, 0x50u, 0x50u, 0x60u,
+        0x70u, 0x70u, 0x70u, 0x80u,
+        0x70u, 0x70u, 0x70u, 0x80u,
+        0x50u, 0x50u, 0x50u, 0x60u,
+        0x10u, 0x10u, 0x10u, 0x20u,
+        0x30u, 0x30u, 0x30u, 0x40u,
+        0x30u, 0x30u, 0x30u, 0x40u,
+        0x10u, 0x10u, 0x10u, 0x20u,
+    };
+    assert(ps2GsConvertN64Ia16ToGsCt32(
+        source, output, 2u, 2u, true, true));
+    assert(memcmp(output, expected, sizeof(output)) == 0);
+}
+
 static uint16_t read_ct16(const uint8_t *bytes, uint32_t index)
 {
     return (uint16_t)bytes[index * 2u] |
@@ -227,6 +281,45 @@ static void test_rgba16_palette_conversion_and_csm1_order(void)
         NULL, converted16, 16u));
 }
 
+static void test_ia16_palette_conversion_and_csm1_order(void)
+{
+    uint16_t palette16[16];
+    uint32_t converted16[16] = {};
+    for (uint32_t i = 0u; i < 16u; ++i) {
+        palette16[i] = (uint16_t)(((i * 13u) << 8u) | (i * 17u));
+    }
+    assert(ps2GsConvertN64Ia16PaletteToGsCt32(
+        palette16, converted16, 16u));
+    for (uint32_t i = 0u; i < 16u; ++i) {
+        const uint32_t intensity = palette16[i] & 0xffu;
+        const uint32_t alpha = palette16[i] >> 8u;
+        assert(converted16[i] ==
+            intensity * 0x00010101u + (alpha << 24u));
+    }
+
+    uint16_t palette256[256];
+    uint32_t converted256[256] = {};
+    for (uint32_t i = 0u; i < 256u; ++i) {
+        palette256[i] = (uint16_t)(((i ^ 0xa5u) << 8u) | i);
+    }
+    assert(ps2GsConvertN64Ia16PaletteToGsCt32(
+        palette256, converted256, 256u));
+    for (uint32_t destination = 0u; destination < 256u; ++destination) {
+        const uint32_t source = ((destination & 0x18u) == 0x08u ||
+                                 (destination & 0x18u) == 0x10u)
+            ? destination ^ 0x18u : destination;
+        const uint32_t intensity = palette256[source] & 0xffu;
+        const uint32_t alpha = palette256[source] >> 8u;
+        assert(converted256[destination] ==
+            intensity * 0x00010101u + (alpha << 24u));
+    }
+
+    assert(!ps2GsConvertN64Ia16PaletteToGsCt32(
+        palette16, converted16, 32u));
+    assert(!ps2GsConvertN64Ia16PaletteToGsCt32(
+        NULL, converted16, 16u));
+}
+
 static void test_gs_texture_buffer_width_alignment(void)
 {
     assert(ps2GsTextureBufferWidth(0u, false) == 0u);
@@ -311,12 +404,15 @@ int main(void)
     test_primary_colors_and_alpha();
     test_exact_alias_and_empty_input();
     test_all_rgba5551_values_preserve_channels();
+    test_all_ia16_values_preserve_channels();
+    test_ia16_mirror();
     test_ci4_nibble_order();
     test_mirror_u8();
     test_mirror_n64_four_bit();
     test_mirror_wide_texels();
     test_mirror_fused_native_conversion();
     test_rgba16_palette_conversion_and_csm1_order();
+    test_ia16_palette_conversion_and_csm1_order();
     test_gs_texture_buffer_width_alignment();
     test_n64_intensity_cluts();
     test_identity_rgba8_clut();

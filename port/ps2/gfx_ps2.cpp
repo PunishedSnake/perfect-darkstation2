@@ -77,6 +77,7 @@
 #define PS2_GFX_N64_SIZ_8B 1u
 #define PS2_GFX_N64_SIZ_16B 2u
 #define PS2_GFX_N64_TT_RGBA16 (2u << 14)
+#define PS2_GFX_N64_TT_IA16 (3u << 14)
 
 /* GS packed-register IDs consumed by the packet-ready core boundary. */
 #define PS2_GS_REG_RGBAQ 0x01u
@@ -150,9 +151,11 @@ static bool s_warned_mirror_extent;
 static bool s_upload_mirror_s;
 static bool s_upload_mirror_t;
 static bool s_logged_native_rgba16;
+static bool s_logged_native_ia16;
 static bool s_logged_native_mirror;
 static bool s_logged_native_ci4;
 static bool s_logged_native_ci8;
+static bool s_logged_native_ci_ia16[2];
 static bool s_logged_native_intensity[4];
 static bool s_warned_alpha_trilerp_workspace;
 static bool s_warned_alpha_trilerp_modulate;
@@ -482,6 +485,27 @@ extern "C" bool gfxPs2UploadTmemTexture(
         return true;
     }
 
+    if (format == PS2_GFX_N64_FMT_IA &&
+        size == PS2_GFX_N64_SIZ_16B &&
+        (view->line_size_bytes & 1u) == 0u) {
+        const uint32_t width = view->line_size_bytes / 2u;
+        bool mirror_s;
+        bool mirror_t;
+        ps2_effective_upload_mirror(width, height, &mirror_s, &mirror_t);
+        if (!ps2GsCoreUploadTextureN64Ia16(
+                handle, view->texels, width, height,
+                mirror_s, mirror_t)) {
+            return false;
+        }
+        ps2_record_texture_mirror(handle, mirror_s, mirror_t);
+        if (!s_logged_native_ia16) {
+            sysLogPrintf(LOG_NOTE,
+                "GfxPS2 native texture path: exact N64 IA16 -> GS PSMCT32");
+            s_logged_native_ia16 = true;
+        }
+        return true;
+    }
+
     if ((format == PS2_GFX_N64_FMT_IA ||
          format == PS2_GFX_N64_FMT_I) &&
         (size == PS2_GFX_N64_SIZ_4B ||
@@ -512,9 +536,11 @@ extern "C" bool gfxPs2UploadTmemTexture(
         return true;
     }
 
-    /* IA16 TLUT alpha is eight-bit and cannot be represented exactly by CT16. */
+    const bool ia16_palette =
+        palette_format == PS2_GFX_N64_TT_IA16;
     if (format != PS2_GFX_N64_FMT_CI ||
-        palette_format != PS2_GFX_N64_TT_RGBA16 || !view->palette) {
+        (palette_format != PS2_GFX_N64_TT_RGBA16 && !ia16_palette) ||
+        !view->palette) {
         return false;
     }
 
@@ -534,16 +560,21 @@ extern "C" bool gfxPs2UploadTmemTexture(
     if (!ps2GsCoreUploadTextureN64Ci(handle, view->texels,
             width, height, ci4 ? 4u : 8u,
             view->palette, view->palette_count,
+            ia16_palette ? PS2_GS_N64_PALETTE_IA16
+                         : PS2_GS_N64_PALETTE_RGBA16,
             mirror_s, mirror_t)) {
         return false;
     }
     ps2_record_texture_mirror(handle, mirror_s, mirror_t);
 
-    bool *logged = ci4 ? &s_logged_native_ci4 : &s_logged_native_ci8;
+    bool *logged = ia16_palette
+        ? &s_logged_native_ci_ia16[ci4 ? 0u : 1u]
+        : (ci4 ? &s_logged_native_ci4 : &s_logged_native_ci8);
     if (!*logged) {
         sysLogPrintf(LOG_NOTE,
-            "GfxPS2 native texture path: exact N64 CI%u/RGBA16 TLUT -> GS PSMT%u/CSM1",
-            ci4 ? 4u : 8u, ci4 ? 4u : 8u);
+            "GfxPS2 native texture path: exact N64 CI%u/%s TLUT -> GS PSMT%u/%s CSM1",
+            ci4 ? 4u : 8u, ia16_palette ? "IA16" : "RGBA16",
+            ci4 ? 4u : 8u, ia16_palette ? "CT32" : "CT16");
         *logged = true;
     }
     return true;
@@ -1625,6 +1656,7 @@ static void ps2_init(void)
     s_draw_fog_g = 0u;
     s_draw_fog_b = 0u;
     s_logged_native_rgba16 = false;
+    s_logged_native_ia16 = false;
     s_logged_native_mirror = false;
     s_upload_mirror_s = false;
     s_upload_mirror_t = false;

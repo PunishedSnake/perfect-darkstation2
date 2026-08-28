@@ -50,6 +50,38 @@ extern "C" bool ps2GsConvertN64Rgba16ToGsCt16(const uint8_t *source,
     return true;
 }
 
+extern "C" bool ps2GsConvertN64Ia16ToGsCt32(const uint8_t *source,
+    uint8_t *destination, uint32_t width, uint32_t height,
+    bool mirror_s, bool mirror_t)
+{
+    if (!source || !destination || width == 0u || height == 0u ||
+        (mirror_s && width > UINT32_MAX / 2u) ||
+        (mirror_t && height > UINT32_MAX / 2u)) {
+        return false;
+    }
+
+    const uint32_t output_width = width << (mirror_s ? 1u : 0u);
+    const uint32_t output_height = height << (mirror_t ? 1u : 0u);
+    for (uint32_t y = 0u; y < output_height; ++y) {
+        const uint32_t source_y = y < height ? y :
+            output_height - 1u - y;
+        for (uint32_t x = 0u; x < output_width; ++x) {
+            const uint32_t source_x = x < width ? x :
+                output_width - 1u - x;
+            const size_t source_index =
+                ((size_t)source_y * width + source_x) * 2u;
+            const size_t output_index =
+                ((size_t)y * output_width + x) * 4u;
+            const uint8_t intensity = source[source_index];
+            destination[output_index] = intensity;
+            destination[output_index + 1u] = intensity;
+            destination[output_index + 2u] = intensity;
+            destination[output_index + 3u] = source[source_index + 1u];
+        }
+    }
+    return true;
+}
+
 extern "C" bool ps2GsConvertN64Ci4ToGsT4(const uint8_t *source,
     uint8_t *destination, uint32_t byte_count)
 {
@@ -152,6 +184,25 @@ extern "C" bool ps2GsConvertN64Rgba16PaletteToGsCt16(
 
     /* CSM1 swaps the middle two 8-entry blocks in every 32-entry group. */
     ps2GsPermuteCsm1(destination, 2u, entry_count);
+    return true;
+}
+
+extern "C" bool ps2GsConvertN64Ia16PaletteToGsCt32(
+    const uint16_t *source, uint32_t *destination, uint32_t entry_count)
+{
+    if (!source || !destination ||
+        (entry_count != 16u && entry_count != 256u)) {
+        return false;
+    }
+
+    for (uint32_t i = 0u; i < entry_count; ++i) {
+        const uint8_t intensity = (uint8_t)source[i];
+        const uint8_t alpha = (uint8_t)(source[i] >> 8u);
+        destination[i] =
+            (uint32_t)intensity * UINT32_C(0x00010101) |
+            (uint32_t)alpha << 24u;
+    }
+    ps2GsPermuteCsm1(destination, 4u, entry_count);
     return true;
 }
 

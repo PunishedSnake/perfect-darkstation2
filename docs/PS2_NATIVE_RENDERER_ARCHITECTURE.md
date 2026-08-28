@@ -261,16 +261,17 @@ Current/candidate policy by class, subject to actual Perfect Dark content profil
 
 ```text
 CI4 / CI8 RGBA TLUT -> PSMT4 / PSMT8 + PSMCT16 CSM1 CLUT active
+CI4 / CI8 IA16 TLUT -> PSMT4 / PSMT8 + PSMCT32 CSM1 CLUT active
 IA4 / IA8 / I4 / I8 -> PSMT4 / PSMT8 + shared PSMCT32 CSM1 CLUT active
 RGBA16         -> exact live-TMEM view -> PSMCT16 active path
-IA16           -> RGBA32 compatibility fallback
+IA16           -> exact live-TMEM IA16 -> PSMCT32 staging active path
 large imagery  -> IPU experiment candidate
 runtime RGBA32 -> native GIF IMAGE baseline, then remove copies if measured worthwhile
 ```
 
 CI index data and its CLUT are allocated, uploaded and published as one logical residency. CI4 upload reverses the two indices in each source byte for GS low-nibble-first PSMT4 addressing. CI8 index bytes are copied directly. Indexed TBW uses the GS 128-pixel buffer-width alignment, while direct-color formats retain 64-pixel alignment. The RGBA5551 palette is converted to PSMCT16 and the 256-entry CI8 case is permuted to CSM1 order.
 
-IA4/IA8/I4/I8 preserve the portable Fast3D importer's exact RGBA expansion through four immutable PSMCT32 palettes. Each palette is materialized lazily once and shared by every texture of that encoding; only the compact PSMT4/PSMT8 index plane belongs to the texture slot. This retains I-format intensity-as-alpha and IA-format independent alpha without a four-byte-per-texel expansion. The core keys the GS CLUT cache by actual VRAM address and pixel format, so switching between handles sharing a palette does not reload it, while any mutable CI palette upload invalidates the key. IA16 textures and IA16 TLUTs still take the RGBA32 compatibility path because their independent eight-bit intensity and alpha cannot be represented by a 256-entry palette or PSMCT16.
+IA4/IA8/I4/I8 preserve the portable Fast3D importer's exact RGBA expansion through four immutable PSMCT32 palettes. Each palette is materialized lazily once and shared by every texture of that encoding; only the compact PSMT4/PSMT8 index plane belongs to the texture slot. This retains I-format intensity-as-alpha and IA-format independent alpha without a four-byte-per-texel expansion. The core keys the GS CLUT cache by actual VRAM address and pixel format, so switching between handles sharing a palette does not reload it, while any mutable CI palette upload invalidates the key. IA16 texels now expand directly from authoritative TMEM bytes into PSMCT32 IMAGE staging, preserving independent eight-bit intensity and alpha without traversing the generic Fast3D RGBA buffer. CI4/CI8 with IA16 TLUT keeps its compact PSMT4/PSMT8 index plane and uploads an exact PSMCT32 CSM1 palette, published transactionally with the index block. The cache identity includes TLUT interpretation so identical words cannot alias between RGBA5551 and IA16 residency.
 
 ## 6. TMEM semantic requirement
 
@@ -347,7 +348,7 @@ This semantic layer should remain backend-independent where possible. PS2-specif
 - RGBA32/PSMCT32 remains the compatibility fallback for other formats and any TMEM view whose exactness is not proved;
 - the hot frame loop is native in command, texture and presentation transport, but one-time initialization is not yet gsKit-independent.
 
-Remaining renderer milestones include exact IA16 handling, measured GS state batching and combiner coverage, VIF1/VU1 geometry batches, and replacement of the remaining one-time gsKit CRT/system-buffer bootstrap where doing so has a concrete ownership or performance benefit.
+Remaining renderer milestones include measured GS state batching and combiner coverage, VIF1/VU1 geometry batches, and replacement of the remaining one-time gsKit CRT/system-buffer bootstrap where doing so has a concrete ownership or performance benefit.
 
 ## 8. Bottleneck hypothesis ordering
 
@@ -480,11 +481,14 @@ PCSX2 is useful for correctness, packet/state inspection and fast iteration. It 
 - transactional reupload/resize with fence-delayed retirement;
 - exact RGBA16 -> PSMCT16 direct residency, with RGBA32 fallback;
 - exact CI4/CI8 plus RGBA16 TLUT residency as paired texture/CLUT blocks;
+- exact CI4/CI8 plus IA16 TLUT residency as compact indexed planes paired
+  transactionally with PSMCT32 CSM1 palettes;
 - exact IA4/IA8/I4/I8 residency through shared immutable CT32 palettes;
+- exact direct IA16-to-PSMCT32 IMAGE staging, including mirror-wrap expansion,
+  without the generic RGBA32 importer buffer;
 - exact `G_TX_MIRROR | G_TX_WRAP` residency for power-of-two TMEM images by
   materializing a reflected two-period CT32/CT16/T8/T4 image directly in IMAGE
   staging and scaling ST by one half on each expanded axis;
-- retain IA16 and IA16-TLUT assets on RGBA32 until an exact compact representation is proved.
 
 ### M4: RDP state coverage
 

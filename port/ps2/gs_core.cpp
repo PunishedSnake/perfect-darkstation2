@@ -1122,6 +1122,7 @@ extern "C" bool ps2GsCoreTextureReady(Ps2GsTextureHandle handle)
 
 static bool ps2GsCoreUploadTexture(Ps2GsTextureHandle handle,
     const uint8_t *source, uint32_t width, uint32_t height, int psm,
+    enum Ps2GsNativeUploadEncoding encoding,
     bool mirror_s, bool mirror_t)
 {
     if (!s_gs || !source || width == 0 || height == 0 ||
@@ -1200,9 +1201,6 @@ static bool ps2GsCoreUploadTexture(Ps2GsTextureHandle handle,
     candidate.Filter = slot->texture.Filter;
     candidate.Vram = new_vram;
     candidate.Mem = (u32 *)(uintptr_t)source;
-    const enum Ps2GsNativeUploadEncoding encoding = psm == GS_PSM_CT16
-        ? PS2_GS_NATIVE_UPLOAD_N64_RGBA16
-        : PS2_GS_NATIVE_UPLOAD_RGBA32;
     const bool submitted = ps2GsNativeQueueUploadTextureMirrored(
         s_gs, &candidate, encoding, width, height, mirror_s, mirror_t);
     candidate.Mem = NULL;
@@ -1239,7 +1237,8 @@ extern "C" bool ps2GsCoreUploadTextureRgba32(Ps2GsTextureHandle handle,
     bool mirror_s, bool mirror_t)
 {
     return ps2GsCoreUploadTexture(
-        handle, rgba32, width, height, GS_PSM_CT32, mirror_s, mirror_t);
+        handle, rgba32, width, height, GS_PSM_CT32,
+        PS2_GS_NATIVE_UPLOAD_RGBA32, mirror_s, mirror_t);
 }
 
 extern "C" bool ps2GsCoreUploadTextureN64Rgba16(Ps2GsTextureHandle handle,
@@ -1248,6 +1247,17 @@ extern "C" bool ps2GsCoreUploadTextureN64Rgba16(Ps2GsTextureHandle handle,
 {
     return ps2GsCoreUploadTexture(
         handle, rgba5551_be, width, height, GS_PSM_CT16,
+        PS2_GS_NATIVE_UPLOAD_N64_RGBA16,
+        mirror_s, mirror_t);
+}
+
+extern "C" bool ps2GsCoreUploadTextureN64Ia16(Ps2GsTextureHandle handle,
+    const uint8_t *ia16, uint32_t width, uint32_t height,
+    bool mirror_s, bool mirror_t)
+{
+    return ps2GsCoreUploadTexture(
+        handle, ia16, width, height, GS_PSM_CT32,
+        PS2_GS_NATIVE_UPLOAD_N64_IA16,
         mirror_s, mirror_t);
 }
 
@@ -1371,15 +1381,18 @@ static bool ps2GsCoreEnsureSharedAlphaIdentityClut(
 
 extern "C" bool ps2GsCoreUploadTextureN64Ci(Ps2GsTextureHandle handle,
     const uint8_t *indices, uint32_t width, uint32_t height,
-    uint8_t index_bits, const uint16_t *palette_rgba5551,
-    uint32_t palette_count, bool mirror_s, bool mirror_t)
+    uint8_t index_bits, const uint16_t *palette,
+    uint32_t palette_count, enum Ps2GsN64PaletteEncoding palette_encoding,
+    bool mirror_s, bool mirror_t)
 {
     const bool ci4 = index_bits == 4u && palette_count == 16u;
     const bool ci8 = index_bits == 8u && palette_count == 256u;
-    if (!s_gs || !indices || !palette_rgba5551 || width == 0u ||
+    if (!s_gs || !indices || !palette || width == 0u ||
         height == 0u || width > 1024u || height > 1024u ||
         (mirror_s && width > 512u) || (mirror_t && height > 512u) ||
-        (!ci4 && !ci8) || (ci4 && (width & 1u) != 0u)) {
+        (!ci4 && !ci8) || (ci4 && (width & 1u) != 0u) ||
+        (palette_encoding != PS2_GS_N64_PALETTE_RGBA16 &&
+         palette_encoding != PS2_GS_N64_PALETTE_IA16)) {
         return false;
     }
 
@@ -1394,11 +1407,14 @@ extern "C" bool ps2GsCoreUploadTextureN64Ci(Ps2GsTextureHandle handle,
     const int texture_psm = ci4 ? GS_PSM_T4 : GS_PSM_T8;
     const uint32_t clut_width = ci4 ? 8u : 16u;
     const uint32_t clut_height = ci4 ? 2u : 16u;
+    const int clut_psm =
+        palette_encoding == PS2_GS_N64_PALETTE_RGBA16
+            ? GS_PSM_CT16 : GS_PSM_CT32;
     const uint32_t texture_bytes =
         gsKit_texture_size(
             (int)physical_width, (int)physical_height, texture_psm);
     const uint32_t clut_bytes = gsKit_texture_size(
-        (int)clut_width, (int)clut_height, GS_PSM_CT16);
+        (int)clut_width, (int)clut_height, clut_psm);
     /*
      * Two retirement records cover either the old residency on success or
      * the new texture/CLUT pair if the second upload cannot be fenced safely.
@@ -1432,7 +1448,7 @@ extern "C" bool ps2GsCoreUploadTextureN64Ci(Ps2GsTextureHandle handle,
     candidate.Filter = slot->texture.Filter;
     candidate.Vram = texture_vram;
     candidate.VramClut = clut_vram;
-    candidate.ClutPSM = GS_PSM_CT16;
+    candidate.ClutPSM = clut_psm;
     candidate.ClutStorageMode = 0; /* CSM1 */
     candidate.Mem = (u32 *)(uintptr_t)indices;
 
@@ -1448,12 +1464,16 @@ extern "C" bool ps2GsCoreUploadTextureN64Ci(Ps2GsTextureHandle handle,
     memset(&clut, 0, sizeof(clut));
     clut.Width = clut_width;
     clut.Height = clut_height;
-    clut.PSM = GS_PSM_CT16;
+    clut.PSM = clut_psm;
     clut.Vram = clut_vram;
-    clut.Mem = (u32 *)(uintptr_t)palette_rgba5551;
+    clut.Mem = (u32 *)(uintptr_t)palette;
+    const enum Ps2GsNativeUploadEncoding clut_encoding =
+        palette_encoding == PS2_GS_N64_PALETTE_RGBA16
+            ? PS2_GS_NATIVE_UPLOAD_N64_RGBA16_CLUT
+            : PS2_GS_NATIVE_UPLOAD_N64_IA16_CLUT;
     const bool clut_submitted = texture_submitted &&
         ps2GsNativeQueueUploadTexture(s_gs, &clut,
-            PS2_GS_NATIVE_UPLOAD_N64_RGBA16_CLUT);
+            clut_encoding);
 
     if (!clut_submitted) {
         if (texture_submitted) {

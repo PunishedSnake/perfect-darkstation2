@@ -17,6 +17,11 @@ extern "C" {
 bool ps2GsConvertN64Rgba16ToGsCt16(const uint8_t *source,
     uint8_t *destination, uint32_t texel_count);
 
+/* Expand N64 IA16 bytes (I,A) directly into GS CT32, optionally mirrored. */
+bool ps2GsConvertN64Ia16ToGsCt32(const uint8_t *source,
+    uint8_t *destination, uint32_t width, uint32_t height,
+    bool mirror_s, bool mirror_t);
+
 /* GS PSMT4 consumes the low nibble first; N64 CI4 stores the high nibble first. */
 bool ps2GsConvertN64Ci4ToGsT4(const uint8_t *source,
     uint8_t *destination, uint32_t byte_count);
@@ -38,6 +43,10 @@ bool ps2GsExpandTextureMirror(const uint8_t *source, uint8_t *destination,
  */
 bool ps2GsConvertN64Rgba16PaletteToGsCt16(const uint16_t *source,
     uint8_t *destination, uint32_t entry_count);
+
+/* N64 IA16 TLUT words store alpha high and intensity low. */
+bool ps2GsConvertN64Ia16PaletteToGsCt32(const uint16_t *source,
+    uint32_t *destination, uint32_t entry_count);
 
 /*
  * Build an exact RGBA32 CSM1 CLUT for a native N64 intensity texture.

@@ -35,6 +35,11 @@ enum Ps2GsN64IntensityEncoding {
     PS2_GS_N64_I8,
 };
 
+enum Ps2GsN64PaletteEncoding {
+    PS2_GS_N64_PALETTE_RGBA16,
+    PS2_GS_N64_PALETTE_IA16,
+};
+
 struct Ps2GsCreateInfo {
     int color_psm;
     int depth_psm;
@@ -154,11 +159,16 @@ bool ps2GsCoreUploadTextureRgba32(Ps2GsTextureHandle handle,
 bool ps2GsCoreUploadTextureN64Rgba16(Ps2GsTextureHandle handle,
     const uint8_t *rgba5551_be, uint32_t width, uint32_t height,
     bool mirror_s, bool mirror_t);
-/* Indexed texels and their RGBA16 TLUT become one atomic GS residency. */
+/* IA16 expands directly into CT32 IMAGE staging without the generic importer. */
+bool ps2GsCoreUploadTextureN64Ia16(Ps2GsTextureHandle handle,
+    const uint8_t *ia16, uint32_t width, uint32_t height,
+    bool mirror_s, bool mirror_t);
+/* Indexed texels and their exact CT16/CT32 TLUT become one atomic residency. */
 bool ps2GsCoreUploadTextureN64Ci(Ps2GsTextureHandle handle,
     const uint8_t *indices, uint32_t width, uint32_t height,
-    uint8_t index_bits, const uint16_t *palette_rgba5551,
-    uint32_t palette_count, bool mirror_s, bool mirror_t);
+    uint8_t index_bits, const uint16_t *palette,
+    uint32_t palette_count, enum Ps2GsN64PaletteEncoding palette_encoding,
+    bool mirror_s, bool mirror_t);
 /* IA4/IA8/I4/I8 use immutable shared CT32 CSM1 palettes. */
 bool ps2GsCoreUploadTextureN64Intensity(Ps2GsTextureHandle handle,
     const uint8_t *texels, uint32_t width, uint32_t height,

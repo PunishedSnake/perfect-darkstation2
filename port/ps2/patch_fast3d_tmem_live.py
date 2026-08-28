@@ -132,8 +132,10 @@ def patch(source: str) -> str:
         "        key.palette_addrs[1] = nullptr;\n"
         "        key.content_identity = gfxPs2TextureVariantIdentity(\n"
         "            tmem_view.content_identity,\n"
+        "            fmt,\n"
         "            rdp.texture_tile[tile].cms,\n"
-        "            rdp.texture_tile[tile].cmt);\n"
+        "            rdp.texture_tile[tile].cmt,\n"
+        "            rdp.palette_fmt);\n"
         "        key.content_identity_valid = true;\n"
         "    }\n\n"
         "    if (gfx_texture_cache_lookup(i, key)) {\n",
