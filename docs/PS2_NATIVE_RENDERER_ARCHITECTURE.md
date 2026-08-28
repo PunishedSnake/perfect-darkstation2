@@ -322,6 +322,7 @@ This semantic layer should remain backend-independent where possible. PS2-specif
 - normal draw and upload submission does not wait for `FINISH`; fences occur at PCRTC publication and under genuine texture-allocation pressure;
 - the PS2 Fast3D cache is capped at the backend's 64 texture handles so eviction can recycle handles instead of exhausting the backend table;
 - exact live-TMEM N64 RGBA5551 textures are converted directly into GS A1B5G5R5 staging and reside as PSMCT16, halving their IMAGE payload and local-memory footprint relative to the RGBA32 baseline;
+- exact split-bank live-TMEM N64 RGBA32 is reconstructed into canonical RGBA bytes and uploaded directly as PSMCT32, bypassing the generic Fast3D importer buffer while retaining native mirror expansion and transactional residency;
 - exact IA4/IA8/I4/I8 textures remain compact PSMT4/PSMT8 index planes and select one of four lazy immutable PSMCT32 CSM1 palettes shared across all texture handles;
 - TEXA expands the PSMCT16 alpha bit to the same 0..255 texture-alpha convention used by the existing combiner adapter;
 - the project owns the per-frame VSync wait, `DISPFB2` publication, draw-buffer selection and native `FRAME`/`SCISSOR` packet;
@@ -482,6 +483,8 @@ PCSX2 is useful for correctness, packet/state inspection and fast iteration. It 
 - project-owned 256-byte-block allocator for post-system GS VRAM;
 - transactional reupload/resize with fence-delayed retirement;
 - exact RGBA16 -> PSMCT16 direct residency, with RGBA32 fallback;
+- exact split-bank RGBA32 -> PSMCT32 direct residency from the canonical
+  live-TMEM view, without traversing the generic importer;
 - exact CI4/CI8 plus RGBA16 TLUT residency as paired texture/CLUT blocks;
 - exact CI4/CI8 plus IA16 TLUT residency as compact indexed planes paired
   transactionally with PSMCT32 CSM1 palettes;

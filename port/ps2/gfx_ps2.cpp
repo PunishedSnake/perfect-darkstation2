@@ -76,6 +76,7 @@
 #define PS2_GFX_N64_SIZ_4B 0u
 #define PS2_GFX_N64_SIZ_8B 1u
 #define PS2_GFX_N64_SIZ_16B 2u
+#define PS2_GFX_N64_SIZ_32B 3u
 #define PS2_GFX_N64_TT_RGBA16 (2u << 14)
 #define PS2_GFX_N64_TT_IA16 (3u << 14)
 
@@ -161,6 +162,7 @@ static bool s_warned_region_clamp_extent;
 static bool s_upload_mirror_s;
 static bool s_upload_mirror_t;
 static bool s_logged_native_rgba16;
+static bool s_logged_native_rgba32;
 static bool s_logged_native_ia16;
 static bool s_logged_native_mirror;
 static bool s_logged_native_ci4;
@@ -507,6 +509,28 @@ extern "C" bool gfxPs2UploadTmemTexture(
     const uint32_t height = view->size_bytes / view->line_size_bytes;
     const Ps2GsTextureHandle handle =
         s_selected_texture[s_active_texture_tile];
+
+    if (format == PS2_GFX_N64_FMT_RGBA &&
+        size == PS2_GFX_N64_SIZ_32B &&
+        (view->line_size_bytes & 3u) == 0u) {
+        const uint32_t width = view->line_size_bytes / 4u;
+        bool mirror_s;
+        bool mirror_t;
+        ps2_effective_upload_mirror(width, height, &mirror_s, &mirror_t);
+        if (!ps2GsCoreUploadTextureRgba32(
+                handle, view->texels, width, height,
+                mirror_s, mirror_t)) {
+            return false;
+        }
+        ps2_record_texture_mirror(
+            handle, width, height, mirror_s, mirror_t);
+        if (!s_logged_native_rgba32) {
+            sysLogPrintf(LOG_NOTE,
+                "GfxPS2 native texture path: exact split-TMEM N64 RGBA32 -> GS PSMCT32");
+            s_logged_native_rgba32 = true;
+        }
+        return true;
+    }
 
     if (format == PS2_GFX_N64_FMT_RGBA &&
         size == PS2_GFX_N64_SIZ_16B &&
