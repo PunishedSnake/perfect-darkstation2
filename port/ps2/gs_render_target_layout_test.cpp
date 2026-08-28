@@ -169,6 +169,36 @@ static void test_red_lane_region_repeat_mapping(void)
     }
 }
 
+static void test_red_lane_known_psmt8_anchors(void)
+{
+    struct Anchor {
+        uint32_t x;
+        uint32_t y;
+        uint32_t u;
+        uint32_t v;
+    };
+    static const Anchor anchors[] = {
+        { 0u, 0u, 0u, 0u },
+        { 7u, 0u, 7u, 0u },
+        { 8u, 0u, 16u, 0u },
+        { 0u, 1u, 0u, 1u },
+        { 0u, 2u, 4u, 4u },
+        { 0u, 3u, 4u, 5u },
+        { 0u, 4u, 0u, 8u },
+        { 32u, 0u, 64u, 0u },
+        { 63u, 31u, 115u, 61u },
+    };
+
+    for (const Anchor &anchor : anchors) {
+        Ps2GsT8PageCoordinate coordinate{};
+        assert(ps2GsMapCt32PixelChannelToT8Page(
+            anchor.x, anchor.y, PS2_GS_CT32_CHANNEL_RED,
+            &coordinate));
+        assert(coordinate.u == anchor.u);
+        assert(coordinate.v == anchor.v);
+    }
+}
+
 int main(void)
 {
     test_ct32_page_footprints();
@@ -177,6 +207,7 @@ int main(void)
     test_invalid_texture_views();
     test_ct32_to_t8_page_channel_mapping();
     test_red_lane_region_repeat_mapping();
+    test_red_lane_known_psmt8_anchors();
     puts("gs_render_target_layout tests passed");
     return 0;
 }

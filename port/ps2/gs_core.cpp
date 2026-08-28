@@ -503,10 +503,10 @@ static void ps2GsCoreMarkActiveRenderTargetWritten(void)
     }
 }
 
-static uint64_t ps2GsCoreMakeXyz2(int x, int y, uint32_t z)
+static uint64_t ps2GsCoreMakeXyz2Fixed(int x16, int y16, uint32_t z)
 {
-    int fx = x * 16 + s_gs->OffsetX;
-    int fy = y * 16 + s_gs->OffsetY;
+    int fx = x16 + s_gs->OffsetX;
+    int fy = y16 + s_gs->OffsetY;
 
     if (fx < 0) fx = 0;
     if (fy < 0) fy = 0;
@@ -514,6 +514,11 @@ static uint64_t ps2GsCoreMakeXyz2(int x, int y, uint32_t z)
     if (fy >= 4096 * 16) fy = 4096 * 16 - 1;
 
     return GS_SETREG_XYZ2((uint32_t)fx, (uint32_t)fy, z);
+}
+
+static uint64_t ps2GsCoreMakeXyz2(int x, int y, uint32_t z)
+{
+    return ps2GsCoreMakeXyz2Fixed(x * 16, y * 16, z);
 }
 
 extern "C" bool ps2GsCoreInit(const struct Ps2GsCreateInfo *info)
@@ -2085,8 +2090,17 @@ extern "C" bool ps2GsCoreBlitRenderTargetRedToActiveAlpha(
                     ps2GsCoreWriteReg(&p[out++],
                         GS_SETREG_UV(u_xor * 16u, first.v * 16u),
                         GS_UV);
+                    /*
+                     * GS sprite coverage is pixel-perfect when the XY
+                     * endpoints name the upper-left pixel corners. Keep UV
+                     * on exact texel boundaries and bias only XY by half a
+                     * pixel; without this, every independent 8x2 shuffle
+                     * sprite samples across its REGION_REPEAT seam.
+                     */
                     ps2GsCoreWriteReg(&p[out++],
-                        ps2GsCoreMakeXyz2((int)x0, (int)y0, 0u),
+                        ps2GsCoreMakeXyz2Fixed(
+                            (int)x0 * 16 - 8,
+                            (int)y0 * 16 - 8, 0u),
                         GS_XYZ2);
                     ps2GsCoreWriteReg(&p[out++],
                         GS_SETREG_UV(
@@ -2094,9 +2108,9 @@ extern "C" bool ps2GsCoreBlitRenderTargetRedToActiveAlpha(
                             (first.v + tile_height) * 16u),
                         GS_UV);
                     ps2GsCoreWriteReg(&p[out++],
-                        ps2GsCoreMakeXyz2(
-                            (int)(x0 + tile_width),
-                            (int)(y0 + tile_height), 0u),
+                        ps2GsCoreMakeXyz2Fixed(
+                            (int)(x0 + tile_width) * 16 - 8,
+                            (int)(y0 + tile_height) * 16 - 8, 0u),
                         GS_XYZ2);
                 }
             }
