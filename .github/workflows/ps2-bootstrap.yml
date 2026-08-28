@@ -133,6 +133,17 @@ jobs:
             port/ps2/input_ps2.c \
             port/ps2/input_ps2_map.c
 
+      - name: Test bounded ROM source and RZIP streaming
+        run: |
+          gcc -std=c11 -Wall -Wextra -Werror \
+            -D_LANGUAGE_C=1 \
+            -Iport/include -Iinclude -Iinclude/PR \
+            port/src/romsource.c \
+            port/ps2/romsource_test.c \
+            -lz \
+            -o /tmp/romsource_test
+          /tmp/romsource_test
+
       - name: Test PS2 combiner planner
         run: |
           g++ -std=c++20 -Wall -Wextra -Werror \

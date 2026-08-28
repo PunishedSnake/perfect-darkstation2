@@ -82,6 +82,7 @@ set(PD_PS2_GAME_DEFINITIONS
   _LANGUAGE_C=1
   PAL=0
   VERSION=2
+  VERSION_ROMID="${PD_PS2_ROMID}"
 )
 
 # The game compile depends on generated enum headers even before any binary
@@ -244,8 +245,11 @@ set_target_properties(pd_ps2_bootstrap PROPERTIES
 add_library(pd_ps2_game_bridge OBJECT
   "${PD_ROOT}/port/src/main.c"
   "${PD_ROOT}/port/src/config.c"
+  "${PD_ROOT}/port/src/fs.c"
   "${PD_ROOT}/port/src/pdmain.c"
   "${PD_ROOT}/port/src/pdsched.c"
+  "${PD_ROOT}/port/src/romdata.c"
+  "${PD_ROOT}/port/src/romsource.c"
   "${PD_ROOT}/port/src/optionsmenu.c"
   "${PD_ROOT}/src/lib/vi.c"
   "${PD_ROOT}/src/lib/rdp.c"

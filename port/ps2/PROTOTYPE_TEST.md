@@ -97,4 +97,4 @@ PCSX2 is useful for correctness and inspection, but timing, cache, DMA, FIFO and
 
 ## Current architecture boundary
 
-This prototype intentionally does not use VU, VIF, custom DMA, manual R5900 assembly or broad alignment changes. The current bottleneck is still data residency and runtime platform bring-up, so the smallest correct next step is to migrate the real `romdata` path onto the bounded `RomSource` contract before specialising hot kernels.
+This prototype intentionally does not use VU, VIF, custom DMA, manual R5900 assembly or broad alignment changes. The real `romdata` path now uses the same bounded `RomSource` contract as this probe: PS2 keeps the ROM file-backed, inflates through a caller-owned 8 KiB window, materializes permanent segments at exact size and loads ordinary files on demand. The next full-runtime boundary is native audio plus an explicit heap/resident-segment budget before the diagnostic entry point can be replaced by `port/src/main.c`.

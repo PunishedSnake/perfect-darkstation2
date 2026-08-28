@@ -10,6 +10,9 @@
 #include "system.h"
 #include "preprocess.h"
 #include "platform.h"
+#ifdef PLATFORM_PS2
+#include "romsource.h"
+#endif
 
 /**
  * asset files and ROM segments can be replaced by optional external files,
@@ -50,6 +53,11 @@
 
 #define ROMDATA_MAX_FILES 2048
 
+#ifdef PLATFORM_PS2
+#define ROMDATA_RZIP_INPUT_CHUNK 8192
+#define ROMDATA_MAX_DATA_SEG_SIZE (4 * 1024 * 1024)
+#endif
+
 #define GBC_ROM_NAME "pd.gbc"
 #define GBC_ROM_SIZE 4194304
 
@@ -59,6 +67,10 @@ u32 g_RomFileSize;
 static u8 *romDataSeg;
 static u32 romDataSegSize;
 static const char *romName = ROMDATA_ROM_NAME;
+#ifdef PLATFORM_PS2
+static struct romsource romSource;
+static u8 *romNameTable;
+#endif
 
 enum loadsource {
 	SRC_UNLOADED = 0,
@@ -84,6 +96,9 @@ struct romfile {
 	s32 preprocessed;
 	const struct romfilepatch *patches;
 	u32 numpatches;
+	u32 romoffset;
+	u32 romsize;
+	s32 owned;
 };
 
 /* patches for individual files; applied on file load, before preprocFuncs, but */
@@ -150,16 +165,22 @@ u8 *_animationsTableRomEnd;
 #undef ROMSEG_DECL_SEG
 
 #if VERSION == VERSION_NTSC_FINAL
-#define ROMSEG_DECL_SEG(name, ofs_ntsc, ofs_pal, ofs_jpn, size, preproc) { &ROMSEG_START(name), &ROMSEG_END(name), #name, (u8 *)ofs_ntsc, size, preproc },
+#define ROMSEG_DECL_SEG(seg_name, ofs_ntsc, ofs_pal, ofs_jpn, seg_size, preproc) \
+	{ .segstart = &ROMSEG_START(seg_name), .segend = &ROMSEG_END(seg_name), .name = #seg_name, \
+	  .data = (u8 *)ofs_ntsc, .size = seg_size, .preprocess = preproc },
 #elif VERSION == VERSION_PAL_FINAL
-#define ROMSEG_DECL_SEG(name, ofs_ntsc, ofs_pal, ofs_jpn, size, preproc) { &ROMSEG_START(name), &ROMSEG_END(name), #name, (u8 *)ofs_pal, size, preproc },
+#define ROMSEG_DECL_SEG(seg_name, ofs_ntsc, ofs_pal, ofs_jpn, seg_size, preproc) \
+	{ .segstart = &ROMSEG_START(seg_name), .segend = &ROMSEG_END(seg_name), .name = #seg_name, \
+	  .data = (u8 *)ofs_pal, .size = seg_size, .preprocess = preproc },
 #elif VERSION == VERSION_JPN_FINAL
-#define ROMSEG_DECL_SEG(name, ofs_ntsc, ofs_pal, ofs_jpn, size, preproc) { &ROMSEG_START(name), &ROMSEG_END(name), #name, (u8 *)ofs_jpn, size, preproc },
+#define ROMSEG_DECL_SEG(seg_name, ofs_ntsc, ofs_pal, ofs_jpn, seg_size, preproc) \
+	{ .segstart = &ROMSEG_START(seg_name), .segend = &ROMSEG_END(seg_name), .name = #seg_name, \
+	  .data = (u8 *)ofs_jpn, .size = seg_size, .preprocess = preproc },
 #endif
 
 static struct romfile romSegs[] = {
 	ROMSEG_LIST()
-	{ NULL, NULL, NULL, NULL, 0, NULL },
+	{ 0 },
 };
 
 /* the game sets g_LoadType to the type of file it expects,              */
@@ -192,6 +213,64 @@ static inline void romdataLoadRom(void)
 {
 	sysLogPrintf(LOG_NOTE, "ROM file: %s", romName);
 
+#ifdef PLATFORM_PS2
+	u8 header[64];
+	static u8 inputScratch[ROMDATA_RZIP_INPUT_CHUNK];
+	u32 dataSegLen = 0;
+	u32 compressedSize = 0;
+	const char *path = fsFullPath(romName);
+
+	g_RomFile = NULL;
+	romSourceClose(&romSource);
+
+	if (!romSourceOpenFile(&romSource, path)) {
+		sysFatalError("Could not open ROM file %s.\nEnsure that it is in the %s directory.", romName, fsFullPath(""));
+	}
+
+	g_RomFileSize = romSourceGetSize(&romSource);
+
+	if (!romSourceReadAt(&romSource, 0, header, sizeof(header))) {
+		romdataWrongRomError("Could not read the ROM header.");
+	}
+
+	// zips are not guaranteed to start with PK, but might as well at least try
+	if (!memcmp(header, "PK", 2) || !memcmp(header, "Rar", 3) || !memcmp(header, "7z", 2)) {
+		romdataWrongRomError("Your ROM is in an archive file. Please extract it.");
+	}
+
+	if (g_RomFileSize != ROMDATA_ROM_SIZE) {
+		romdataWrongRomError("ROM size does not match: expected: %u, got: %u.", ROMDATA_ROM_SIZE, g_RomFileSize);
+	}
+
+	if (memcmp(header + 0x3b, ROMDATA_ROM_ID, 4) ||
+		memcmp(header + 0x20, ROMDATA_ROM_TITLE, sizeof(ROMDATA_ROM_TITLE) - 1)) {
+		romdataWrongRomError("ROM header does not match.");
+	}
+
+	if (!romSourceGetRzip1173Size(&romSource, ROMDATA_DATA_OFS, &dataSegLen)) {
+		romdataWrongRomError("Data segment is not 1173-compressed.");
+	}
+
+	if (dataSegLen < ROMDATA_FILES_OFS + 12 || dataSegLen > ROMDATA_MAX_DATA_SEG_SIZE) {
+		romdataWrongRomError("Data segment size is invalid (%u).", dataSegLen);
+	}
+
+	romDataSeg = sysMemAlloc(dataSegLen);
+	if (!romDataSeg) {
+		sysFatalError("Could not allocate %u bytes for data segment.", dataSegLen);
+	}
+
+	if (!romSourceInflate1173(&romSource, ROMDATA_DATA_OFS, romDataSeg,
+		dataSegLen, inputScratch, sizeof(inputScratch), &compressedSize)) {
+		sysMemFree(romDataSeg);
+		romDataSeg = NULL;
+		sysFatalError("Could not stream-inflate the ROM data segment.");
+	}
+
+	romDataSegSize = dataSegLen;
+	sysLogPrintf(LOG_NOTE, "ROM source is file-backed; data segment %u bytes from %u compressed bytes",
+		dataSegLen, compressedSize);
+#else
 	g_RomFile = fsFileLoad(romName, &g_RomFileSize);
 
 	if (!g_RomFile) {
@@ -236,6 +315,7 @@ static inline void romdataLoadRom(void)
 
 	romDataSeg = dataSeg;
 	romDataSegSize = dataSegLen;
+#endif
 }
 
 static inline void romdataUpdateSegStartEnd(struct romfile* seg)
@@ -251,7 +331,7 @@ static inline void romdataUpdateSegStartEnd(struct romfile* seg)
 
 static inline void romdataInitSegment(struct romfile *seg)
 {
-	if (!seg->data) {
+	if (!seg->romoffset) {
 		// unused in this ROM, skip it
 		sysLogPrintf(LOG_NOTE, "skipping segment %s", seg->name);
 		return;
@@ -261,11 +341,16 @@ static inline void romdataInitSegment(struct romfile *seg)
 		// size unknown
 		if (seg[1].name) {
 			// use next segment's base to calculate
-			seg->size = seg[1].data - seg->data;
+			seg->size = seg[1].romoffset - seg->romoffset;
 		} else {
 			// this is the last segment, calculate based on rom size
-			seg->size = (uintptr_t)g_RomFileSize - (uintptr_t)seg->data;
+			seg->size = g_RomFileSize - seg->romoffset;
 		}
+	}
+
+	if (seg->romoffset > g_RomFileSize || seg->size > g_RomFileSize - seg->romoffset) {
+		sysFatalError("ROM segment %s has an invalid range %08x..%08x.",
+			seg->name, seg->romoffset, seg->romoffset + seg->size);
 	}
 
 	// check if we have an external replacement and load it if so
@@ -275,15 +360,33 @@ static inline void romdataInitSegment(struct romfile *seg)
 	const s32 extFileSize = fsFileSize(tmp);
 	if (extFileSize > 0) {
 		newData = fsFileLoad(tmp, &seg->size);
+		seg->owned = newData != NULL;
 	}
 
 	if (!newData) {
-		// no external data, just make it point to the rom
-		if (g_RomFile) {
-			newData = g_RomFile + (uintptr_t)seg->data;
+		// no external data, use the ROM source
+#ifdef PLATFORM_PS2
+		newData = sysMemAlloc(seg->size);
+		if (newData && !romSourceReadAt(&romSource, seg->romoffset, newData, seg->size)) {
+			sysMemFree(newData);
+			newData = NULL;
+		}
+
+		if (newData) {
+			seg->owned = 1;
 			seg->source = SRC_ROM;
-			sysLogPrintf(LOG_NOTE, "loading segment %s from ROM (offset %08x pointer %p)", seg->name, (uintptr_t)seg->data, newData);
-		} else {
+			sysLogPrintf(LOG_NOTE, "loading segment %s from file-backed ROM (offset %08x size %u pointer %p)",
+				seg->name, seg->romoffset, seg->size, newData);
+		}
+#else
+		// Resident desktop ROM: point directly into the image.
+		if (g_RomFile) {
+			newData = g_RomFile + seg->romoffset;
+			seg->source = SRC_ROM;
+			sysLogPrintf(LOG_NOTE, "loading segment %s from ROM (offset %08x pointer %p)", seg->name, seg->romoffset, newData);
+		}
+#endif
+		if (!newData) {
 			sysFatalError("No ROM or external file for segment:\n%s", seg->name);
 		}
 	} else {
@@ -301,9 +404,11 @@ static inline void romdataInitSegment(struct romfile *seg)
 		newData = seg->preprocess(seg->data, seg->size, &seg->size);
 
 		if (newData) {
-			if (seg->source == SRC_EXTERNAL)
+			if (seg->owned) {
 				sysMemFree(seg->data);
+			}
 			seg->data = newData;
+			seg->owned = 1;
 			romdataUpdateSegStartEnd(seg);
 		}
 		
@@ -338,8 +443,145 @@ static inline s32 romdataLoadExternalFileList(void)
 	return n - 1;
 }
 
+#ifdef PLATFORM_PS2
+static bool romdataFindSourceStringLength(u32 offset, u32 *outLength)
+{
+	u8 chunk[64];
+	u32 length = 0;
+
+	while (length <= FS_MAXPATH && offset + length < g_RomFileSize) {
+		const u32 remaining = g_RomFileSize - (offset + length);
+		const u32 nameRemaining = FS_MAXPATH + 1u - length;
+		u32 amount = remaining < sizeof(chunk) ? remaining : sizeof(chunk);
+		amount = amount < nameRemaining ? amount : nameRemaining;
+
+		if (!romSourceReadAt(&romSource, offset + length, chunk, amount)) {
+			return false;
+		}
+
+		const u8 *terminator = memchr(chunk, '\0', amount);
+		if (terminator) {
+			*outLength = length + (u32)(terminator - chunk);
+			return true;
+		}
+
+		length += amount;
+	}
+
+	return false;
+}
+
+static u32 romdataInitFileNames(u32 nameTableOffset, u32 fileCount)
+{
+	const u32 offsetsSize = (fileCount + 2u) * sizeof(u32);
+	u32 *nameOffsets = NULL;
+	u32 maxNameOffset = 0;
+	u32 lastNameLength = 0;
+	u32 tableSize;
+
+	if (nameTableOffset > g_RomFileSize || offsetsSize > g_RomFileSize - nameTableOffset) {
+		sysFatalError("ROM filename offset table is outside the ROM.");
+	}
+
+	nameOffsets = sysMemAlloc(offsetsSize);
+	if (!nameOffsets || !romSourceReadAt(&romSource, nameTableOffset, nameOffsets, offsetsSize)) {
+		if (nameOffsets) {
+			sysMemFree(nameOffsets);
+		}
+		sysFatalError("Could not read the ROM filename offset table.");
+	}
+
+	for (u32 i = 1; i <= fileCount; ++i) {
+		const u32 relative = PD_BE32(nameOffsets[i]);
+
+		if (!relative || relative < offsetsSize || relative >= g_RomFileSize - nameTableOffset) {
+			sysMemFree(nameOffsets);
+			sysFatalError("ROM filename %u has invalid relative offset %08x.", i, relative);
+		}
+
+		if (relative > maxNameOffset) {
+			maxNameOffset = relative;
+		}
+	}
+
+	if (PD_BE32(nameOffsets[fileCount + 1u]) != 0 ||
+		!romdataFindSourceStringLength(nameTableOffset + maxNameOffset, &lastNameLength)) {
+		sysMemFree(nameOffsets);
+		sysFatalError("ROM filename table is unterminated or inconsistent.");
+	}
+
+	tableSize = maxNameOffset + lastNameLength + 1u;
+	romNameTable = sysMemAlloc(tableSize);
+
+	if (!romNameTable || !romSourceReadAt(&romSource, nameTableOffset, romNameTable, tableSize)) {
+		if (romNameTable) {
+			sysMemFree(romNameTable);
+			romNameTable = NULL;
+		}
+		sysMemFree(nameOffsets);
+		sysFatalError("Could not materialize the ROM filename table.");
+	}
+
+	for (u32 i = 1; i <= fileCount; ++i) {
+		const u32 relative = PD_BE32(nameOffsets[i]);
+		const u32 remaining = tableSize - relative;
+
+		if (!memchr(romNameTable + relative, '\0', remaining)) {
+			sysMemFree(nameOffsets);
+			sysFatalError("ROM filename %u is not terminated.", i);
+		}
+
+		fileSlots[i].name = (const char *)romNameTable + relative;
+	}
+
+	sysMemFree(nameOffsets);
+	return tableSize;
+}
+#endif
+
 static inline void romdataInitFiles(void)
 {
+#ifdef PLATFORM_PS2
+	const u32 tableEntries = (romDataSegSize - ROMDATA_FILES_OFS) / sizeof(u32);
+	const u32 *offsets = (const u32 *)(romDataSeg + ROMDATA_FILES_OFS);
+	u32 nameTableOffset = 0;
+	u32 fileCount = 0;
+
+	for (u32 i = 1; i + 1 < tableEntries && i < ROMDATA_MAX_FILES; ++i) {
+		const u32 offset = PD_BE32(offsets[i]);
+		const u32 nextOffset = PD_BE32(offsets[i + 1]);
+
+		if (!offset) {
+			break;
+		}
+
+		if (!nextOffset) {
+			nameTableOffset = offset;
+			fileCount = i - 1u;
+			break;
+		}
+
+		if (offset >= nextOffset || nextOffset > g_RomFileSize) {
+			sysFatalError("ROM file %u has invalid extent %08x..%08x.", i, offset, nextOffset);
+		}
+
+		fileSlots[i].romoffset = offset;
+		fileSlots[i].romsize = nextOffset - offset;
+		fileSlots[i].data = NULL;
+		fileSlots[i].size = fileSlots[i].romsize;
+		fileSlots[i].source = SRC_UNLOADED;
+		fileSlots[i].preprocessed = 0;
+		fileSlots[i].owned = 0;
+	}
+
+	if (!nameTableOffset || fileCount != NUM_FILES - 1u || nameTableOffset >= g_RomFileSize) {
+		sysFatalError("ROM file table does not contain a valid filename table.");
+	}
+
+	const u32 nameTableSize = romdataInitFileNames(nameTableOffset, fileCount);
+	sysLogPrintf(LOG_NOTE, "ROM file table: %u file extents, %u-byte resident filename table",
+		fileCount, nameTableSize);
+#else
 	if (!g_RomFile) {
 		// no ROM; try to load the file name list from disk
 		if (!romdataLoadExternalFileList()) {
@@ -357,6 +599,8 @@ static inline void romdataInitFiles(void)
 			const u32 ofs = PD_BE32(offsets[i]);
 			fileSlots[i].data = g_RomFile + ofs;
 			fileSlots[i].size = nextofs - ofs;
+			fileSlots[i].romoffset = ofs;
+			fileSlots[i].romsize = nextofs - ofs;
 			fileSlots[i].source = SRC_UNLOADED;
 			fileSlots[i].preprocessed = 0;
 		}
@@ -368,6 +612,7 @@ static inline void romdataInitFiles(void)
 		const u32 ofs = PD_BE32(nameOffsets[i]);
 		fileSlots[i].name = (const char *)nameOffsets + ofs; // ofs is relative to the start of the name table
 	}
+#endif
 }
 
 static inline struct romfile *romdataGetSeg(const char *name)
@@ -386,6 +631,10 @@ s32 romdataInit(void)
 		romName = altRomName;
 	}
 
+	for (struct romfile *seg = romSegs; seg->name; ++seg) {
+		seg->romoffset = (u32)(uintptr_t)seg->data;
+	}
+
 	romdataLoadRom();
 
 	// set segments to point to the rom or load them externally
@@ -395,6 +644,15 @@ s32 romdataInit(void)
 
 	// load file table from the files segment
 	romdataInitFiles();
+
+#ifdef PLATFORM_PS2
+	// The decompressed data segment is only a bootstrap producer for the file
+	// extent table. Names now live in their compact permanent table and lazy
+	// files retain stable source offsets, so release this transient buffer.
+	sysMemFree(romDataSeg);
+	romDataSeg = NULL;
+	romDataSegSize = 0;
+#endif
 
 	sysLogPrintf(LOG_NOTE, "romdataInit: loaded rom, size = %u", g_RomFileSize);
 
@@ -455,10 +713,29 @@ s32 romdataFileGetSize(s32 fileNum)
 		return -1;
 	}
 
-	// ensure any external files are loaded and we use their size
+#ifdef PLATFORM_PS2
+	if (fileSlots[fileNum].source != SRC_UNLOADED) {
+		return fileSlots[fileNum].size;
+	}
+
+	if (fileSlots[fileNum].name) {
+		char tmp[FS_MAXPATH] = { 0 };
+		snprintf(tmp, sizeof(tmp), ROMDATA_FILEDIR "/%s", fileSlots[fileNum].name);
+		const s32 externalSize = fsFileSize(tmp);
+		if (externalSize > 0) {
+			return externalSize;
+		}
+	}
+
+	if (fileSlots[fileNum].romoffset && fileSlots[fileNum].romsize) {
+		return fileSlots[fileNum].romsize;
+	}
+#else
+	// Ensure any external files are loaded and we use their size.
 	if (romdataFileLoad(fileNum, NULL)) {
 		return fileSlots[fileNum].size;
 	}
+#endif
 
 	sysLogPrintf(LOG_ERROR, "romdataFileGetSize: could not load file num %d", fileNum);
 	return -1;
@@ -480,22 +757,58 @@ u8 *romdataFileLoad(s32 fileNum, u32 *outSize)
 
 	// try to load external file
 	if (fileSlots[fileNum].source == SRC_UNLOADED) {
-		char tmp[FS_MAXPATH] = { 0 };
-		snprintf(tmp, sizeof(tmp), ROMDATA_FILEDIR "/%s", fileSlots[fileNum].name);
-		if (fsFileSize(tmp) > 0) {
-			u32 size = 0;
-			out = fsFileLoad(tmp, &size);
-			if (out && size) {
-				sysLogPrintf(LOG_NOTE, "file %d (%s) loaded externally", fileNum, fileSlots[fileNum].name);
-				fileSlots[fileNum].data = out;
-				fileSlots[fileNum].size = size;
-				fileSlots[fileNum].source = SRC_EXTERNAL;
-				// external file; do not apply patches to this
-				fileSlots[fileNum].numpatches = 0;
+		if (fileSlots[fileNum].name) {
+			char tmp[FS_MAXPATH] = { 0 };
+			snprintf(tmp, sizeof(tmp), ROMDATA_FILEDIR "/%s", fileSlots[fileNum].name);
+			if (fsFileSize(tmp) > 0) {
+				u32 size = 0;
+				out = fsFileLoad(tmp, &size);
+				if (out && size) {
+					sysLogPrintf(LOG_NOTE, "file %d (%s) loaded externally", fileNum, fileSlots[fileNum].name);
+					fileSlots[fileNum].data = out;
+					fileSlots[fileNum].size = size;
+					fileSlots[fileNum].source = SRC_EXTERNAL;
+					fileSlots[fileNum].owned = 1;
+					// external file; do not apply patches to this
+					fileSlots[fileNum].numpatches = 0;
+				}
 			}
 		}
-		// tried and failed, fall back to ROM
-		fileSlots[fileNum].source = SRC_ROM;
+
+		if (!out) {
+#ifdef PLATFORM_PS2
+			struct romfile *file = &fileSlots[fileNum];
+
+			if (file->romoffset && file->romsize &&
+				file->romoffset <= g_RomFileSize && file->romsize <= g_RomFileSize - file->romoffset) {
+				out = sysMemAlloc(file->romsize);
+				if (out && !romSourceReadAt(&romSource, file->romoffset, out, file->romsize)) {
+					sysMemFree(out);
+					out = NULL;
+				}
+			}
+
+			if (out) {
+				file->data = out;
+				file->size = file->romsize;
+				file->source = SRC_ROM;
+				file->owned = 1;
+				sysLogPrintf(LOG_NOTE, "file %d (%s) loaded from ROM offset %08x (%u bytes)",
+					fileNum, file->name, file->romoffset, file->romsize);
+			} else {
+				sysLogPrintf(LOG_ERROR, "file %d (%s) could not be read from the ROM source",
+					fileNum, file->name ? file->name : "unnamed");
+			}
+#else
+			// Rebuild the resident-ROM view after a prior external override.
+			if (g_RomFile && fileSlots[fileNum].romoffset && fileSlots[fileNum].romsize) {
+				fileSlots[fileNum].data = g_RomFile + fileSlots[fileNum].romoffset;
+				fileSlots[fileNum].size = fileSlots[fileNum].romsize;
+				fileSlots[fileNum].source = SRC_ROM;
+				out = fileSlots[fileNum].data;
+			}
+#endif
+		}
 	}
 
 	if (!out) {
@@ -517,7 +830,7 @@ void romdataFilePreprocess(s32 fileNum, s32 loadType, u8 *data, u32 size, u32 *o
 	}
 
 	if (data && size /* && !fileSlots[fileNum].preprocessed*/) {
-		if (loadType && loadType < (u32)ARRAYCOUNT(filePreprocFuncs) && filePreprocFuncs[loadType]) {
+		if (loadType > 0 && loadType < ARRAYCOUNT(filePreprocFuncs) && filePreprocFuncs[loadType]) {
 			// apply patches
 			for (u32 i = 0; i < fileSlots[fileNum].numpatches; ++i) {
 				const struct romfilepatch *p = &fileSlots[fileNum].patches[i];
@@ -540,9 +853,14 @@ void romdataFileFree(s32 fileNum)
 		return;
 	}
 
-	if (fileSlots[fileNum].source == SRC_EXTERNAL) {
+	if (fileSlots[fileNum].owned) {
 		sysMemFree(fileSlots[fileNum].data);
 		fileSlots[fileNum].data = NULL;
+		fileSlots[fileNum].owned = 0;
+	}
+
+	if (fileSlots[fileNum].romsize) {
+		fileSlots[fileNum].size = fileSlots[fileNum].romsize;
 	}
 
 	fileSlots[fileNum].source = SRC_UNLOADED;
@@ -601,6 +919,8 @@ u32 romdataFileGetEstimatedSize(const u32 size, const u32 loadtype)
 	default:
 		sysLogPrintf(LOG_WARNING, "romdataFileGetEstimatedSize: wrong loadtype %d", loadtype);
 	}
+#else
+	(void)loadtype;
 #endif
 	return size;
 }

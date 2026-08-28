@@ -32,4 +32,16 @@ u32 romSourceGetSize(const struct romsource *source);
 const u8 *romSourceView(const struct romsource *source, u32 offset, u32 length);
 bool romSourceReadAt(struct romsource *source, u32 offset, void *dst, u32 length);
 
+/*
+ * Bounded RZIP 1173 streaming contract.
+ *
+ * The caller owns both the final output and the input scratch buffer. This
+ * keeps allocation policy outside the source layer and makes file-backed ROM
+ * inflation independent of a resident 32 MiB image.
+ */
+bool romSourceGetRzip1173Size(struct romsource *source, u32 offset, u32 *outSize);
+bool romSourceInflate1173(struct romsource *source, u32 offset,
+		void *output, u32 outputSize, void *inputScratch, u32 inputScratchSize,
+		u32 *outCompressedSize);
+
 #endif

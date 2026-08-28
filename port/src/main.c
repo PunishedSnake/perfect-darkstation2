@@ -130,7 +130,11 @@ int main(int argc, const char **argv)
 	}
 
 	sysLogPrintf(LOG_NOTE, "memp heap at %p - %p", g_MempHeap, g_MempHeap + g_MempHeapSize);
-	sysLogPrintf(LOG_NOTE, "rom  file at %p - %p", g_RomFile, g_RomFile + g_RomFileSize);
+	if (g_RomFile) {
+		sysLogPrintf(LOG_NOTE, "rom  file at %p - %p", g_RomFile, g_RomFile + g_RomFileSize);
+	} else {
+		sysLogPrintf(LOG_NOTE, "rom  file-backed source, size %u", g_RomFileSize);
+	}
 
 	g_SndDisabled = sysArgCheck("--no-sound");
 

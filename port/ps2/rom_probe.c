@@ -1,6 +1,5 @@
 #include <stdbool.h>
 #include <string.h>
-#include <zlib.h>
 
 #include "romsource.h"
 #include "system.h"
@@ -62,29 +61,16 @@ static bool validateRomHeader(struct romsource *source)
 
 static int inflateDataSegment(struct romsource *source)
 {
-    u8 rzipHeader[PD_RZIP_HEADER_SIZE];
     static u8 input[PD_RZIP_INPUT_CHUNK];
-    z_stream stream;
     u8 *output = NULL;
     u32 expectedSize;
-    u32 nextOffset;
     u32 compressedBytes = 0;
     int result = -1;
-    int zret;
 
-    if (!romSourceReadAt(source, PD_ROM_DATA_OFS, rzipHeader, sizeof(rzipHeader))) {
-        sysLogPrintf(LOG_ERROR, "ROM probe: RZIP header read failed");
+    if (!romSourceGetRzip1173Size(source, PD_ROM_DATA_OFS, &expectedSize)) {
+        sysLogPrintf(LOG_ERROR, "ROM probe: data segment is not RZIP 1173");
         return -1;
     }
-
-    if (rzipHeader[0] != 0x11 || rzipHeader[1] != 0x73) {
-        sysLogPrintf(LOG_ERROR, "ROM probe: data segment is not RZIP 1173 (%02x%02x)",
-            rzipHeader[0], rzipHeader[1]);
-        return -1;
-    }
-
-    expectedSize = ((u32)rzipHeader[2] << 16) |
-        ((u32)rzipHeader[3] << 8) | (u32)rzipHeader[4];
 
     if (expectedSize < PD_ROM_FILES_OFS + 12u || expectedSize > PD_RZIP_MAX_DATA_SEG) {
         sysLogPrintf(LOG_ERROR, "ROM probe: implausible data segment size %u", expectedSize);
@@ -100,73 +86,13 @@ static int inflateDataSegment(struct romsource *source)
         return -1;
     }
 
-    memset(&stream, 0, sizeof(stream));
-    stream.next_out = output;
-    stream.avail_out = expectedSize;
-
-    zret = inflateInit2(&stream, -MAX_WBITS);
-    if (zret != Z_OK) {
-        sysLogPrintf(LOG_ERROR, "ROM probe: inflateInit2 failed: %d", zret);
-        goto cleanup;
-    }
-
     sysLogPrintf(LOG_NOTE, "ROM probe: entering bounded inflate loop at ROM offset %08x",
         PD_ROM_DATA_OFS + PD_RZIP_HEADER_SIZE);
     ps2LogCheckpoint();
 
-    nextOffset = PD_ROM_DATA_OFS + PD_RZIP_HEADER_SIZE;
-
-    for (;;) {
-        if (stream.avail_in == 0) {
-            const u32 romSize = romSourceGetSize(source);
-            const u32 remaining = romSize - nextOffset;
-            const u32 amount = remaining < PD_RZIP_INPUT_CHUNK ? remaining : PD_RZIP_INPUT_CHUNK;
-
-            if (nextOffset >= romSize || amount == 0 ||
-                !romSourceReadAt(source, nextOffset, input, amount)) {
-                sysLogPrintf(LOG_ERROR, "ROM probe: compressed stream ended before Z_STREAM_END");
-                inflateEnd(&stream);
-                goto cleanup;
-            }
-
-            nextOffset += amount;
-            stream.next_in = input;
-            stream.avail_in = amount;
-        }
-
-        const uLong beforeIn = stream.total_in;
-        const uLong beforeOut = stream.total_out;
-        zret = inflate(&stream, Z_NO_FLUSH);
-
-        if (zret == Z_STREAM_END) {
-            compressedBytes = (u32)stream.total_in;
-            break;
-        }
-
-        if (zret != Z_OK) {
-            sysLogPrintf(LOG_ERROR, "ROM probe: inflate failed: %d after %lu input bytes",
-                zret, (unsigned long)stream.total_in);
-            inflateEnd(&stream);
-            goto cleanup;
-        }
-
-        if (stream.total_in == beforeIn && stream.total_out == beforeOut) {
-            sysLogPrintf(LOG_ERROR, "ROM probe: inflate made no progress");
-            inflateEnd(&stream);
-            goto cleanup;
-        }
-
-        if (stream.avail_out == 0) {
-            sysLogPrintf(LOG_ERROR, "ROM probe: output filled before Z_STREAM_END");
-            inflateEnd(&stream);
-            goto cleanup;
-        }
-    }
-
-    zret = inflateEnd(&stream);
-    if (zret != Z_OK || stream.total_out != expectedSize) {
-        sysLogPrintf(LOG_ERROR, "ROM probe: decompressed size mismatch (%lu, expected %u)",
-            (unsigned long)stream.total_out, expectedSize);
+    if (!romSourceInflate1173(source, PD_ROM_DATA_OFS, output, expectedSize,
+        input, sizeof(input), &compressedBytes)) {
+        sysLogPrintf(LOG_ERROR, "ROM probe: bounded RZIP inflate failed");
         goto cleanup;
     }
 
