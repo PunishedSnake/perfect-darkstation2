@@ -130,7 +130,10 @@ def patch(source: str) -> str:
         "        key.texture_addr = nullptr;\n"
         "        key.palette_addrs[0] = nullptr;\n"
         "        key.palette_addrs[1] = nullptr;\n"
-        "        key.content_identity = tmem_view.content_identity;\n"
+        "        key.content_identity = gfxPs2TextureVariantIdentity(\n"
+        "            tmem_view.content_identity,\n"
+        "            rdp.texture_tile[tile].cms,\n"
+        "            rdp.texture_tile[tile].cmt);\n"
         "        key.content_identity_valid = true;\n"
         "    }\n\n"
         "    if (gfx_texture_cache_lookup(i, key)) {\n",
@@ -173,6 +176,8 @@ def patch(source: str) -> str:
         "    if (fmt == G_IM_FMT_RGBA) {\n",
         "        texture_to_import = &tmem_loaded_texture;\n"
         "    }\n\n"
+        "    gfxPs2SetTextureUploadMirror(\n"
+        "        rdp.texture_tile[tile].cms, rdp.texture_tile[tile].cmt);\n"
         "    if (tmem_view_exact && gfxPs2UploadTmemTexture(\n"
         "            &tmem_view, fmt, siz, rdp.palette_fmt, rdp.tex_lod)) {\n"
         "        return;\n"

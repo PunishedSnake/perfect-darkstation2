@@ -97,6 +97,99 @@ static void test_ci4_nibble_order(void)
     assert(!ps2GsConvertN64Ci4ToGsT4(NULL, destination, 1u));
 }
 
+static void test_mirror_u8(void)
+{
+    const uint8_t source[] = { 1u, 2u, 3u, 4u, 5u, 6u };
+    uint8_t horizontal[12] = {};
+    uint8_t vertical[12] = {};
+    uint8_t both[24] = {};
+    const uint8_t expected_horizontal[] = {
+        1u, 2u, 3u, 3u, 2u, 1u,
+        4u, 5u, 6u, 6u, 5u, 4u,
+    };
+    const uint8_t expected_vertical[] = {
+        1u, 2u, 3u, 4u, 5u, 6u,
+        4u, 5u, 6u, 1u, 2u, 3u,
+    };
+    const uint8_t expected_both[] = {
+        1u, 2u, 3u, 3u, 2u, 1u,
+        4u, 5u, 6u, 6u, 5u, 4u,
+        4u, 5u, 6u, 6u, 5u, 4u,
+        1u, 2u, 3u, 3u, 2u, 1u,
+    };
+
+    assert(ps2GsExpandTextureMirror(
+        source, horizontal, 3u, 2u, 8u, true, false));
+    assert(ps2GsExpandTextureMirror(
+        source, vertical, 3u, 2u, 8u, false, true));
+    assert(ps2GsExpandTextureMirror(
+        source, both, 3u, 2u, 8u, true, true));
+    assert(memcmp(horizontal, expected_horizontal, sizeof(horizontal)) == 0);
+    assert(memcmp(vertical, expected_vertical, sizeof(vertical)) == 0);
+    assert(memcmp(both, expected_both, sizeof(both)) == 0);
+}
+
+static void test_mirror_n64_four_bit(void)
+{
+    const uint8_t source[] = { 0x12u, 0x34u, 0x56u, 0x78u };
+    uint8_t output[16] = {};
+    const uint8_t expected[] = {
+        0x12u, 0x34u, 0x43u, 0x21u,
+        0x56u, 0x78u, 0x87u, 0x65u,
+        0x56u, 0x78u, 0x87u, 0x65u,
+        0x12u, 0x34u, 0x43u, 0x21u,
+    };
+    assert(ps2GsExpandTextureMirror(
+        source, output, 4u, 2u, 4u, true, true));
+    assert(memcmp(output, expected, sizeof(output)) == 0);
+}
+
+static void test_mirror_wide_texels(void)
+{
+    const uint16_t source16[] = { 0x1122u, 0x3344u };
+    uint16_t output16[4] = {};
+    assert(ps2GsExpandTextureMirror(
+        (const uint8_t *)source16, (uint8_t *)output16,
+        2u, 1u, 16u, true, false));
+    assert(output16[0] == 0x1122u && output16[1] == 0x3344u &&
+           output16[2] == 0x3344u && output16[3] == 0x1122u);
+
+    const uint32_t source32[] = { 0x11223344u, 0xaabbccddu };
+    uint32_t output32[4] = {};
+    assert(ps2GsExpandTextureMirror(
+        (const uint8_t *)source32, (uint8_t *)output32,
+        1u, 2u, 32u, false, true));
+    assert(output32[0] == 0x11223344u && output32[1] == 0xaabbccddu &&
+           output32[2] == 0xaabbccddu && output32[3] == 0x11223344u);
+}
+
+static void test_mirror_fused_native_conversion(void)
+{
+    const uint8_t rgba16_source[] = {
+        0xf8u, 0x01u, 0x07u, 0xc1u,
+    };
+    uint8_t rgba16_output[8] = {};
+    const uint8_t rgba16_expected[] = {
+        0x1fu, 0x80u, 0xe0u, 0x83u,
+        0xe0u, 0x83u, 0x1fu, 0x80u,
+    };
+    assert(ps2GsExpandTextureMirror(
+        rgba16_source, rgba16_output, 2u, 1u, 16u, true, false));
+    assert(ps2GsConvertN64Rgba16ToGsCt16(
+        rgba16_output, rgba16_output, 4u));
+    assert(memcmp(
+        rgba16_output, rgba16_expected, sizeof(rgba16_output)) == 0);
+
+    const uint8_t t4_source[] = { 0x12u, 0x34u };
+    uint8_t t4_output[4] = {};
+    const uint8_t t4_expected[] = { 0x21u, 0x43u, 0x34u, 0x12u };
+    assert(ps2GsExpandTextureMirror(
+        t4_source, t4_output, 4u, 1u, 4u, true, false));
+    assert(ps2GsConvertN64Ci4ToGsT4(
+        t4_output, t4_output, sizeof(t4_output)));
+    assert(memcmp(t4_output, t4_expected, sizeof(t4_output)) == 0);
+}
+
 static void test_rgba16_palette_conversion_and_csm1_order(void)
 {
     uint16_t palette16[16];
@@ -219,6 +312,10 @@ int main(void)
     test_exact_alias_and_empty_input();
     test_all_rgba5551_values_preserve_channels();
     test_ci4_nibble_order();
+    test_mirror_u8();
+    test_mirror_n64_four_bit();
+    test_mirror_wide_texels();
+    test_mirror_fused_native_conversion();
     test_rgba16_palette_conversion_and_csm1_order();
     test_gs_texture_buffer_width_alignment();
     test_n64_intensity_cluts();

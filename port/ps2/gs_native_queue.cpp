@@ -286,13 +286,20 @@ extern "C" struct Ps2GsPackedReg *ps2GsNativeQueueReserveAd(uint32_t reg_count)
     return (struct Ps2GsPackedReg *)(packet + 2);
 }
 
-extern "C" bool ps2GsNativeQueueUploadTexture(GSGLOBAL *gs,
-    GSTEXTURE *texture, enum Ps2GsNativeUploadEncoding encoding)
+static bool ps2GsNativeQueueUploadTextureInternal(GSGLOBAL *gs,
+    GSTEXTURE *texture, enum Ps2GsNativeUploadEncoding encoding,
+    uint32_t source_width, uint32_t source_height,
+    bool mirror_s, bool mirror_t)
 {
     (void)gs;
 
     if (!s_initialized || !texture || !texture->Mem || texture->Width == 0 ||
-        texture->Height == 0 || texture->Width > 1024 || texture->Height > 1024) {
+        texture->Height == 0 || texture->Width > 1024 || texture->Height > 1024 ||
+        source_width == 0u || source_height == 0u ||
+        texture->Width != (source_width << (mirror_s ? 1u : 0u)) ||
+        texture->Height != (source_height << (mirror_t ? 1u : 0u)) ||
+        (encoding == PS2_GS_NATIVE_UPLOAD_N64_RGBA16_CLUT &&
+         (mirror_s || mirror_t))) {
         return false;
     }
 
@@ -319,23 +326,37 @@ extern "C" bool ps2GsNativeQueueUploadTexture(GSGLOBAL *gs,
         return false;
     }
 
-    const uint64_t texel_count64 =
+    const uint64_t source_texel_count64 =
+        (uint64_t)source_width * (uint64_t)source_height;
+    const uint64_t output_texel_count64 =
         (uint64_t)texture->Width * (uint64_t)texture->Height;
     uint64_t source_bytes64;
+    uint64_t output_bytes64;
+    uint8_t bits_per_texel;
     if (texture->PSM == GS_PSM_CT32) {
-        source_bytes64 = texel_count64 * 4u;
+        source_bytes64 = source_texel_count64 * 4u;
+        output_bytes64 = output_texel_count64 * 4u;
+        bits_per_texel = 32u;
     } else if (texture->PSM == GS_PSM_CT16) {
-        source_bytes64 = texel_count64 * 2u;
+        source_bytes64 = source_texel_count64 * 2u;
+        output_bytes64 = output_texel_count64 * 2u;
+        bits_per_texel = 16u;
     } else if (texture->PSM == GS_PSM_T8) {
-        source_bytes64 = texel_count64;
+        source_bytes64 = source_texel_count64;
+        output_bytes64 = output_texel_count64;
+        bits_per_texel = 8u;
     } else {
-        source_bytes64 = (texel_count64 + 1u) / 2u;
+        source_bytes64 = (source_texel_count64 + 1u) / 2u;
+        output_bytes64 = (output_texel_count64 + 1u) / 2u;
+        bits_per_texel = 4u;
     }
-    if (source_bytes64 == 0u || source_bytes64 > UINT32_MAX) {
+    if (source_bytes64 == 0u || source_bytes64 > UINT32_MAX ||
+        output_bytes64 == 0u || output_bytes64 > UINT32_MAX) {
         return false;
     }
     const uint32_t source_bytes = (uint32_t)source_bytes64;
-    const uint32_t payload_bytes = (source_bytes + 15u) & ~15u;
+    const uint32_t output_bytes = (uint32_t)output_bytes64;
+    const uint32_t payload_bytes = (output_bytes + 15u) & ~15u;
     const uint32_t payload_qw = payload_bytes / 16u;
     if (payload_bytes == 0 || payload_bytes > PS2_GS_UPLOAD_MAX_BYTES) {
         return false;
@@ -354,9 +375,20 @@ extern "C" bool ps2GsNativeQueueUploadTexture(GSGLOBAL *gs,
      * referenced by DMA: every later GIF submission waits for the immediately
      * preceding one, so a slot reused two uploads later is already consumer-free.
      */
+    if (mirror_s || mirror_t) {
+        if (!ps2GsExpandTextureMirror(
+                (const uint8_t *)texture->Mem, slot->payload,
+                source_width, source_height, bits_per_texel,
+                mirror_s, mirror_t)) {
+            return false;
+        }
+    }
+
     if (encoding == PS2_GS_NATIVE_UPLOAD_N64_RGBA16) {
         if (!ps2GsConvertN64Rgba16ToGsCt16(
-                (const uint8_t *)texture->Mem, slot->payload,
+                mirror_s || mirror_t ? slot->payload :
+                    (const uint8_t *)texture->Mem,
+                slot->payload,
                 texture->Width * texture->Height)) {
             return false;
         }
@@ -368,15 +400,16 @@ extern "C" bool ps2GsNativeQueueUploadTexture(GSGLOBAL *gs,
         }
     } else if (encoding == PS2_GS_NATIVE_UPLOAD_N64_T4) {
         if (!ps2GsConvertN64Ci4ToGsT4(
-                (const uint8_t *)texture->Mem, slot->payload,
-                source_bytes)) {
+                mirror_s || mirror_t ? slot->payload :
+                    (const uint8_t *)texture->Mem,
+                slot->payload, output_bytes)) {
             return false;
         }
-    } else {
+    } else if (!mirror_s && !mirror_t) {
         memcpy(slot->payload, texture->Mem, source_bytes);
     }
-    if (payload_bytes > source_bytes) {
-        memset(slot->payload + source_bytes, 0, payload_bytes - source_bytes);
+    if (payload_bytes > output_bytes) {
+        memset(slot->payload + output_bytes, 0, payload_bytes - output_bytes);
     }
     SyncDCache(slot->payload, slot->payload + payload_bytes - 1u);
 
@@ -403,6 +436,27 @@ extern "C" bool ps2GsNativeQueueUploadTexture(GSGLOBAL *gs,
 
     s_upload_slot ^= 1u;
     return true;
+}
+
+extern "C" bool ps2GsNativeQueueUploadTexture(GSGLOBAL *gs,
+    GSTEXTURE *texture, enum Ps2GsNativeUploadEncoding encoding)
+{
+    if (!texture) {
+        return false;
+    }
+    return ps2GsNativeQueueUploadTextureInternal(
+        gs, texture, encoding, texture->Width, texture->Height,
+        false, false);
+}
+
+extern "C" bool ps2GsNativeQueueUploadTextureMirrored(GSGLOBAL *gs,
+    GSTEXTURE *texture, enum Ps2GsNativeUploadEncoding encoding,
+    uint32_t source_width, uint32_t source_height,
+    bool mirror_s, bool mirror_t)
+{
+    return ps2GsNativeQueueUploadTextureInternal(
+        gs, texture, encoding, source_width, source_height,
+        mirror_s, mirror_t);
 }
 
 extern "C" bool ps2GsNativeQueueSubmit(void)

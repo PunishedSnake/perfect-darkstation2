@@ -103,6 +103,8 @@ struct Ps2Viewport {
 struct Ps2TextureSamplerState {
     uint32_t cms;
     uint32_t cmt;
+    bool expanded_mirror_s;
+    bool expanded_mirror_t;
 };
 
 struct Ps2AlphaTrilerpVertex {
@@ -143,7 +145,12 @@ static enum MipmapFilteringMode s_mipmap_filter = MIPMAP_DISABLED;
 static int s_anisotropy = 1;
 static bool s_warned_framebuffer;
 static bool s_warned_mipmap;
+static bool s_warned_mirror_clamp;
+static bool s_warned_mirror_extent;
+static bool s_upload_mirror_s;
+static bool s_upload_mirror_t;
 static bool s_logged_native_rgba16;
+static bool s_logged_native_mirror;
 static bool s_logged_native_ci4;
 static bool s_logged_native_ci8;
 static bool s_logged_native_intensity[4];
@@ -331,6 +338,43 @@ static uint32_t ps2_new_texture(void)
     return texture_id;
 }
 
+static bool ps2_is_power_of_two(uint32_t value)
+{
+    return value != 0u && (value & (value - 1u)) == 0u;
+}
+
+static void ps2_effective_upload_mirror(
+    uint32_t width, uint32_t height, bool *mirror_s, bool *mirror_t)
+{
+    *mirror_s = s_upload_mirror_s && width <= 512u &&
+        ps2_is_power_of_two(width);
+    *mirror_t = s_upload_mirror_t && height <= 512u &&
+        ps2_is_power_of_two(height);
+    if ((*mirror_s != s_upload_mirror_s ||
+         *mirror_t != s_upload_mirror_t) &&
+        !s_warned_mirror_extent) {
+        sysLogPrintf(LOG_WARNING,
+            "GfxPS2 mirror period is not GS-expandable (%ux%u); retaining compatibility sampling",
+            (unsigned int)width, (unsigned int)height);
+        s_warned_mirror_extent = true;
+    }
+}
+
+static void ps2_record_texture_mirror(
+    Ps2GsTextureHandle handle, bool mirror_s, bool mirror_t)
+{
+    if (handle < PS2_GFX_TEXTURE_STATE_SLOTS) {
+        s_texture_sampler[handle].expanded_mirror_s = mirror_s;
+        s_texture_sampler[handle].expanded_mirror_t = mirror_t;
+    }
+    if ((mirror_s || mirror_t) && !s_logged_native_mirror) {
+        sysLogPrintf(LOG_NOTE,
+            "GfxPS2 native mirror-wrap: reflected 2x GS residency, axes=%s%s",
+            mirror_s ? "S" : "", mirror_t ? "T" : "");
+        s_logged_native_mirror = true;
+    }
+}
+
 static void ps2_select_texture(int tile, uint32_t texture_id, bool linear_filter)
 {
     if (tile < 0 || tile > 1 || texture_id > UINT16_MAX) {
@@ -369,8 +413,29 @@ static void ps2_upload_texture(const uint8_t *rgba32_buf, uint32_t width, uint32
      * normalized at the GS texture-function boundary by fragment-alpha scale,
      * avoiding a full texture copy/repack on the upload critical path.
      */
-    ps2GsCoreUploadTextureRgba32(
-        s_selected_texture[s_active_texture_tile], rgba32_buf, width, height);
+    const Ps2GsTextureHandle handle =
+        s_selected_texture[s_active_texture_tile];
+    bool mirror_s;
+    bool mirror_t;
+    ps2_effective_upload_mirror(width, height, &mirror_s, &mirror_t);
+    if (ps2GsCoreUploadTextureRgba32(
+            handle, rgba32_buf, width, height,
+            mirror_s, mirror_t) &&
+        handle < PS2_GFX_TEXTURE_STATE_SLOTS) {
+        ps2_record_texture_mirror(handle, mirror_s, mirror_t);
+    }
+}
+
+extern "C" void gfxPs2SetTextureUploadMirror(uint8_t cms, uint8_t cmt)
+{
+    s_upload_mirror_s = (cms & 3u) == 1u;
+    s_upload_mirror_t = (cmt & 3u) == 1u;
+    if (((cms & 3u) == 3u || (cmt & 3u) == 3u) &&
+        !s_warned_mirror_clamp) {
+        sysLogPrintf(LOG_WARNING,
+            "GfxPS2 mirror+clamp requires a distinct edge contract; retaining compatibility sampling");
+        s_warned_mirror_clamp = true;
+    }
 }
 
 extern "C" bool gfxPs2UploadTmemTexture(
@@ -400,10 +465,15 @@ extern "C" bool gfxPs2UploadTmemTexture(
         size == PS2_GFX_N64_SIZ_16B &&
         (view->line_size_bytes & 1u) == 0u) {
         const uint32_t width = view->line_size_bytes / 2u;
+        bool mirror_s;
+        bool mirror_t;
+        ps2_effective_upload_mirror(width, height, &mirror_s, &mirror_t);
         if (!ps2GsCoreUploadTextureN64Rgba16(
-                handle, view->texels, width, height)) {
+                handle, view->texels, width, height,
+                mirror_s, mirror_t)) {
             return false;
         }
+        ps2_record_texture_mirror(handle, mirror_s, mirror_t);
         if (!s_logged_native_rgba16) {
             sysLogPrintf(LOG_NOTE,
                 "GfxPS2 native texture path: exact N64 RGBA16 -> GS PSMCT16");
@@ -423,10 +493,15 @@ extern "C" bool gfxPs2UploadTmemTexture(
                 : (four_bit ? PS2_GS_N64_I4 : PS2_GS_N64_I8);
         const uint32_t width = four_bit
             ? view->line_size_bytes * 2u : view->line_size_bytes;
+        bool mirror_s;
+        bool mirror_t;
+        ps2_effective_upload_mirror(width, height, &mirror_s, &mirror_t);
         if (!ps2GsCoreUploadTextureN64Intensity(
-                handle, view->texels, width, height, encoding)) {
+                handle, view->texels, width, height, encoding,
+                mirror_s, mirror_t)) {
             return false;
         }
+        ps2_record_texture_mirror(handle, mirror_s, mirror_t);
         if (!s_logged_native_intensity[(uint32_t)encoding]) {
             sysLogPrintf(LOG_NOTE,
                 "GfxPS2 native texture path: exact N64 %s%u -> GS PSMT%u/shared CT32 CSM1",
@@ -453,11 +528,16 @@ extern "C" bool gfxPs2UploadTmemTexture(
 
     const uint32_t width = ci4
         ? view->line_size_bytes * 2u : view->line_size_bytes;
+    bool mirror_s;
+    bool mirror_t;
+    ps2_effective_upload_mirror(width, height, &mirror_s, &mirror_t);
     if (!ps2GsCoreUploadTextureN64Ci(handle, view->texels,
             width, height, ci4 ? 4u : 8u,
-            view->palette, view->palette_count)) {
+            view->palette, view->palette_count,
+            mirror_s, mirror_t)) {
         return false;
     }
+    ps2_record_texture_mirror(handle, mirror_s, mirror_t);
 
     bool *logged = ci4 ? &s_logged_native_ci4 : &s_logged_native_ci8;
     if (!*logged) {
@@ -1281,8 +1361,15 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
                 if (!s_shader->features.used_textures[t]) {
                     continue;
                 }
-                tex_u[t] = src[pos++];
-                tex_v[t] = src[pos++];
+                const Ps2GsTextureHandle handle = s_selected_texture[t];
+                const bool mirror_s =
+                    handle < PS2_GFX_TEXTURE_STATE_SLOTS &&
+                    s_texture_sampler[handle].expanded_mirror_s;
+                const bool mirror_t =
+                    handle < PS2_GFX_TEXTURE_STATE_SLOTS &&
+                    s_texture_sampler[handle].expanded_mirror_t;
+                tex_u[t] = src[pos++] * (mirror_s ? 0.5f : 1.0f);
+                tex_v[t] = src[pos++] * (mirror_t ? 0.5f : 1.0f);
                 if (s_shader->features.clamp[t][0]) ++pos;
                 if (s_shader->features.clamp[t][1]) ++pos;
             }
@@ -1538,6 +1625,9 @@ static void ps2_init(void)
     s_draw_fog_g = 0u;
     s_draw_fog_b = 0u;
     s_logged_native_rgba16 = false;
+    s_logged_native_mirror = false;
+    s_upload_mirror_s = false;
+    s_upload_mirror_t = false;
     ps2GsCoreSetAlphaTest(false, 0u);
     ps2GsCoreSetFramebufferAlphaForce(false);
     ps2GsCoreSetColorWrite(true);

@@ -1,5 +1,7 @@
 #include "gs_texture_convert.h"
 
+#include <stddef.h>
+
 static uint16_t ps2GsConvertN64Rgba5551Word(uint16_t n64)
 {
     return
@@ -58,6 +60,78 @@ extern "C" bool ps2GsConvertN64Ci4ToGsT4(const uint8_t *source,
     for (uint32_t i = 0; i < byte_count; ++i) {
         const uint8_t packed = source[i];
         destination[i] = (uint8_t)((packed << 4) | (packed >> 4));
+    }
+    return true;
+}
+
+static uint8_t ps2GsReadN64FourBitTexel(
+    const uint8_t *source, uint32_t index)
+{
+    const uint8_t packed = source[index >> 1u];
+    return (index & 1u) == 0u ? packed >> 4u : packed & 0x0fu;
+}
+
+static void ps2GsWriteN64FourBitTexel(
+    uint8_t *destination, uint32_t index, uint8_t value)
+{
+    uint8_t *packed = &destination[index >> 1u];
+    if ((index & 1u) == 0u) {
+        *packed = (uint8_t)((*packed & 0x0fu) | (value << 4u));
+    } else {
+        *packed = (uint8_t)((*packed & 0xf0u) | value);
+    }
+}
+
+extern "C" bool ps2GsExpandTextureMirror(
+    const uint8_t *source, uint8_t *destination,
+    uint32_t width, uint32_t height, uint8_t bits_per_texel,
+    bool mirror_s, bool mirror_t)
+{
+    if (!source || !destination || width == 0u || height == 0u ||
+        (bits_per_texel != 4u && bits_per_texel != 8u &&
+         bits_per_texel != 16u && bits_per_texel != 32u) ||
+        (bits_per_texel == 4u && (width & 1u) != 0u)) {
+        return false;
+    }
+
+    const uint32_t output_width = width << (mirror_s ? 1u : 0u);
+    const uint32_t output_height = height << (mirror_t ? 1u : 0u);
+    if (bits_per_texel == 4u) {
+        const uint32_t output_bytes =
+            (output_width * output_height + 1u) / 2u;
+        for (uint32_t i = 0u; i < output_bytes; ++i) {
+            destination[i] = 0u;
+        }
+        for (uint32_t y = 0u; y < output_height; ++y) {
+            const uint32_t source_y = y < height ? y :
+                output_height - 1u - y;
+            for (uint32_t x = 0u; x < output_width; ++x) {
+                const uint32_t source_x = x < width ? x :
+                    output_width - 1u - x;
+                const uint8_t texel = ps2GsReadN64FourBitTexel(
+                    source, source_y * width + source_x);
+                ps2GsWriteN64FourBitTexel(
+                    destination, y * output_width + x, texel);
+            }
+        }
+        return true;
+    }
+
+    const uint32_t bytes_per_texel = bits_per_texel / 8u;
+    for (uint32_t y = 0u; y < output_height; ++y) {
+        const uint32_t source_y = y < height ? y :
+            output_height - 1u - y;
+        for (uint32_t x = 0u; x < output_width; ++x) {
+            const uint32_t source_x = x < width ? x :
+                output_width - 1u - x;
+            const uint8_t *input = source +
+                ((size_t)source_y * width + source_x) * bytes_per_texel;
+            uint8_t *output = destination +
+                ((size_t)y * output_width + x) * bytes_per_texel;
+            for (uint32_t byte = 0u; byte < bytes_per_texel; ++byte) {
+                output[byte] = input[byte];
+            }
+        }
     }
     return true;
 }

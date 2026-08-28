@@ -71,6 +71,16 @@ enum Ps2GsNativeUploadEncoding {
 bool ps2GsNativeQueueUploadTexture(GSGLOBAL *gs, GSTEXTURE *texture,
     enum Ps2GsNativeUploadEncoding encoding);
 
+/*
+ * Upload a source image into a physically doubled mirrored period. Texture
+ * metadata describes the expanded destination; source dimensions describe
+ * the canonical N64 image before reflection.
+ */
+bool ps2GsNativeQueueUploadTextureMirrored(GSGLOBAL *gs,
+    GSTEXTURE *texture, enum Ps2GsNativeUploadEncoding encoding,
+    uint32_t source_width, uint32_t source_height,
+    bool mirror_s, bool mirror_t);
+
 uint32_t ps2GsNativeQueueUsedQwords(void);
 uint32_t ps2GsNativeQueueCapacityQwords(void);
 bool ps2GsNativeQueueOverflowed(void);

@@ -111,6 +111,12 @@ jobs:
             -o /tmp/gs_texture_convert_test
           /tmp/gs_texture_convert_test
 
+          g++ -std=c++20 -Wall -Wextra -Werror \
+            -Iport/fast3d -Iport/ps2 \
+            port/ps2/gfx_ps2_texture_variant_test.cpp \
+            -o /tmp/gfx_ps2_texture_variant_test
+          /tmp/gfx_ps2_texture_variant_test
+
       - name: Test PS2 combiner planner
         run: |
           g++ -std=c++20 -Wall -Wextra -Werror \

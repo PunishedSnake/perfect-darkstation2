@@ -481,6 +481,9 @@ PCSX2 is useful for correctness, packet/state inspection and fast iteration. It 
 - exact RGBA16 -> PSMCT16 direct residency, with RGBA32 fallback;
 - exact CI4/CI8 plus RGBA16 TLUT residency as paired texture/CLUT blocks;
 - exact IA4/IA8/I4/I8 residency through shared immutable CT32 palettes;
+- exact `G_TX_MIRROR | G_TX_WRAP` residency for power-of-two TMEM images by
+  materializing a reflected two-period CT32/CT16/T8/T4 image directly in IMAGE
+  staging and scaling ST by one half on each expanded axis;
 - retain IA16 and IA16-TLUT assets on RGBA32 until an exact compact representation is proved.
 
 ### M4: RDP state coverage
@@ -500,6 +503,8 @@ PCSX2 is useful for correctness, packet/state inspection and fast iteration. It 
 - capture the A/B screen shown immediately by `pd-ps2-alpha-trilerp-diag.elf`: left is the live GS graph and right is the deterministic CPU reference. `Select` returns to the baseline cube. The three lower bars are ROM, PAD and heartbeat; record the PAD bar colour before and while holding a button. Record console model, video mode and build commit with the comparison because emulator agreement alone does not promote the gate;
 - extend the same explicit planning model to the remaining `CUSTOM_20..24`; these are still rejected until their framebuffer/depth/alpha equations are exact;
 - log unsupported recipes instead of silently approximating them.
+- keep `G_TX_MIRROR | G_TX_CLAMP` explicit-unsupported until its one-shot
+  reflected edge can be represented without inheriting ordinary repeat.
 
 ### M5: VIF1/VU1 geometry path
 

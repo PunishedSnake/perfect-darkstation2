@@ -149,18 +149,21 @@ Ps2GsTextureHandle ps2GsCoreCreateTexture(void);
 bool ps2GsCoreTextureExists(Ps2GsTextureHandle handle);
 bool ps2GsCoreTextureReady(Ps2GsTextureHandle handle);
 bool ps2GsCoreUploadTextureRgba32(Ps2GsTextureHandle handle,
-    const uint8_t *rgba32, uint32_t width, uint32_t height);
+    const uint8_t *rgba32, uint32_t width, uint32_t height,
+    bool mirror_s, bool mirror_t);
 bool ps2GsCoreUploadTextureN64Rgba16(Ps2GsTextureHandle handle,
-    const uint8_t *rgba5551_be, uint32_t width, uint32_t height);
+    const uint8_t *rgba5551_be, uint32_t width, uint32_t height,
+    bool mirror_s, bool mirror_t);
 /* Indexed texels and their RGBA16 TLUT become one atomic GS residency. */
 bool ps2GsCoreUploadTextureN64Ci(Ps2GsTextureHandle handle,
     const uint8_t *indices, uint32_t width, uint32_t height,
     uint8_t index_bits, const uint16_t *palette_rgba5551,
-    uint32_t palette_count);
+    uint32_t palette_count, bool mirror_s, bool mirror_t);
 /* IA4/IA8/I4/I8 use immutable shared CT32 CSM1 palettes. */
 bool ps2GsCoreUploadTextureN64Intensity(Ps2GsTextureHandle handle,
     const uint8_t *texels, uint32_t width, uint32_t height,
-    enum Ps2GsN64IntensityEncoding encoding);
+    enum Ps2GsN64IntensityEncoding encoding,
+    bool mirror_s, bool mirror_t);
 void ps2GsCoreSetTextureFilter(Ps2GsTextureHandle handle, bool linear_filter);
 void ps2GsCoreReleaseTexture(Ps2GsTextureHandle handle);
 

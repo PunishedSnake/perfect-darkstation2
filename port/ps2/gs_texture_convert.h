@@ -22,6 +22,16 @@ bool ps2GsConvertN64Ci4ToGsT4(const uint8_t *source,
     uint8_t *destination, uint32_t byte_count);
 
 /*
+ * Materialize a two-period mirrored texture in row-major source encoding.
+ * The second half of each requested axis is reflected, including the repeated
+ * edge texel required by N64 mirror sampling. Four-bit input is high-nibble
+ * first here; the later GS T4 conversion still owns nibble reversal.
+ */
+bool ps2GsExpandTextureMirror(const uint8_t *source, uint8_t *destination,
+    uint32_t width, uint32_t height, uint8_t bits_per_texel,
+    bool mirror_s, bool mirror_t);
+
+/*
  * Convert logical N64 RGBA5551 TLUT entries to a GS PSMCT16 CSM1 CLUT.
  * CI4 uses 16 entries unchanged in index order. The 256-entry CI8 palette is
  * permuted to the GS CSM1 block order while preserving every RGBA5551 bit.
