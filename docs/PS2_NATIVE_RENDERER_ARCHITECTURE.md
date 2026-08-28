@@ -524,6 +524,22 @@ PCSX2 is useful for correctness, packet/state inspection and fast iteration. It 
 - retain explicit rejection for region bounds outside the GS 10-bit
   `CLAMP.MIN/MAX` contract instead of silently truncating them.
 
+### Full-game runtime frontier
+
+- **CURRENT IMPLEMENTATION:** the physical PADMAN/libpad transport now feeds a
+  native implementation of the complete portable `input.h` contract. Logical
+  players have explicit physical-port ownership, configurable bindings,
+  deadzones and axis scales, dual-analog or C-button right-stick modes, and
+  deadline-owned DualShock 2 rumble. Keyboard, mouse, clipboard and text-input
+  calls are deterministic console no-ops rather than SDL dependencies;
+- keep `pd_ps2_game_bridge` as the EE ABI frontier while platform services are
+  replaced. The next link blockers are filesystem/ROM ownership and native
+  audio output, after which the real `port/src/main.c` entry point can replace
+  the diagnostic bootstrap;
+- do not promote the game ELF by ignoring unresolved symbols. Every service
+  crossing the link frontier must have an explicit PS2 owner and failure
+  contract.
+
 ### M5: VIF1/VU1 geometry path
 
 - establish CPU baseline counters;

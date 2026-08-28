@@ -256,6 +256,8 @@ add_library(pd_ps2_game_bridge OBJECT
   "${PD_ROOT}/src/game/player.c"
   "${PD_ROOT}/src/game/menugfx.c"
   video_ps2.c
+  input_ps2.c
+  input_ps2_map.c
   gfx_frame_ps2.c
 )
 add_dependencies(pd_ps2_game_bridge pd_ps2_asset_headers)

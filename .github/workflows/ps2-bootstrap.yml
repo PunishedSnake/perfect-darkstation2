@@ -117,6 +117,22 @@ jobs:
             -o /tmp/gfx_ps2_texture_variant_test
           /tmp/gfx_ps2_texture_variant_test
 
+      - name: Test native PS2 game input mapping
+        run: |
+          gcc -std=c11 -Wall -Wextra -Werror \
+            -D_LANGUAGE_C=1 -DPLATFORM_PS2=1 \
+            -Iport/ps2 -Iport/include -Iinclude -Iinclude/PR -Isrc/include \
+            port/ps2/input_ps2_map.c \
+            port/ps2/input_ps2_map_test.c \
+            -o /tmp/input_ps2_map_test
+          /tmp/input_ps2_map_test
+
+          gcc -std=c11 -Wall -Wextra -Werror -fsyntax-only \
+            -D_LANGUAGE_C=1 -DPLATFORM_PS2=1 \
+            -Iport/ps2 -Iport/include -Iinclude -Iinclude/PR -Isrc/include \
+            port/ps2/input_ps2.c \
+            port/ps2/input_ps2_map.c
+
       - name: Test PS2 combiner planner
         run: |
           g++ -std=c++20 -Wall -Wextra -Werror \
