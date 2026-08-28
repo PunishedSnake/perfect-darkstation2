@@ -27,6 +27,8 @@ enum Ps2AlphaRecipe {
     PS2_ALPHA_TEX0_MUL_INPUT1,
     PS2_ALPHA_INPUT1_MUL_INPUT2,
     PS2_ALPHA_TEX0_MUL_INPUT1_MUL_INPUT2,
+    /* TEX_EDGE observes INPUT1 + INPUT2 only through its adjusted threshold. */
+    PS2_ALPHA_INPUT1_PLUS_INPUT2_EDGE,
 };
 
 enum Ps2PassGraph {

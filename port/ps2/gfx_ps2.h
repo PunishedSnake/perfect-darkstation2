@@ -42,6 +42,14 @@ static inline bool gfxPs2TextureRegionClampMax(
     return true;
 }
 
+/* (SHADE + ENV) >= reference becomes SHADE >= reference - ENV. */
+static inline uint8_t gfxPs2TextureEdgeAdjustedReference(
+    uint8_t reference, uint8_t environment)
+{
+    return environment >= reference
+        ? 0u : (uint8_t)(reference - environment);
+}
+
 static inline uint64_t gfxPs2TextureVariantIdentity(
     uint64_t identity, uint8_t format, uint8_t cms, uint8_t cmt,
     uint32_t palette_format)

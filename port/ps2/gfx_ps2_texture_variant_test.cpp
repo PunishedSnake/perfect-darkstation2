@@ -27,6 +27,12 @@ int main(void)
     assert(!gfxPs2TextureRegionClampMax(-0.5f, 8u, &clamp_max));
     assert(!gfxPs2TextureRegionClampMax(0.5f, 8u, NULL));
 
+    assert(gfxPs2TextureEdgeAdjustedReference(25u, 0u) == 25u);
+    assert(gfxPs2TextureEdgeAdjustedReference(25u, 1u) == 24u);
+    assert(gfxPs2TextureEdgeAdjustedReference(25u, 24u) == 1u);
+    assert(gfxPs2TextureEdgeAdjustedReference(25u, 25u) == 0u);
+    assert(gfxPs2TextureEdgeAdjustedReference(25u, 128u) == 0u);
+
     const uint64_t base = UINT64_C(0x0123456789abcdef);
     const uint64_t ordinary = gfxPs2TextureVariantIdentity(
         base, 0u, 0u, 0u, 0u);

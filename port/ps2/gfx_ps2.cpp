@@ -179,6 +179,8 @@ static Ps2GsRenderTargetHandle s_alpha_trilerp_scalar_target;
 static uint8_t s_draw_fog_r;
 static uint8_t s_draw_fog_g;
 static uint8_t s_draw_fog_b;
+static uint8_t s_draw_texture_edge_reference =
+    PS2_GFX_TEXTURE_EDGE_THRESHOLD;
 
 static struct Ps2GsTexturedVertex s_stq_vertices[2][PS2_GFX_TRANSLATE_VERTS];
 static struct Ps2GsColorVertex s_color_vertices[PS2_GFX_TRANSLATE_VERTS];
@@ -851,7 +853,9 @@ static bool ps2_is_trilerp_independent_alpha(
             PS2_COLOR_TEX01_LERP_INPUT1_MUL_INPUT2 &&
         (plan->alpha_recipe == PS2_ALPHA_INPUT1_MUL_INPUT2 ||
          plan->alpha_recipe ==
-            PS2_ALPHA_TEX0_MUL_INPUT1_MUL_INPUT2);
+            PS2_ALPHA_TEX0_MUL_INPUT1_MUL_INPUT2 ||
+         plan->alpha_recipe ==
+            PS2_ALPHA_INPUT1_PLUS_INPUT2_EDGE);
 }
 
 static void ps2_trilerp_set_base_state(void)
@@ -1094,6 +1098,7 @@ static bool ps2_draw_trilerp_independent_alpha_tile(
         s_draw_fog_r, s_draw_fog_g, s_draw_fog_b);
     ps2GsCoreSetDepthMode(false, false, false);
     ps2GsCoreSetAlphaBlend(false);
+    ps2GsCoreSetFramebufferAlphaForce(false);
     ps2GsCoreSetTextureAlpha(s_shader->plan.texture_alpha);
     ps2GsCoreClear(true, false);
     ps2_apply_texture_clamp(0);
@@ -1112,13 +1117,16 @@ static bool ps2_draw_trilerp_independent_alpha_tile(
     ps2GsCoreSetScissor(tile->x, tile->y, tile->width, tile->height);
     ps2GsCoreSetDepthMode(s_depth_test, s_depth_update, s_depth_compare);
     ps2GsCoreSetAlphaWrite(true);
+    const bool texture_edge = s_shader->features.opt_texture_edge;
     ps2GsCoreSetAlphaTest(
-        s_shader->features.opt_alpha_threshold,
-        s_shader->features.opt_alpha_threshold ?
-            PS2_GFX_ALPHA_THRESHOLD : 0u);
+        texture_edge || s_shader->features.opt_alpha_threshold,
+        texture_edge ? s_draw_texture_edge_reference :
+            (s_shader->features.opt_alpha_threshold ?
+                PS2_GFX_ALPHA_THRESHOLD : 0u));
     ps2GsCoreSetFog(false, 0u, 0u, 0u);
     ps2GsCoreSetTextureAlpha(true);
-    ps2GsCoreSetAlphaBlend(s_alpha_blend);
+    ps2GsCoreSetFramebufferAlphaForce(texture_edge);
+    ps2GsCoreSetAlphaBlend(texture_edge ? false : s_alpha_blend);
     return ps2GsCoreDrawRenderTargetTriangles(
         s_alpha_trilerp_color_target, composite, 3u, false);
 }
@@ -1422,6 +1430,7 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
         }
 
         memset(s_draw_region_clamp, 0, sizeof(s_draw_region_clamp));
+        s_draw_texture_edge_reference = PS2_GFX_TEXTURE_EDGE_THRESHOLD;
 
         for (size_t i = 0; i < batch_vertices; ++i) {
             const float *src = &buf_vbo[(base_vertex + i) * stride];
@@ -1580,13 +1589,27 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
                 vertex->shade_a =
                     ps2_texture_alpha_fragment_component(input[1][3]);
                 vertex->lod = ps2_modulate_component(input[0][0]);
-                vertex->independent_alpha =
-                    s_shader->plan.alpha_recipe ==
-                        PS2_ALPHA_TEX0_MUL_INPUT1_MUL_INPUT2
-                    ? ps2_texture_alpha_fragment_component(
-                        input[0][3] * input[1][3])
-                    : ps2_modulate_component(
-                        input[0][3] * input[1][3]);
+                if (s_shader->plan.alpha_recipe ==
+                        PS2_ALPHA_INPUT1_PLUS_INPUT2_EDGE) {
+                    vertex->independent_alpha =
+                        ps2_modulate_component(input[0][3]);
+                    if (i == 0u) {
+                        const uint8_t environment =
+                            ps2_modulate_component(input[1][3]);
+                        s_draw_texture_edge_reference =
+                            gfxPs2TextureEdgeAdjustedReference(
+                                PS2_GFX_TEXTURE_EDGE_THRESHOLD,
+                                environment);
+                    }
+                } else {
+                    vertex->independent_alpha =
+                        s_shader->plan.alpha_recipe ==
+                            PS2_ALPHA_TEX0_MUL_INPUT1_MUL_INPUT2
+                        ? ps2_texture_alpha_fragment_component(
+                            input[0][3] * input[1][3])
+                        : ps2_modulate_component(
+                            input[0][3] * input[1][3]);
+                }
                 vertex->fog = ps2_fog_coefficient(fog_factor);
             } else if (opaque_trilerp) {
                 uint8_t shade_r = 0x80;

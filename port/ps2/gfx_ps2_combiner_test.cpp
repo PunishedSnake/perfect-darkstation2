@@ -320,6 +320,34 @@ static void test_custom24_nonlinear_alpha_remains_unsupported(void)
     assert(!plan(&builder).supported);
 }
 
+static void test_custom21_texture_edge_pass_graph(void)
+{
+    struct CombinerBuilder builder{};
+    builder.options = SHADER_OPT_2CYC | SHADER_OPT_ALPHA |
+        SHADER_OPT_FOG | SHADER_OPT_TEXTURE_EDGE;
+    set_tex01_lerp(&builder, 0, 0);
+    set_multiply(&builder, 1, 0, SHADER_COMBINED, SHADER_INPUT_2);
+    builder.c[0][1][0] = SHADER_1;
+    builder.c[0][1][1] = SHADER_0;
+    builder.c[0][1][2] = SHADER_INPUT_1;
+    builder.c[0][1][3] = SHADER_INPUT_2;
+    set_single(&builder, 1, 1, SHADER_COMBINED);
+
+    const struct Ps2CombinerPlan result = plan(&builder);
+    assert(result.supported);
+    assert(result.color_recipe ==
+        PS2_COLOR_TEX01_LERP_INPUT1_MUL_INPUT2);
+    assert(result.alpha_recipe == PS2_ALPHA_INPUT1_PLUS_INPUT2_EDGE);
+    assert(result.textured);
+    assert(!result.texture_alpha);
+    assert(!result.hardware_validation_required);
+    assert(result.pass_graph ==
+        PS2_PASS_GRAPH_TRILERP_INDEPENDENT_ALPHA);
+
+    builder.options &= ~SHADER_OPT_TEXTURE_EDGE;
+    assert(!plan(&builder).supported);
+}
+
 static void test_alpha_trilerp_rejects_mismatched_final_channels(void)
 {
     struct CombinerBuilder builder{};
@@ -436,6 +464,7 @@ int main(void)
     test_custom25_independent_alpha_pass_graph();
     test_custom26_tex0_independent_alpha_pass_graph();
     test_custom24_nonlinear_alpha_remains_unsupported();
+    test_custom21_texture_edge_pass_graph();
     test_alpha_trilerp_rejects_mismatched_final_channels();
     test_alpha_trilerp_rejects_fogged_graph();
     test_opaque_env_tex0_lerp_modulate();
