@@ -108,6 +108,9 @@ void ps2GsCoreSetFog(bool enable, uint8_t r, uint8_t g, uint8_t b);
 /* TEX0.TCC is texture-function state, independent of primitive alpha blending. */
 void ps2GsCoreSetTextureAlpha(bool enable);
 void ps2GsCoreSetTextureClamp(uint32_t cms, uint32_t cmt);
+/* Override selected axes with exact GS texel-space REGION_CLAMP bounds. */
+void ps2GsCoreSetTextureRegionClamp(uint32_t cms, uint32_t cmt,
+    bool region_s, uint16_t max_u, bool region_t, uint16_t max_v);
 
 /*
  * Transient CT32 render targets use page-rounded, 8192-byte-aligned VRAM.

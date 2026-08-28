@@ -342,6 +342,7 @@ This semantic layer should remain backend-independent where possible. PS2-specif
 - CI cross-builds this opt-in configuration separately and publishes an unambiguous `pd-ps2-alpha-trilerp-diag.elf`, keeping the ordinary `pd-ps2-bootstrap.elf` artifact on the validation-gated renderer;
 - **REAL HARDWARE, VALIDATION FAILURE:** commit `0ab8239e` reached and displayed both panels on a physical console, proving that the pass graph submits and completes, but the live GS result did not match the CPU reference. The oversized two-triangle panels also generated enough repeated channel-shuffle work per frame to look stalled and could miss short controller presses. The follow-up diagnostic isolates one aligned 128x64 tile and one triangle, with a visible frame-loop heartbeat, so channel-shuffle correctness is tested independently of multi-tile composition and shared-edge rasterisation;
 - **REAL HARDWARE, PAD PASS:** commit `6680f684` displayed a cyan PAD status bar on a physical console and raw `Select` reliably toggled between the isolated A/B scene and the baseline cube. This confirms launcher-resident `sio2man`/`padman` discovery, `PAD_STATE_STABLE`/`PAD_STATE_FINDCTP1` readiness, `padRead`, edge detection and game-action mapping independently of GS completion. The diagnostic keeps the PAD ladder available for future launcher regressions: red=backend unavailable, orange=RPC initialised, yellow=port open, blue=transport ready, cyan=`padRead` succeeded, magenta=raw button held and white=raw `Select` held;
+- **CURRENT IMPLEMENTATION:** Fast3D shader-clamp metadata now drives native GS `REGION_CLAMP` independently on S/T. `MIRROR|CLAMP` reuses the reflected two-period residency and clamps the final coordinate per fragment, including distinct sampler state for both textures in M4 multipass graphs. The physical cache variant depends on mirror residency only, while the edge bound remains per-draw state;
 - remaining dependent second-cycle equations remain explicit unsupported recipes, rather than receiving a visual approximation;
 - the fixed shader table holds 128 mode/option combinations so real level traversal does not exhaust the original 32-slot bring-up pool;
 - gsKit remains only in one-time CRT/screen bootstrap, system framebuffer/Z setup and block-rounded texture-size calculation;
@@ -489,6 +490,11 @@ PCSX2 is useful for correctness, packet/state inspection and fast iteration. It 
 - exact `G_TX_MIRROR | G_TX_WRAP` residency for power-of-two TMEM images by
   materializing a reflected two-period CT32/CT16/T8/T4 image directly in IMAGE
   staging and scaling ST by one half on each expanded axis;
+- exact `G_TX_MIRROR | G_TX_CLAMP` sampling on the same reflected residency:
+  the PS2 adapter consumes Fast3D's per-draw last-texel-centre metadata and
+  programs `REGION_CLAMP` independently for S/T. Bounds are applied by the GS
+  per fragment, preserving bilinear edge behavior and each multipass tile's
+  distinct sampler state;
 
 ### M4: RDP state coverage
 
@@ -507,8 +513,8 @@ PCSX2 is useful for correctness, packet/state inspection and fast iteration. It 
 - capture the A/B screen shown immediately by `pd-ps2-alpha-trilerp-diag.elf`: left is the live GS graph and right is the deterministic CPU reference. `Select` returns to the baseline cube. The three lower bars are ROM, PAD and heartbeat; record the PAD bar colour before and while holding a button. Record console model, video mode and build commit with the comparison because emulator agreement alone does not promote the gate;
 - extend the same explicit planning model to the remaining `CUSTOM_20..24`; these are still rejected until their framebuffer/depth/alpha equations are exact;
 - log unsupported recipes instead of silently approximating them.
-- keep `G_TX_MIRROR | G_TX_CLAMP` explicit-unsupported until its one-shot
-  reflected edge can be represented without inheriting ordinary repeat.
+- retain explicit rejection for region bounds outside the GS 10-bit
+  `CLAMP.MIN/MAX` contract instead of silently truncating them.
 
 ### M5: VIF1/VU1 geometry path
 

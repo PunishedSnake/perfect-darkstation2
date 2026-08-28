@@ -963,13 +963,27 @@ extern "C" void ps2GsCoreSetTextureAlpha(bool enable)
 
 extern "C" void ps2GsCoreSetTextureClamp(uint32_t cms, uint32_t cmt)
 {
+    ps2GsCoreSetTextureRegionClamp(
+        cms, cmt, false, 0u, false, 0u);
+}
+
+extern "C" void ps2GsCoreSetTextureRegionClamp(
+    uint32_t cms, uint32_t cmt,
+    bool region_s, uint16_t max_u, bool region_t, uint16_t max_v)
+{
     if (!s_gs) {
         return;
     }
 
-    /* N64 G_TX_CLAMP is bit 1; mirror-wrap uses reflected texture residency. */
-    s_gs->Clamp->WMS = (cms & 2u) ? GS_CMODE_CLAMP : GS_CMODE_REPEAT;
-    s_gs->Clamp->WMT = (cmt & 2u) ? GS_CMODE_CLAMP : GS_CMODE_REPEAT;
+    /* N64 G_TX_CLAMP is bit 1; mirror uses reflected texture residency. */
+    s_gs->Clamp->WMS = region_s ? GS_CMODE_REGION_CLAMP :
+        ((cms & 2u) ? GS_CMODE_CLAMP : GS_CMODE_REPEAT);
+    s_gs->Clamp->WMT = region_t ? GS_CMODE_REGION_CLAMP :
+        ((cmt & 2u) ? GS_CMODE_CLAMP : GS_CMODE_REPEAT);
+    s_gs->Clamp->MINU = 0u;
+    s_gs->Clamp->MAXU = region_s ? max_u : 0u;
+    s_gs->Clamp->MINV = 0u;
+    s_gs->Clamp->MAXV = region_t ? max_v : 0u;
     if (s_frame_building) {
         ps2GsCoreEmitClamp();
     }

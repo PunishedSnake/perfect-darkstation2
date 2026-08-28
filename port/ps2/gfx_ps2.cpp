@@ -104,8 +104,17 @@ struct Ps2Viewport {
 struct Ps2TextureSamplerState {
     uint32_t cms;
     uint32_t cmt;
+    uint32_t logical_width;
+    uint32_t logical_height;
     bool expanded_mirror_s;
     bool expanded_mirror_t;
+};
+
+struct Ps2TextureRegionClampState {
+    bool region_s;
+    bool region_t;
+    uint16_t max_u;
+    uint16_t max_v;
 };
 
 struct Ps2AlphaTrilerpVertex {
@@ -141,13 +150,14 @@ static uint32_t s_sampler_cms[2];
 static uint32_t s_sampler_cmt[2];
 static struct Ps2TextureSamplerState
     s_texture_sampler[PS2_GFX_TEXTURE_STATE_SLOTS];
+static struct Ps2TextureRegionClampState s_draw_region_clamp[2];
 static enum FilteringMode s_filter_mode = FILTER_LINEAR;
 static enum MipmapFilteringMode s_mipmap_filter = MIPMAP_DISABLED;
 static int s_anisotropy = 1;
 static bool s_warned_framebuffer;
 static bool s_warned_mipmap;
-static bool s_warned_mirror_clamp;
 static bool s_warned_mirror_extent;
+static bool s_warned_region_clamp_extent;
 static bool s_upload_mirror_s;
 static bool s_upload_mirror_t;
 static bool s_logged_native_rgba16;
@@ -364,9 +374,12 @@ static void ps2_effective_upload_mirror(
 }
 
 static void ps2_record_texture_mirror(
-    Ps2GsTextureHandle handle, bool mirror_s, bool mirror_t)
+    Ps2GsTextureHandle handle, uint32_t width, uint32_t height,
+    bool mirror_s, bool mirror_t)
 {
     if (handle < PS2_GFX_TEXTURE_STATE_SLOTS) {
+        s_texture_sampler[handle].logical_width = width;
+        s_texture_sampler[handle].logical_height = height;
         s_texture_sampler[handle].expanded_mirror_s = mirror_s;
         s_texture_sampler[handle].expanded_mirror_t = mirror_t;
     }
@@ -376,6 +389,40 @@ static void ps2_record_texture_mirror(
             mirror_s ? "S" : "", mirror_t ? "T" : "");
         s_logged_native_mirror = true;
     }
+}
+
+static void ps2_apply_texture_clamp(int tile)
+{
+    if (tile < 0 || tile > 1) {
+        return;
+    }
+    const struct Ps2TextureRegionClampState *region =
+        &s_draw_region_clamp[tile];
+    ps2GsCoreSetTextureRegionClamp(
+        s_sampler_cms[tile], s_sampler_cmt[tile],
+        region->region_s, region->max_u,
+        region->region_t, region->max_v);
+}
+
+static bool ps2_decode_texture_region_clamp(
+    Ps2GsTextureHandle handle, bool s_axis,
+    float normalized_bound, uint16_t *maximum)
+{
+    const uint32_t extent = handle < PS2_GFX_TEXTURE_STATE_SLOTS
+        ? (s_axis ? s_texture_sampler[handle].logical_width
+                  : s_texture_sampler[handle].logical_height)
+        : 0u;
+    if (gfxPs2TextureRegionClampMax(
+            normalized_bound, extent, maximum)) {
+        return true;
+    }
+
+    if (!s_warned_region_clamp_extent) {
+        sysLogPrintf(LOG_WARNING,
+            "GfxPS2 REGION_CLAMP bound is outside the GS 0..1023 texel contract");
+        s_warned_region_clamp_extent = true;
+    }
+    return false;
 }
 
 static void ps2_select_texture(int tile, uint32_t texture_id, bool linear_filter)
@@ -425,20 +472,15 @@ static void ps2_upload_texture(const uint8_t *rgba32_buf, uint32_t width, uint32
             handle, rgba32_buf, width, height,
             mirror_s, mirror_t) &&
         handle < PS2_GFX_TEXTURE_STATE_SLOTS) {
-        ps2_record_texture_mirror(handle, mirror_s, mirror_t);
+        ps2_record_texture_mirror(
+            handle, width, height, mirror_s, mirror_t);
     }
 }
 
 extern "C" void gfxPs2SetTextureUploadMirror(uint8_t cms, uint8_t cmt)
 {
-    s_upload_mirror_s = (cms & 3u) == 1u;
-    s_upload_mirror_t = (cmt & 3u) == 1u;
-    if (((cms & 3u) == 3u || (cmt & 3u) == 3u) &&
-        !s_warned_mirror_clamp) {
-        sysLogPrintf(LOG_WARNING,
-            "GfxPS2 mirror+clamp requires a distinct edge contract; retaining compatibility sampling");
-        s_warned_mirror_clamp = true;
-    }
+    s_upload_mirror_s = (cms & 1u) != 0u;
+    s_upload_mirror_t = (cmt & 1u) != 0u;
 }
 
 extern "C" bool gfxPs2UploadTmemTexture(
@@ -476,7 +518,8 @@ extern "C" bool gfxPs2UploadTmemTexture(
                 mirror_s, mirror_t)) {
             return false;
         }
-        ps2_record_texture_mirror(handle, mirror_s, mirror_t);
+        ps2_record_texture_mirror(
+            handle, width, height, mirror_s, mirror_t);
         if (!s_logged_native_rgba16) {
             sysLogPrintf(LOG_NOTE,
                 "GfxPS2 native texture path: exact N64 RGBA16 -> GS PSMCT16");
@@ -497,7 +540,8 @@ extern "C" bool gfxPs2UploadTmemTexture(
                 mirror_s, mirror_t)) {
             return false;
         }
-        ps2_record_texture_mirror(handle, mirror_s, mirror_t);
+        ps2_record_texture_mirror(
+            handle, width, height, mirror_s, mirror_t);
         if (!s_logged_native_ia16) {
             sysLogPrintf(LOG_NOTE,
                 "GfxPS2 native texture path: exact N64 IA16 -> GS PSMCT32");
@@ -525,7 +569,8 @@ extern "C" bool gfxPs2UploadTmemTexture(
                 mirror_s, mirror_t)) {
             return false;
         }
-        ps2_record_texture_mirror(handle, mirror_s, mirror_t);
+        ps2_record_texture_mirror(
+            handle, width, height, mirror_s, mirror_t);
         if (!s_logged_native_intensity[(uint32_t)encoding]) {
             sysLogPrintf(LOG_NOTE,
                 "GfxPS2 native texture path: exact N64 %s%u -> GS PSMT%u/shared CT32 CSM1",
@@ -565,7 +610,8 @@ extern "C" bool gfxPs2UploadTmemTexture(
             mirror_s, mirror_t)) {
         return false;
     }
-    ps2_record_texture_mirror(handle, mirror_s, mirror_t);
+    ps2_record_texture_mirror(
+        handle, width, height, mirror_s, mirror_t);
 
     bool *logged = ia16_palette
         ? &s_logged_native_ci_ia16[ci4 ? 0u : 1u]
@@ -814,7 +860,7 @@ static void ps2_trilerp_set_base_state(void)
     ps2GsCoreSetAlphaBlend(false);
     ps2GsCoreSetAlphaWrite(true);
     ps2GsCoreSetTextureAlpha(false);
-    ps2GsCoreSetTextureClamp(s_sampler_cms[0], s_sampler_cmt[0]);
+    ps2_apply_texture_clamp(0);
 }
 
 static void ps2_trilerp_set_lerp_state(void)
@@ -824,7 +870,7 @@ static void ps2_trilerp_set_lerp_state(void)
     ps2GsCoreSetAlphaBlend(true);
     ps2GsCoreSetAlphaWrite(false);
     ps2GsCoreSetTextureAlpha(false);
-    ps2GsCoreSetTextureClamp(s_sampler_cms[1], s_sampler_cmt[1]);
+    ps2_apply_texture_clamp(1);
 }
 
 static void ps2_trilerp_restore_state(void)
@@ -832,7 +878,7 @@ static void ps2_trilerp_restore_state(void)
     ps2GsCoreSetAlphaWrite(true);
     ps2GsCoreSetAlphaBlend(s_alpha_blend);
     ps2GsCoreSetDepthMode(s_depth_test, s_depth_update, s_depth_compare);
-    ps2GsCoreSetTextureClamp(s_sampler_cms[0], s_sampler_cmt[0]);
+    ps2_apply_texture_clamp(0);
 }
 
 static void ps2_input1_tex0_lerp_set_base_state(void)
@@ -849,7 +895,7 @@ static void ps2_input1_tex0_lerp_set_texture_state(void)
     ps2GsCoreSetAlphaBlend(true);
     ps2GsCoreSetAlphaWrite(false);
     ps2GsCoreSetTextureAlpha(false);
-    ps2GsCoreSetTextureClamp(s_sampler_cms[0], s_sampler_cmt[0]);
+    ps2_apply_texture_clamp(0);
 }
 
 static void ps2_draw_opaque_trilerp(uint32_t vertex_count)
@@ -1022,7 +1068,7 @@ static void ps2_restore_alpha_trilerp_state(void)
     ps2GsCoreSetFog(false, 0u, 0u, 0u);
     ps2GsCoreSetTextureAlpha(
         s_shader && s_shader->plan.texture_alpha);
-    ps2GsCoreSetTextureClamp(s_sampler_cms[0], s_sampler_cmt[0]);
+    ps2_apply_texture_clamp(0);
 }
 
 static bool ps2_draw_trilerp_independent_alpha_tile(
@@ -1050,7 +1096,7 @@ static bool ps2_draw_trilerp_independent_alpha_tile(
     ps2GsCoreSetAlphaBlend(false);
     ps2GsCoreSetTextureAlpha(s_shader->plan.texture_alpha);
     ps2GsCoreClear(true, false);
-    ps2GsCoreSetTextureClamp(s_sampler_cms[0], s_sampler_cmt[0]);
+    ps2_apply_texture_clamp(0);
     ps2GsCoreDrawTexturedTriangles(
         s_selected_texture[0], texture0, 3u);
 
@@ -1058,7 +1104,7 @@ static bool ps2_draw_trilerp_independent_alpha_tile(
     ps2GsCoreSetAlphaWrite(false);
     ps2GsCoreSetAlphaBlend(true);
     ps2GsCoreSetTextureAlpha(false);
-    ps2GsCoreSetTextureClamp(s_sampler_cms[1], s_sampler_cmt[1]);
+    ps2_apply_texture_clamp(1);
     ps2GsCoreDrawTexturedTriangles(
         s_selected_texture[1], texture1, 3u);
 
@@ -1182,7 +1228,7 @@ static bool ps2_draw_alpha_trilerp_tile(
         return false;
     }
     ps2GsCoreClear(true, false);
-    ps2GsCoreSetTextureClamp(s_sampler_cms[0], s_sampler_cmt[0]);
+    ps2_apply_texture_clamp(0);
     ps2GsCoreDrawTexturedTriangles(
         s_selected_texture[0], texture0_alpha, 3u);
 
@@ -1200,7 +1246,7 @@ static bool ps2_draw_alpha_trilerp_tile(
         return false;
     }
     ps2GsCoreSetTextureAlpha(true);
-    ps2GsCoreSetTextureClamp(s_sampler_cms[1], s_sampler_cmt[1]);
+    ps2_apply_texture_clamp(1);
     ps2GsCoreDrawTexturedTriangles(
         s_selected_texture[1], texture1_alpha, 3u);
 
@@ -1219,12 +1265,12 @@ static bool ps2_draw_alpha_trilerp_tile(
     }
     ps2GsCoreSetAlphaBlend(false);
     ps2GsCoreSetTextureAlpha(false);
-    ps2GsCoreSetTextureClamp(s_sampler_cms[0], s_sampler_cmt[0]);
+    ps2_apply_texture_clamp(0);
     ps2GsCoreDrawTexturedTriangles(
         s_selected_texture[0], texture0_color, 3u);
     ps2GsCoreSetAlphaWrite(false);
     ps2GsCoreSetAlphaBlend(true);
-    ps2GsCoreSetTextureClamp(s_sampler_cms[1], s_sampler_cmt[1]);
+    ps2_apply_texture_clamp(1);
     ps2GsCoreDrawTexturedTriangles(
         s_selected_texture[1], texture1_color, 3u);
     ps2GsCoreSetAlphaWrite(true);
@@ -1375,6 +1421,8 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
             batch_vertices -= batch_vertices % 3;
         }
 
+        memset(s_draw_region_clamp, 0, sizeof(s_draw_region_clamp));
+
         for (size_t i = 0; i < batch_vertices; ++i) {
             const float *src = &buf_vbo[(base_vertex + i) * stride];
             size_t pos = 0;
@@ -1401,8 +1449,24 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
                     s_texture_sampler[handle].expanded_mirror_t;
                 tex_u[t] = src[pos++] * (mirror_s ? 0.5f : 1.0f);
                 tex_v[t] = src[pos++] * (mirror_t ? 0.5f : 1.0f);
-                if (s_shader->features.clamp[t][0]) ++pos;
-                if (s_shader->features.clamp[t][1]) ++pos;
+                if (s_shader->features.clamp[t][0]) {
+                    const float bound = src[pos++];
+                    if (i == 0u) {
+                        s_draw_region_clamp[t].region_s =
+                            ps2_decode_texture_region_clamp(
+                                handle, true, bound,
+                                &s_draw_region_clamp[t].max_u);
+                    }
+                }
+                if (s_shader->features.clamp[t][1]) {
+                    const float bound = src[pos++];
+                    if (i == 0u) {
+                        s_draw_region_clamp[t].region_t =
+                            ps2_decode_texture_region_clamp(
+                                handle, false, bound,
+                                &s_draw_region_clamp[t].max_v);
+                    }
+                }
             }
 
             float fog_r = 0.0f;
@@ -1592,6 +1656,7 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
         } else if (opaque_input1_tex0_lerp) {
             ps2_draw_opaque_input1_tex0_lerp((uint32_t)batch_vertices);
         } else if (s_shader->plan.textured) {
+            ps2_apply_texture_clamp(0);
             ps2GsCoreDrawTexturedTriangles(
                 s_selected_texture[0], s_stq_vertices[0],
                 (uint32_t)batch_vertices);

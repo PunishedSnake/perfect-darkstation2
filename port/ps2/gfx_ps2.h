@@ -15,9 +15,31 @@ struct GfxRdpTmemLiveTextureView;
 /* Backend-private cache variant for a physically expanded mirror period. */
 static inline uint8_t gfxPs2TextureMirrorVariant(uint8_t cms, uint8_t cmt)
 {
-    const uint8_t mirror_s = (cms & 3u) == 1u ? 1u : 0u;
-    const uint8_t mirror_t = (cmt & 3u) == 1u ? 2u : 0u;
+    const uint8_t mirror_s = (cms & 1u) != 0u ? 1u : 0u;
+    const uint8_t mirror_t = (cmt & 1u) != 0u ? 2u : 0u;
     return mirror_s | mirror_t;
+}
+
+/* Decode Fast3D's normalized last-texel-centre clamp into GS texel bounds. */
+static inline bool gfxPs2TextureRegionClampMax(
+    float normalized_bound, uint32_t logical_extent, uint16_t *maximum)
+{
+    if (!maximum || logical_extent == 0u ||
+        !(normalized_bound >= 0.0f)) {
+        return false;
+    }
+
+    const float last_center = normalized_bound * (float)logical_extent;
+    if (!(last_center >= 0.5f) || last_center > 1023.5f) {
+        return false;
+    }
+
+    const uint32_t extent = (uint32_t)(last_center + 0.5f);
+    if (extent == 0u || extent > 1024u) {
+        return false;
+    }
+    *maximum = (uint16_t)(extent - 1u);
+    return true;
 }
 
 static inline uint64_t gfxPs2TextureVariantIdentity(
