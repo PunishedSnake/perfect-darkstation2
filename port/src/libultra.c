@@ -156,8 +156,14 @@ void osViSetYScale(f32 value)
 
 s32 osAiSetFrequency(u32 frequency)
 {
+#ifdef PLATFORM_PS2
+	/* Current audsrv has a dedicated exact 22050 Hz -> 48000 Hz path. */
+	(void)frequency;
+	return 22050;
+#else
 	// we can allow for any freq
 	return (s32)frequency;
+#endif
 }
 
 u32 osAiGetLength(void)

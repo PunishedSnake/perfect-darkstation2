@@ -29,6 +29,17 @@ It does **not** prove that the full game builds, renders, fits in memory, or per
 - `DelayThread()` implements the sleep contract.
 - `sysCpuRelax()` remains a spin hint instead of silently changing scheduling semantics.
 - Build optimization is forced to `-Og` for this target. The current upstream port already documents unresolved `-O2` issues, while current PS2SDK injects `-O2` by default.
+- Project-owned PATH3/GS command submission, native texture residency, indexed
+  formats, multipass combiner graphs and native framebuffer presentation are
+  active behind the shared Fast3D frontend.
+- DualShock 2 input implements the portable controller contract through
+  ROM-resident PADMAN modules.
+- ROM data is read through a bounded file-backed source instead of retaining a
+  32 MiB image in EE RAM. Ordinary assets are loaded lazily and released at the
+  existing file lifetime boundary.
+- The PS2 audio backend embeds `audsrv.irx`, loads ROM `LIBSD`, and streams the
+  game's mixed 22050 Hz stereo PCM16 frames through an ownership-explicit,
+  bounded IOP queue.
 
 ### Inference / not yet proven
 
@@ -101,11 +112,16 @@ The project intentionally follows the least-risk path first:
 9. profiling on real hardware;
 10. only then introduce data-layout, batching, DMA/VIF/VU or hand-tuned kernels where measurements justify them.
 
-## Memory warning: the current ROM model is temporary by definition
+## Memory status
 
-The desktop port currently loads the entire 32 MiB Perfect Dark ROM into host memory. A retail PS2 has 32 MiB of EE main RAM total, so that model cannot be the final PS2 data path.
+The desktop port still retains the complete ROM, but the PS2 path no longer
+does. A file-backed `RomSource` performs bounded reads and streaming RZIP
+decompression. Permanent segments receive exact-sized allocations; ordinary
+assets keep compact extent metadata and become resident only while used.
 
-The eventual PS2 path should keep only the active working set in EE RAM and move toward storage-backed reads and/or offline prepared consumer-ready assets. The exact representation will be chosen from real access patterns rather than by blindly converting everything up front.
+The remaining memory gate is measurement: record the permanent segment total,
+peak lazy-asset working set, game heap, GS upload staging and safety margin
+before promoting the diagnostic bootstrap to the full game entry point.
 
 ## Performance rules for this port
 

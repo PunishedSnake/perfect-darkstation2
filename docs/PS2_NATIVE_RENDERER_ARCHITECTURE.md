@@ -548,10 +548,19 @@ PCSX2 is useful for correctness, packet/state inspection and fast iteration. It 
   source modules under the EE ABI. The host gate exercises identical memory-
   and file-backed RZIP paths, including truncated ranges and caller-owned
   scratch/output buffers;
+- **CURRENT IMPLEMENTATION:** the PS2 `audio.h` backend now owns the complete
+  EE-to-IOP streaming boundary. It embeds the current PS2SDK `audsrv.irx` in the
+  ELF, loads ROM `LIBSD`, configures the exact supported 22050 Hz stereo PCM16
+  path, and submits each mixed game buffer only at `audioEndFrame`. The game
+  retains ownership until `audsrv_play_audio` has copied the bytes into its RPC
+  buffer. A host-tested planner rejects malformed or service-oversized chunks,
+  caps queued latency and waits only when the bounded IOP ring must release
+  enough space. There is no duplicate EE audio ring;
 - keep `pd_ps2_game_bridge` as the EE ABI frontier while platform services are
-  replaced. The next link blockers are native audio output and a measured EE
-  heap/resident-segment budget, after which the real `port/src/main.c` entry
-  point can replace the diagnostic bootstrap;
+  replaced. Native input, ROM streaming and audio output now cross that
+  frontier. The next promotion blocker is a measured EE heap/resident-segment
+  budget plus the remaining platform/link closure, after which the real
+  `port/src/main.c` entry point can replace the diagnostic bootstrap;
 - do not promote the game ELF by ignoring unresolved symbols. Every service
   crossing the link frontier must have an explicit PS2 owner and failure
   contract.

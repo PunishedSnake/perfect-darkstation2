@@ -50,6 +50,34 @@ if(NOT EXISTS "${GSKIT}/include/gsKit.h")
 endif()
 
 find_program(PD_PS2_PYTHON3 NAMES python3 REQUIRED)
+find_program(PD_PS2_BIN2C NAMES bin2c
+  HINTS "$ENV{PS2SDK}/bin"
+  REQUIRED
+)
+
+set(PD_PS2_AUDSRV_IRX "$ENV{PS2SDK}/iop/irx/audsrv.irx")
+if(NOT EXISTS "${PD_PS2_AUDSRV_IRX}")
+  message(FATAL_ERROR
+    "Current PS2SDK audsrv.irx not found at ${PD_PS2_AUDSRV_IRX}")
+endif()
+
+set(PD_PS2_AUDSRV_IRX_C
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/audsrv_irx.c"
+)
+add_custom_command(
+  OUTPUT "${PD_PS2_AUDSRV_IRX_C}"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  COMMAND "${PD_PS2_BIN2C}"
+    "${PD_PS2_AUDSRV_IRX}" "${PD_PS2_AUDSRV_IRX_C}" audsrv_irx
+  DEPENDS "${PD_PS2_AUDSRV_IRX}"
+  COMMENT "Embedding PS2SDK audsrv.irx for file-independent SPU2 startup"
+  VERBATIM
+)
+set_source_files_properties(
+  "${PD_PS2_AUDSRV_IRX_C}"
+  PROPERTIES GENERATED TRUE
+)
 
 set(PD_PS2_ROMID "ntsc-final")
 set(PD_PS2_ASSET_DIR "${PD_ROOT}/src/assets/${PD_PS2_ROMID}")
@@ -165,6 +193,9 @@ set_source_files_properties(
 add_executable(pd_ps2_bootstrap
   bootstrap.c
   system_ps2.c
+  audio_ps2.c
+  audio_ps2_queue.c
+  "${PD_PS2_AUDSRV_IRX_C}"
   video_diag.c
   gs_command_budget.cpp
   gs_core.cpp
@@ -220,7 +251,8 @@ target_link_directories(pd_ps2_bootstrap PRIVATE "${GSKIT}/lib")
 # Current ps2sdk-ports installs EE zlib into PS2SDK/ports. Keep it behind the
 # bootstrap only until the full build has a platform dependency layer.
 # libpadx matches the ROM XPADMAN module used by the current PS2SDK padx sample.
-target_link_libraries(pd_ps2_bootstrap PRIVATE gskit dmakit padx z kernel)
+target_link_libraries(pd_ps2_bootstrap PRIVATE
+  gskit dmakit padx z audsrv patches kernel)
 
 if(PD_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT)
   set(PD_PS2_BOOTSTRAP_OUTPUT_NAME "pd-ps2-alpha-trilerp-diag")
@@ -246,6 +278,7 @@ add_library(pd_ps2_game_bridge OBJECT
   "${PD_ROOT}/port/src/main.c"
   "${PD_ROOT}/port/src/config.c"
   "${PD_ROOT}/port/src/fs.c"
+  "${PD_ROOT}/port/src/libultra.c"
   "${PD_ROOT}/port/src/pdmain.c"
   "${PD_ROOT}/port/src/pdsched.c"
   "${PD_ROOT}/port/src/romdata.c"
@@ -260,6 +293,8 @@ add_library(pd_ps2_game_bridge OBJECT
   "${PD_ROOT}/src/game/player.c"
   "${PD_ROOT}/src/game/menugfx.c"
   video_ps2.c
+  audio_ps2.c
+  audio_ps2_queue.c
   input_ps2.c
   input_ps2_map.c
   gfx_frame_ps2.c

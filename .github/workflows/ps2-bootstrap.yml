@@ -144,6 +144,15 @@ jobs:
             -o /tmp/romsource_test
           /tmp/romsource_test
 
+      - name: Test bounded PS2 audio submit policy
+        run: |
+          gcc -std=c11 -Wall -Wextra -Werror \
+            -Iport/ps2 \
+            port/ps2/audio_ps2_queue.c \
+            port/ps2/audio_ps2_queue_test.c \
+            -o /tmp/audio_ps2_queue_test
+          /tmp/audio_ps2_queue_test
+
       - name: Test PS2 combiner planner
         run: |
           g++ -std=c++20 -Wall -Wextra -Werror \
@@ -192,6 +201,8 @@ jobs:
           test -f build-ps2/pd-ps2-bootstrap.elf
           mips64r5900el-ps2-elf-size build-ps2/pd-ps2-bootstrap.elf
           mips64r5900el-ps2-elf-readelf -h build-ps2/pd-ps2-bootstrap.elf
+          mips64r5900el-ps2-elf-nm build-ps2/pd-ps2-bootstrap.elf | \
+            grep -E ' audioInit$| audsrv_irx$| size_audsrv_irx$'
           mips64r5900el-ps2-elf-nm -n build-ps2/pd-ps2-bootstrap.elf | tail -n 20
 
       - name: Build alpha-trilerp hardware diagnostic
