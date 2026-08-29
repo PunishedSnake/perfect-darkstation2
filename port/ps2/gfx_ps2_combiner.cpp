@@ -58,6 +58,11 @@ static bool ps2_shader_item_is_tex0_alpha(uint8_t item)
     return item == SHADER_TEXEL0 || item == SHADER_TEXEL0A;
 }
 
+static bool ps2_shader_item_is_tex1_alpha(uint8_t item)
+{
+    return item == SHADER_TEXEL1 || item == SHADER_TEXEL1A;
+}
+
 static enum Ps2ColorRecipe ps2_classify_color_recipe(
     const struct CCFeatures *f, uint8_t cycle)
 {
@@ -451,6 +456,61 @@ static bool ps2_plan_alpha_tex0_factor_lerp(
     return true;
 }
 
+static bool ps2_cycle_multiplies_tex0_tex1(
+    const struct CCFeatures *f, uint8_t channel)
+{
+    if (!f->do_multiply[0][channel]) {
+        return false;
+    }
+
+    const uint8_t a = f->c[0][channel][0];
+    const uint8_t c = f->c[0][channel][2];
+    if (channel == 0u) {
+        return (a == SHADER_TEXEL0 && c == SHADER_TEXEL1) ||
+               (a == SHADER_TEXEL1 && c == SHADER_TEXEL0);
+    }
+    return (ps2_shader_item_is_tex0_alpha(a) &&
+            ps2_shader_item_is_tex1_alpha(c)) ||
+           (ps2_shader_item_is_tex1_alpha(a) &&
+            ps2_shader_item_is_tex0_alpha(c));
+}
+
+static bool ps2_cycle_multiplies_combined_by_input1(
+    const struct CCFeatures *f, uint8_t channel)
+{
+    if (!f->do_multiply[1][channel]) {
+        return false;
+    }
+    const uint8_t a = f->c[1][channel][0];
+    const uint8_t c = f->c[1][channel][2];
+    return (a == SHADER_COMBINED && c == SHADER_INPUT_1) ||
+           (a == SHADER_INPUT_1 && c == SHADER_COMBINED);
+}
+
+static bool ps2_plan_interference(
+    const struct CCFeatures *f, struct Ps2CombinerPlan *plan)
+{
+    if (!f->opt_2cyc || !f->opt_alpha || f->opt_texture_edge ||
+        f->opt_invisible ||
+        !ps2_cycle_multiplies_tex0_tex1(f, 0u) ||
+        !ps2_cycle_multiplies_tex0_tex1(f, 1u) ||
+        !ps2_cycle_multiplies_combined_by_input1(f, 0u) ||
+        !ps2_cycle_multiplies_combined_by_input1(f, 1u)) {
+        return false;
+    }
+
+    plan->color_recipe = PS2_COLOR_TEX0_MUL_TEX1_MUL_INPUT1;
+    plan->alpha_recipe = PS2_ALPHA_TEX0_MUL_TEX1_MUL_INPUT1;
+    plan->color_cycle = 1u;
+    plan->alpha_cycle = 1u;
+    plan->textured = true;
+    plan->texture_alpha = true;
+    plan->pass_graph = PS2_PASS_GRAPH_INTERFERENCE;
+    plan->hardware_validation_required = true;
+    plan->supported = true;
+    return true;
+}
+
 static bool ps2_plan_opaque_input1_tex0_lerp(const struct CCFeatures *f,
     struct Ps2CombinerPlan *plan)
 {
@@ -530,6 +590,10 @@ bool ps2GfxPlanCombiner(const struct CCFeatures *f,
     }
 
     if (ps2_plan_alpha_tex0_factor_lerp(f, plan)) {
+        return true;
+    }
+
+    if (ps2_plan_interference(f, plan)) {
         return true;
     }
 

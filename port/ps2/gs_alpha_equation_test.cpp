@@ -39,6 +39,28 @@ static void test_destination_alpha_lerp(void)
     assert(factors.fix == 0u);
 }
 
+static void test_destination_rgb_multiply(void)
+{
+    struct Ps2GsAlphaBlendFactors factors{};
+    assert(ps2GsDescribeAlphaBlendEquation(
+        PS2_GS_ALPHA_BLEND_DESTINATION_RGB_TIMES_DESTINATION_ALPHA,
+        &factors));
+    assert(factors.a == 1u);
+    assert(factors.b == 2u);
+    assert(factors.c == 1u);
+    assert(factors.d == 2u);
+    assert(factors.fix == 0u);
+
+    assert(ps2GsDescribeAlphaBlendEquation(
+        PS2_GS_ALPHA_BLEND_DESTINATION_RGB_TIMES_SOURCE_ALPHA,
+        &factors));
+    assert(factors.a == 1u);
+    assert(factors.b == 2u);
+    assert(factors.c == 0u);
+    assert(factors.d == 2u);
+    assert(factors.fix == 0u);
+}
+
 static void test_rejects_invalid_requests(void)
 {
     struct Ps2GsAlphaBlendFactors factors{};
@@ -53,6 +75,7 @@ int main(void)
     test_source_over();
     test_source_rgb_times_inverse_source_alpha();
     test_destination_alpha_lerp();
+    test_destination_rgb_multiply();
     test_rejects_invalid_requests();
     puts("gs_alpha_equation tests passed");
     return 0;

@@ -21,6 +21,11 @@ static inline uint8_t gfxPs2TextureMirrorVariant(uint8_t cms, uint8_t cmt)
 }
 
 /* Exact runtime proof used to select the one-channel material graph. */
+static inline uint32_t gfxPs2MaterialRgbChannelPasses(bool monochrome_rgb)
+{
+    return monochrome_rgb ? 1u : 3u;
+}
+
 static inline bool gfxPs2Rgba32IsMonochrome(
     const uint8_t *rgba32, uint32_t texel_count)
 {

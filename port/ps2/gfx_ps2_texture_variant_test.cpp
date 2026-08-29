@@ -6,6 +6,9 @@
 
 int main(void)
 {
+    assert(gfxPs2MaterialRgbChannelPasses(true) == 1u);
+    assert(gfxPs2MaterialRgbChannelPasses(false) == 3u);
+
     const uint8_t monochrome32[] = {
         0u, 0u, 0u, 255u, 91u, 91u, 91u, 37u,
     };
