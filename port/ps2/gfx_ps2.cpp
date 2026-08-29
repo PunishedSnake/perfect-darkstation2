@@ -173,9 +173,6 @@ static bool s_warned_alpha_trilerp_workspace;
 static bool s_warned_alpha_trilerp_modulate;
 static bool s_warned_independent_alpha_workspace;
 static bool s_warned_independent_alpha_modulate;
-#if defined(PERFECT_DARK_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT)
-static bool s_logged_unvalidated_channel_blit;
-#endif
 static Ps2GsRenderTargetHandle s_alpha_trilerp_color_target;
 static Ps2GsRenderTargetHandle s_alpha_trilerp_scalar_target;
 static uint8_t s_draw_fog_r;
@@ -301,19 +298,6 @@ static struct ShaderProgram *ps2_create_and_load_new_shader(uint64_t shader_id0,
             prg->shader_id1 = shader_id1;
             gfx_cc_get_features(shader_id0, shader_id1, &prg->features);
             ps2GfxPlanCombiner(&prg->features, &prg->plan);
-
-#if defined(PERFECT_DARK_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT)
-            if (prg->plan.hardware_validation_required &&
-                prg->plan.pass_graph ==
-                    PS2_PASS_GRAPH_ALPHA_TRILERP_MODULATE) {
-                prg->plan.supported = true;
-                if (!s_logged_unvalidated_channel_blit) {
-                    sysLogPrintf(LOG_WARNING,
-                        "GfxPS2 enabling unvalidated CT32 channel-blit pass graph");
-                    s_logged_unvalidated_channel_blit = true;
-                }
-            }
-#endif
 
             ps2_log_shader_recipe(i, prg);
 

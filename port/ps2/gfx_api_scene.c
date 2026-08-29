@@ -24,7 +24,7 @@
 #define API_SCENE_STATUS_VERTEX_COUNT 18
 #define API_SCENE_UNTEXTURED_STRIDE 7
 
-#if defined(PERFECT_DARK_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT)
+#if defined(PERFECT_DARK_PS2_ALPHA_TRILERP_DIAGNOSTIC)
 #define API_SCENE_ALPHA_DIAG_STRIDE 16
 #define API_SCENE_ALPHA_DIAG_VERTICES 3
 #define API_SCENE_ALPHA_DIAG_PANEL_W 128
@@ -90,7 +90,7 @@ static uint32_t sCheckerTexture[API_SCENE_TEXTURE_W * API_SCENE_TEXTURE_H]
 static float sCubeVbo[API_SCENE_DRAW_VERTEX_COUNT * API_SCENE_TEXTURED_STRIDE];
 static float sStatusVbo[API_SCENE_STATUS_VERTEX_COUNT * API_SCENE_UNTEXTURED_STRIDE];
 
-#if defined(PERFECT_DARK_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT)
+#if defined(PERFECT_DARK_PS2_ALPHA_TRILERP_DIAGNOSTIC)
 static uint32_t sAlphaDiagTexture0[API_SCENE_TEXTURE_W * API_SCENE_TEXTURE_H]
     __attribute__((aligned(64)));
 static uint32_t sAlphaDiagTexture1[API_SCENE_TEXTURE_W * API_SCENE_TEXTURE_H]
@@ -134,7 +134,7 @@ static void buildCheckerTexture(void)
     }
 }
 
-#if defined(PERFECT_DARK_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT)
+#if defined(PERFECT_DARK_PS2_ALPHA_TRILERP_DIAGNOSTIC)
 static uint32_t packRgba8(uint8_t r, uint8_t g, uint8_t b, uint8_t a)
 {
     return (uint32_t)r | ((uint32_t)g << 8) |
@@ -551,7 +551,7 @@ bool ps2GfxApiSceneRun(int romStatus)
     struct ShaderProgram *untexturedShader =
         api->create_and_load_new_shader(untexturedShaderId, 0);
 
-#if defined(PERFECT_DARK_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT)
+#if defined(PERFECT_DARK_PS2_ALPHA_TRILERP_DIAGNOSTIC)
     const uint64_t alphaDiagId = alphaDiagShaderId();
     const uint32_t alphaDiagOptions = SHADER_OPT_2CYC | SHADER_OPT_ALPHA;
     struct ShaderProgram *alphaDiagShader =
@@ -561,7 +561,7 @@ bool ps2GfxApiSceneRun(int romStatus)
 #endif
 
     if (!texturedShader || !untexturedShader
-#if defined(PERFECT_DARK_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT)
+#if defined(PERFECT_DARK_PS2_ALPHA_TRILERP_DIAGNOSTIC)
         || !alphaDiagShader || !alphaDiagReferenceShader
 #endif
     ) {
@@ -583,7 +583,7 @@ bool ps2GfxApiSceneRun(int romStatus)
         API_SCENE_TEXTURE_W, API_SCENE_TEXTURE_H, false);
     api->set_sampler_parameters(0, false, 2, 2, false);
 
-#if defined(PERFECT_DARK_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT)
+#if defined(PERFECT_DARK_PS2_ALPHA_TRILERP_DIAGNOSTIC)
     buildAlphaDiagTextures();
     buildAlphaDiagVbos(width, height);
     const uint32_t alphaDiagTexture0 = api->new_texture();
@@ -629,9 +629,9 @@ bool ps2GfxApiSceneRun(int romStatus)
         "GfxAPI scene: MODULATEIA alpha-cutout smoke expects transparent checker cells to be discarded");
     sysLogPrintf(LOG_NOTE,
         "GfxAPI scene: DS2 smoke right=rotate left=move/zoom R1=fire+rumble L1=precision Cross=reset");
-#if defined(PERFECT_DARK_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT)
+#if defined(PERFECT_DARK_PS2_ALPHA_TRILERP_DIAGNOSTIC)
     sysLogPrintf(LOG_WARNING,
-        "GfxAPI scene: Select toggles unvalidated alpha-trilerp A/B; left=GS graph right=CPU reference");
+        "GfxAPI scene: Select toggles validated alpha-trilerp A/B; left=GS graph right=CPU reference");
     sysLogPrintf(LOG_WARNING,
         "GfxAPI scene: status bars top-to-bottom ROM, PAD, heartbeat; PAD red/orange/yellow/blue/cyan/magenta/white");
 #endif
@@ -650,7 +650,7 @@ bool ps2GfxApiSceneRun(int romStatus)
     float offsetX = 0.0f;
     float cameraDistance = 4.6f;
     const float aspect = (float)width / (float)height;
-#if defined(PERFECT_DARK_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT)
+#if defined(PERFECT_DARK_PS2_ALPHA_TRILERP_DIAGNOSTIC)
     /*
      * A diagnostic binary must identify itself without relying on controller
      * input.  Start on the A/B screen and let Select return to the baseline
@@ -723,7 +723,7 @@ bool ps2GfxApiSceneRun(int romStatus)
             ps2LogCheckpoint();
         }
 
-#if defined(PERFECT_DARK_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT)
+#if defined(PERFECT_DARK_PS2_ALPHA_TRILERP_DIAGNOSTIC)
         if (rawDebugPressed) {
             alphaDiagActive = !alphaDiagActive;
             sysLogPrintf(LOG_WARNING,
@@ -768,7 +768,7 @@ bool ps2GfxApiSceneRun(int romStatus)
         }
 
         buildStatusVbo(romStatus, visiblePadDiagnostics, frameCounter,
-#if defined(PERFECT_DARK_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT)
+#if defined(PERFECT_DARK_PS2_ALPHA_TRILERP_DIAGNOSTIC)
             alphaDiagActive
 #else
             false
@@ -784,7 +784,7 @@ bool ps2GfxApiSceneRun(int romStatus)
         api->draw_triangles(sStatusVbo,
             sizeof(sStatusVbo) / sizeof(sStatusVbo[0]), API_SCENE_STATUS_VERTEX_COUNT / 3);
 
-#if defined(PERFECT_DARK_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT)
+#if defined(PERFECT_DARK_PS2_ALPHA_TRILERP_DIAGNOSTIC)
         if (alphaDiagActive) {
             api->set_depth_mode(false, false, false, false, 0);
             api->set_use_alpha(true, false);

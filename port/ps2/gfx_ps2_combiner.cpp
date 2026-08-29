@@ -233,12 +233,13 @@ static bool ps2_plan_alpha_tex01_lerp_modulate(
     plan->texture_alpha = true;
     plan->pass_graph = PS2_PASS_GRAPH_ALPHA_TRILERP_MODULATE;
     /*
-     * The complete tiled pass graph is available to opt-in hardware builds,
-     * but the low-byte PSMCT32 -> PSMT8 shuffle remains a real-PS2 image A/B
-     * gate. Keep normal builds explicit-unsupported until that proof exists.
+     * The complete tiled graph, including its low-byte PSMCT32 -> PSMT8
+     * shuffle, passed the deterministic A/B scene on physical PS2 hardware.
+     * Keep the diagnostic scene optional, but expose the recipe to ordinary
+     * gameplay builds.
      */
-    plan->hardware_validation_required = true;
-    plan->supported = false;
+    plan->hardware_validation_required = false;
+    plan->supported = true;
     return true;
 }
 

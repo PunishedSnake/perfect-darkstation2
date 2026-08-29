@@ -9,8 +9,8 @@ endif()
 
 project(pd_ps2_bootstrap C CXX)
 
-option(PD_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT
-  "Enable alpha-trilerp pass graph before real-PS2 channel-blit A/B validation"
+option(PD_PS2_ALPHA_TRILERP_DIAGNOSTIC
+  "Start the PS2 bootstrap on the hardware-validated alpha-trilerp A/B scene"
   OFF
 )
 
@@ -222,9 +222,9 @@ add_executable(pd_ps2_bootstrap
   "${PD_ROOT}/port/fast3d/rdp_tmem_trace.cpp"
 )
 
-if(PD_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT)
+if(PD_PS2_ALPHA_TRILERP_DIAGNOSTIC)
   target_compile_definitions(pd_ps2_bootstrap PRIVATE
-    PERFECT_DARK_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT=1
+    PERFECT_DARK_PS2_ALPHA_TRILERP_DIAGNOSTIC=1
   )
 endif()
 
@@ -254,7 +254,7 @@ target_link_directories(pd_ps2_bootstrap PRIVATE "${GSKIT}/lib")
 target_link_libraries(pd_ps2_bootstrap PRIVATE
   gskit dmakit padx z audsrv patches kernel)
 
-if(PD_PS2_ENABLE_UNVALIDATED_CHANNEL_BLIT)
+if(PD_PS2_ALPHA_TRILERP_DIAGNOSTIC)
   set(PD_PS2_BOOTSTRAP_OUTPUT_NAME "pd-ps2-alpha-trilerp-diag")
 else()
   set(PD_PS2_BOOTSTRAP_OUTPUT_NAME "pd-ps2-bootstrap")

@@ -252,13 +252,13 @@ static void test_alpha_trilerp_modulate_pass_graph(void)
     set_multiply(&builder, 1, 1, SHADER_COMBINED, SHADER_INPUT_2);
 
     const struct Ps2CombinerPlan result = plan(&builder);
-    assert(!result.supported);
+    assert(result.supported);
     assert(result.color_recipe ==
         PS2_COLOR_TEX01_LERP_INPUT1_MUL_INPUT2);
     assert(result.alpha_recipe == PS2_ALPHA_UNSUPPORTED);
     assert(result.textured);
     assert(result.texture_alpha);
-    assert(result.hardware_validation_required);
+    assert(!result.hardware_validation_required);
     assert(result.pass_graph == PS2_PASS_GRAPH_ALPHA_TRILERP_MODULATE);
 }
 
