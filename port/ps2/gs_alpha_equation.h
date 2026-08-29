@@ -11,6 +11,7 @@ extern "C" {
 enum Ps2GsAlphaBlendEquation {
     PS2_GS_ALPHA_BLEND_SOURCE_OVER = 0,
     PS2_GS_ALPHA_BLEND_SOURCE_RGB_TIMES_INV_SOURCE_ALPHA,
+    PS2_GS_ALPHA_BLEND_DESTINATION_ALPHA_LERP,
 };
 
 struct Ps2GsAlphaBlendFactors {

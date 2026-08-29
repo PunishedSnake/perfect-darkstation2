@@ -137,21 +137,27 @@ static void test_ct32_to_t8_page_channel_mapping(void)
         0u, 0u, PS2_GS_CT32_CHANNEL_RED, NULL));
 }
 
-static void test_red_lane_region_repeat_mapping(void)
+static void test_channel_lane_region_repeat_mapping(void)
 {
-    for (uint32_t y = 0u; y < 32u; y += 2u) {
+    for (uint32_t lane = PS2_GS_CT32_CHANNEL_RED;
+         lane <= PS2_GS_CT32_CHANNEL_ALPHA; ++lane) {
+      for (uint32_t y = 0u; y < 32u; y += 2u) {
         for (uint32_t tile_x = 0u; tile_x < 64u; tile_x += 8u) {
             Ps2GsT8PageCoordinate first{};
             assert(ps2GsMapCt32PixelChannelToT8Page(
-                tile_x, y, PS2_GS_CT32_CHANNEL_RED, &first));
+                tile_x, y, (Ps2GsCt32Channel)lane, &first));
 
-            const uint32_t raw_tile_x = tile_x * 2u;
+            const bool right_lane =
+                lane == PS2_GS_CT32_CHANNEL_BLUE ||
+                lane == PS2_GS_CT32_CHANNEL_ALPHA;
+            const uint32_t raw_tile_x =
+                tile_x * 2u + (right_lane ? 8u : 0u);
             const uint32_t u_xor = first.u - raw_tile_x;
             assert(u_xor == 0u || u_xor == 4u);
             for (uint32_t x = 0u; x < 8u; ++x) {
                 Ps2GsT8PageCoordinate coordinate{};
                 assert(ps2GsMapCt32PixelChannelToT8Page(
-                    tile_x + x, y, PS2_GS_CT32_CHANNEL_RED,
+                    tile_x + x, y, (Ps2GsCt32Channel)lane,
                     &coordinate));
                 assert(coordinate.v == first.v);
                 const uint32_t region_repeat_u =
@@ -161,11 +167,12 @@ static void test_red_lane_region_repeat_mapping(void)
 
             Ps2GsT8PageCoordinate second_row{};
             assert(ps2GsMapCt32PixelChannelToT8Page(
-                tile_x, y + 1u, PS2_GS_CT32_CHANNEL_RED,
+                tile_x, y + 1u, (Ps2GsCt32Channel)lane,
                 &second_row));
             assert(second_row.u == first.u);
             assert(second_row.v == first.v + 1u);
         }
+      }
     }
 }
 
@@ -206,7 +213,7 @@ int main(void)
     test_ct32_texture_views();
     test_invalid_texture_views();
     test_ct32_to_t8_page_channel_mapping();
-    test_red_lane_region_repeat_mapping();
+    test_channel_lane_region_repeat_mapping();
     test_red_lane_known_psmt8_anchors();
     puts("gs_render_target_layout tests passed");
     return 0;

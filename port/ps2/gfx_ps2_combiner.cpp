@@ -396,6 +396,61 @@ static bool ps2_is_input1_tex0_lerp_cycle(const struct CCFeatures *f)
            f->c[0][0][3] == SHADER_INPUT_1;
 }
 
+static bool ps2_is_tex0_factor_lerp_cycle(
+    const struct CCFeatures *f, uint8_t cycle, uint8_t channel)
+{
+    return f->c[cycle][channel][0] == SHADER_INPUT_1 &&
+           f->c[cycle][channel][1] == SHADER_INPUT_2 &&
+           ps2_shader_item_is_tex0_alpha(
+               f->c[cycle][channel][2]) &&
+           f->c[cycle][channel][3] == SHADER_INPUT_2;
+}
+
+static bool ps2_plan_alpha_tex0_factor_lerp(
+    const struct CCFeatures *f, struct Ps2CombinerPlan *plan)
+{
+    if (!f->opt_alpha || f->opt_texture_edge || f->opt_invisible) {
+        return false;
+    }
+
+    const int color_cycle = ps2_effective_cycle(f, 0u);
+    const int alpha_cycle = ps2_effective_cycle(f, 1u);
+    if (color_cycle < 0 || alpha_cycle < 0 ||
+        !ps2_is_tex0_factor_lerp_cycle(
+            f, (uint8_t)color_cycle, 0u)) {
+        return false;
+    }
+
+    enum Ps2AlphaRecipe alpha_recipe = PS2_ALPHA_UNSUPPORTED;
+    if (ps2_is_tex0_factor_lerp_cycle(
+            f, (uint8_t)alpha_cycle, 1u)) {
+        alpha_recipe = PS2_ALPHA_INPUT2_INPUT1_LERP_TEX0;
+    } else if (f->do_multiply[alpha_cycle][1]) {
+        const uint8_t a = f->c[alpha_cycle][1][0];
+        const uint8_t c = f->c[alpha_cycle][1][2];
+        if ((ps2_shader_item_is_tex0_alpha(a) &&
+             c == SHADER_INPUT_1) ||
+            (a == SHADER_INPUT_1 &&
+             ps2_shader_item_is_tex0_alpha(c))) {
+            alpha_recipe = PS2_ALPHA_TEX0_MUL_INPUT1;
+        }
+    }
+    if (alpha_recipe == PS2_ALPHA_UNSUPPORTED) {
+        return false;
+    }
+
+    plan->color_recipe = PS2_COLOR_INPUT2_INPUT1_LERP_TEX0;
+    plan->alpha_recipe = alpha_recipe;
+    plan->color_cycle = (uint8_t)color_cycle;
+    plan->alpha_cycle = (uint8_t)alpha_cycle;
+    plan->textured = true;
+    plan->texture_alpha = true;
+    plan->pass_graph = PS2_PASS_GRAPH_TEX0_FACTOR_LERP;
+    plan->hardware_validation_required = true;
+    plan->supported = true;
+    return true;
+}
+
 static bool ps2_plan_opaque_input1_tex0_lerp(const struct CCFeatures *f,
     struct Ps2CombinerPlan *plan)
 {
@@ -471,6 +526,10 @@ bool ps2GfxPlanCombiner(const struct CCFeatures *f,
     }
 
     if (ps2_plan_opaque_input1_tex0_lerp(f, plan)) {
+        return true;
+    }
+
+    if (ps2_plan_alpha_tex0_factor_lerp(f, plan)) {
         return true;
     }
 

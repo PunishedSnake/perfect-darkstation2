@@ -27,6 +27,18 @@ static void test_source_rgb_times_inverse_source_alpha(void)
     assert(factors.fix == 0u);
 }
 
+static void test_destination_alpha_lerp(void)
+{
+    struct Ps2GsAlphaBlendFactors factors{};
+    assert(ps2GsDescribeAlphaBlendEquation(
+        PS2_GS_ALPHA_BLEND_DESTINATION_ALPHA_LERP, &factors));
+    assert(factors.a == 0u);
+    assert(factors.b == 1u);
+    assert(factors.c == 1u);
+    assert(factors.d == 1u);
+    assert(factors.fix == 0u);
+}
+
 static void test_rejects_invalid_requests(void)
 {
     struct Ps2GsAlphaBlendFactors factors{};
@@ -40,6 +52,7 @@ int main(void)
 {
     test_source_over();
     test_source_rgb_times_inverse_source_alpha();
+    test_destination_alpha_lerp();
     test_rejects_invalid_requests();
     puts("gs_alpha_equation tests passed");
     return 0;

@@ -7,6 +7,7 @@
 
 #include "gs_command_budget.h"
 #include "gs_core.h"
+#include "gs_frame_mask.h"
 #include "gs_native_queue.h"
 #include "gs_render_target_layout.h"
 #include "gs_state_shadow.h"
@@ -68,7 +69,7 @@ static uint32_t s_shared_clut_staging[256] __attribute__((aligned(64)));
 static uint32_t s_retired_vram_count;
 static bool s_frame_building;
 static bool s_depth_update = true;
-static bool s_color_write = true;
+static uint8_t s_color_write_channels = PS2_GS_COLOR_WRITE_RGB;
 static bool s_alpha_write = true;
 static bool s_framebuffer_alpha_force;
 static bool s_texture_alpha;
@@ -362,23 +363,10 @@ static uint32_t ps2GsCoreFrameMask(void)
     if (!s_gs) {
         return 0;
     }
-    if (!s_color_write) {
-        return 0xffffffffu;
-    }
-    if (s_alpha_write) {
-        return 0;
-    }
-
-    switch (ps2GsCoreTargetPsm()) {
-        case PS2_GS_PSM_CT32:
-            return 0xff000000u;
-        case PS2_GS_PSM_CT16:
-        case PS2_GS_PSM_CT16S:
-            /* FRAME mask bit 31 maps to the converted CT16 alpha bit. */
-            return 0x80000000u;
-        default:
-            return 0;
-    }
+    const int psm = ps2GsCoreTargetPsm();
+    return ps2GsFrameWriteMask(
+        s_color_write_channels, s_alpha_write,
+        psm == PS2_GS_PSM_CT16 || psm == PS2_GS_PSM_CT16S);
 }
 
 static void ps2GsCoreEmitFrameMask(void)
@@ -603,7 +591,7 @@ extern "C" bool ps2GsCoreInit(const struct Ps2GsCreateInfo *info)
     s_gs = gs;
     s_frame_building = false;
     s_depth_update = true;
-    s_color_write = true;
+    s_color_write_channels = PS2_GS_COLOR_WRITE_RGB;
     s_alpha_write = true;
     s_framebuffer_alpha_force = false;
     s_texture_alpha = false;
@@ -972,11 +960,25 @@ extern "C" void ps2GsCoreSetAlphaWrite(bool enable)
 
 extern "C" void ps2GsCoreSetColorWrite(bool enable)
 {
-    if (!s_gs || s_color_write == enable) {
+    const uint8_t channels = enable ? PS2_GS_COLOR_WRITE_RGB : 0u;
+    if (!s_gs || s_color_write_channels == channels) {
         return;
     }
 
-    s_color_write = enable;
+    s_color_write_channels = channels;
+    if (s_frame_building) {
+        ps2GsCoreEmitFrameMask();
+    }
+}
+
+extern "C" void ps2GsCoreSetColorChannelWriteMask(uint8_t channels)
+{
+    channels &= PS2_GS_COLOR_WRITE_RGB;
+    if (!s_gs || s_color_write_channels == channels) {
+        return;
+    }
+
+    s_color_write_channels = channels;
     if (s_frame_building) {
         ps2GsCoreEmitFrameMask();
     }
@@ -2042,12 +2044,14 @@ static bool ps2GsCoreRestoreChannelBlitState(
     return true;
 }
 
-extern "C" bool ps2GsCoreBlitRenderTargetRedToActiveAlpha(
-    Ps2GsRenderTargetHandle source)
+extern "C" bool ps2GsCoreBlitRenderTargetChannelRectToActiveAlpha(
+    Ps2GsRenderTargetHandle source, enum Ps2GsCt32Channel channel,
+    uint32_t width, uint32_t height)
 {
     if (!s_gs || !s_frame_building ||
         s_active_render_target == PS2_GS_RENDER_TARGET_DEFAULT ||
-        source == s_active_render_target) {
+        source == s_active_render_target ||
+        channel > PS2_GS_CT32_CHANNEL_ALPHA) {
         return false;
     }
 
@@ -2059,7 +2063,10 @@ extern "C" bool ps2GsCoreBlitRenderTargetRedToActiveAlpha(
         !source_slot->has_contents || !destination_slot->has_contents ||
         source_slot->layout.width != destination_slot->layout.width ||
         source_slot->layout.height != destination_slot->layout.height ||
-        source_slot->layout.fbw != destination_slot->layout.fbw) {
+        source_slot->layout.fbw != destination_slot->layout.fbw ||
+        width == 0u || height == 0u ||
+        width > source_slot->layout.width ||
+        height > source_slot->layout.height) {
         return false;
     }
 
@@ -2073,9 +2080,9 @@ extern "C" bool ps2GsCoreBlitRenderTargetRedToActiveAlpha(
     const uint32_t saved_scissor_y0 = s_scissor_y0;
     const uint32_t saved_scissor_y1 = s_scissor_y1;
     s_scissor_x0 = 0u;
-    s_scissor_x1 = destination_slot->layout.width - 1u;
+    s_scissor_x1 = width - 1u;
     s_scissor_y0 = 0u;
-    s_scissor_y1 = destination_slot->layout.height - 1u;
+    s_scissor_y1 = height - 1u;
 
     const bool texture_flush = source_slot->texture_cache_dirty;
     const uint32_t setup_register_count = texture_flush ? 7u : 6u;
@@ -2133,9 +2140,8 @@ extern "C" bool ps2GsCoreBlitRenderTargetRedToActiveAlpha(
 
     bool load_clut = s_loaded_clut_vram != shared->vram ||
         s_loaded_clut_psm != GS_PSM_CT32;
-    const uint32_t width = source_slot->layout.width;
-    const uint32_t height = source_slot->layout.height;
     const uint32_t page_rows = (height + 31u) / 32u;
+    const uint32_t page_columns = (width + 63u) / 64u;
     bool success = true;
 
     for (uint32_t page_y = 0u; page_y < page_rows && success; ++page_y) {
@@ -2144,7 +2150,7 @@ extern "C" bool ps2GsCoreBlitRenderTargetRedToActiveAlpha(
             height - destination_y : 32u;
 
         for (uint32_t page_x = 0u;
-             page_x < source_slot->layout.fbw && success; ++page_x) {
+             page_x < page_columns && success; ++page_x) {
             const uint32_t destination_x = page_x * 64u;
             const uint32_t page_width = width - destination_x < 64u ?
                 width - destination_x : 64u;
@@ -2191,8 +2197,12 @@ extern "C" bool ps2GsCoreBlitRenderTargetRedToActiveAlpha(
                         page_width - tile_x : 8u;
                     struct Ps2GsT8PageCoordinate first = {};
                     (void)ps2GsMapCt32PixelChannelToT8Page(
-                        tile_x, y, PS2_GS_CT32_CHANNEL_RED, &first);
-                    const uint32_t raw_tile_x = tile_x * 2u;
+                        tile_x, y, channel, &first);
+                    const bool right_lane =
+                        channel == PS2_GS_CT32_CHANNEL_BLUE ||
+                        channel == PS2_GS_CT32_CHANNEL_ALPHA;
+                    const uint32_t raw_tile_x =
+                        tile_x * 2u + (right_lane ? 8u : 0u);
                     const uint32_t u_xor = first.u - raw_tile_x;
                     const uint32_t x0 = destination_x + tile_x;
                     const uint32_t y0 = destination_y + y;
@@ -2249,4 +2259,20 @@ extern "C" bool ps2GsCoreBlitRenderTargetRedToActiveAlpha(
     ps2GsStateShadowInvalidate(&s_state_shadow, PS2_GS_STATE_TEX1);
     ps2GsStateShadowInvalidate(&s_state_shadow, PS2_GS_STATE_PRIM);
     return success && restored;
+}
+
+extern "C" bool ps2GsCoreBlitRenderTargetChannelToActiveAlpha(
+    Ps2GsRenderTargetHandle source, enum Ps2GsCt32Channel channel)
+{
+    struct Ps2GsRenderTargetSlot *slot =
+        ps2GsCoreRenderTargetSlot(source);
+    return slot && ps2GsCoreBlitRenderTargetChannelRectToActiveAlpha(
+        source, channel, slot->layout.width, slot->layout.height);
+}
+
+extern "C" bool ps2GsCoreBlitRenderTargetRedToActiveAlpha(
+    Ps2GsRenderTargetHandle source)
+{
+    return ps2GsCoreBlitRenderTargetChannelToActiveAlpha(
+        source, PS2_GS_CT32_CHANNEL_RED);
 }

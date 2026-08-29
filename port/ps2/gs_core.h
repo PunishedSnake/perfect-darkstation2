@@ -5,6 +5,8 @@
 #include <stdint.h>
 
 #include "gs_alpha_equation.h"
+#include "gs_frame_mask.h"
+#include "gs_render_target_layout.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -106,9 +108,11 @@ void ps2GsCoreSetDepthMode(bool depth_test, bool depth_update, bool depth_compar
 void ps2GsCoreSetAlphaBlend(bool enable);
 void ps2GsCoreSetAlphaBlendEquation(
     enum Ps2GsAlphaBlendEquation equation);
-/* Mask every framebuffer lane while preserving depth test/write submission. */
+/* Mask all RGB lanes while preserving alpha and depth submission. */
 void ps2GsCoreSetColorWrite(bool enable);
-/* Preserve framebuffer alpha while RGB is accumulated by a multipass draw. */
+/* Select independent CT32 RGB lanes for channel-wise RDP reconstruction. */
+void ps2GsCoreSetColorChannelWriteMask(uint8_t channels);
+/* Mask alpha independently while preserving RGB and depth submission. */
 void ps2GsCoreSetAlphaWrite(bool enable);
 void ps2GsCoreSetAlphaTest(bool enable, uint8_t reference);
 void ps2GsCoreSetAlphaTestComparison(bool enable, uint8_t reference,
@@ -153,10 +157,16 @@ bool ps2GsCoreDrawRenderTargetAlphaTriangles(
     bool linear_filter);
 
 /*
- * Copy the red byte of a completed CT32 source into the alpha byte of the
+ * Copy one byte lane of a completed CT32 source into the alpha byte of the
  * active CT32 transient target. RGB is preserved and source/destination must
- * be distinct, initialized targets with identical dimensions.
+ * be distinct, initialized targets with identical dimensions. Rect copies
+ * cover the upper-left dirty region and avoid shuffling untouched tile pages.
  */
+bool ps2GsCoreBlitRenderTargetChannelToActiveAlpha(
+    Ps2GsRenderTargetHandle source, enum Ps2GsCt32Channel channel);
+bool ps2GsCoreBlitRenderTargetChannelRectToActiveAlpha(
+    Ps2GsRenderTargetHandle source, enum Ps2GsCt32Channel channel,
+    uint32_t width, uint32_t height);
 bool ps2GsCoreBlitRenderTargetRedToActiveAlpha(
     Ps2GsRenderTargetHandle source);
 

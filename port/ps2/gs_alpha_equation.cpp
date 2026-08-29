@@ -17,6 +17,10 @@ extern "C" bool ps2GsDescribeAlphaBlendEquation(
             /* (0 - Cs) * As + Cs == Cs * (1 - As) */
             *factors = { 2u, 0u, 0u, 0u, 0u };
             return true;
+        case PS2_GS_ALPHA_BLEND_DESTINATION_ALPHA_LERP:
+            /* (Cs - Cd) * Ad + Cd */
+            *factors = { 0u, 1u, 1u, 1u, 0u };
+            return true;
         default:
             return false;
     }

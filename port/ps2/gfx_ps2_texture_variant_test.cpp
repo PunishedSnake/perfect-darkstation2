@@ -6,6 +6,20 @@
 
 int main(void)
 {
+    const uint8_t monochrome32[] = {
+        0u, 0u, 0u, 255u, 91u, 91u, 91u, 37u,
+    };
+    const uint8_t colored32[] = { 1u, 2u, 1u, 255u };
+    assert(gfxPs2Rgba32IsMonochrome(monochrome32, 2u));
+    assert(!gfxPs2Rgba32IsMonochrome(colored32, 1u));
+    assert(!gfxPs2Rgba32IsMonochrome(NULL, 1u));
+
+    const uint8_t monochrome16[] = { 0xffu, 0xffu, 0x84u, 0x21u };
+    const uint8_t colored16[] = { 0xf8u, 0x01u };
+    assert(gfxPs2N64Rgba16IsMonochrome(monochrome16, 2u));
+    assert(!gfxPs2N64Rgba16IsMonochrome(colored16, 1u));
+    assert(!gfxPs2N64Rgba16IsMonochrome(NULL, 1u));
+
     assert(gfxPs2TextureMirrorVariant(0u, 0u) == 0u);
     assert(gfxPs2TextureMirrorVariant(1u, 0u) == 1u);
     assert(gfxPs2TextureMirrorVariant(0u, 1u) == 2u);

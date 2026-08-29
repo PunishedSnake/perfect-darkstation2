@@ -20,6 +20,42 @@ static inline uint8_t gfxPs2TextureMirrorVariant(uint8_t cms, uint8_t cmt)
     return mirror_s | mirror_t;
 }
 
+/* Exact runtime proof used to select the one-channel material graph. */
+static inline bool gfxPs2Rgba32IsMonochrome(
+    const uint8_t *rgba32, uint32_t texel_count)
+{
+    if (!rgba32 && texel_count != 0u) {
+        return false;
+    }
+    for (uint32_t i = 0u; i < texel_count; ++i) {
+        const uint8_t *texel = &rgba32[i * 4u];
+        if (texel[0] != texel[1] || texel[0] != texel[2]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static inline bool gfxPs2N64Rgba16IsMonochrome(
+    const uint8_t *rgba5551_be, uint32_t texel_count)
+{
+    if (!rgba5551_be && texel_count != 0u) {
+        return false;
+    }
+    for (uint32_t i = 0u; i < texel_count; ++i) {
+        const uint16_t texel =
+            ((uint16_t)rgba5551_be[i * 2u] << 8u) |
+            rgba5551_be[i * 2u + 1u];
+        const uint16_t r = (texel >> 11u) & 0x1fu;
+        const uint16_t g = (texel >> 6u) & 0x1fu;
+        const uint16_t b = (texel >> 1u) & 0x1fu;
+        if (r != g || r != b) {
+            return false;
+        }
+    }
+    return true;
+}
+
 /* Decode Fast3D's normalized last-texel-centre clamp into GS texel bounds. */
 static inline bool gfxPs2TextureRegionClampMax(
     float normalized_bound, uint32_t logical_extent, uint16_t *maximum)

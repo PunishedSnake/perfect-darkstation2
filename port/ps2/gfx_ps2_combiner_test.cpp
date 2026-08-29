@@ -45,6 +45,15 @@ static void set_input1_tex0_lerp(struct CombinerBuilder *builder,
     builder->c[cycle][channel][3] = SHADER_INPUT_1;
 }
 
+static void set_tex0_factor_lerp(struct CombinerBuilder *builder,
+    uint8_t cycle, uint8_t channel)
+{
+    builder->c[cycle][channel][0] = SHADER_INPUT_1;
+    builder->c[cycle][channel][1] = SHADER_INPUT_2;
+    builder->c[cycle][channel][2] = SHADER_TEXEL0;
+    builder->c[cycle][channel][3] = SHADER_INPUT_2;
+}
+
 static struct CCFeatures decode(const struct CombinerBuilder *builder)
 {
     uint64_t shader_id0 = 0;
@@ -464,6 +473,43 @@ static void test_alpha_env_tex0_lerp_remains_unsupported(void)
     assert(!result.supported);
 }
 
+static void test_blendia_tex0_factor_pass_graph(void)
+{
+    struct CombinerBuilder builder{};
+    builder.options = SHADER_OPT_2CYC | SHADER_OPT_ALPHA |
+        SHADER_OPT_FOG;
+    set_tex0_factor_lerp(&builder, 1u, 0u);
+    set_multiply(
+        &builder, 1u, 1u, SHADER_TEXEL0, SHADER_INPUT_1);
+
+    const struct Ps2CombinerPlan result = plan(&builder);
+    assert(result.supported);
+    assert(result.color_recipe ==
+        PS2_COLOR_INPUT2_INPUT1_LERP_TEX0);
+    assert(result.alpha_recipe == PS2_ALPHA_TEX0_MUL_INPUT1);
+    assert(result.pass_graph == PS2_PASS_GRAPH_TEX0_FACTOR_LERP);
+    assert(result.texture_alpha);
+}
+
+static void test_custom27_tex0_factor_pass_graph(void)
+{
+    struct CombinerBuilder builder{};
+    builder.options = SHADER_OPT_ALPHA;
+    set_tex0_factor_lerp(&builder, 0u, 0u);
+    set_tex0_factor_lerp(&builder, 0u, 1u);
+
+    const struct Ps2CombinerPlan result = plan(&builder);
+    assert(result.supported);
+    assert(result.color_recipe ==
+        PS2_COLOR_INPUT2_INPUT1_LERP_TEX0);
+    assert(result.alpha_recipe ==
+        PS2_ALPHA_INPUT2_INPUT1_LERP_TEX0);
+    assert(result.pass_graph == PS2_PASS_GRAPH_TEX0_FACTOR_LERP);
+
+    builder.c[0][1][3] = SHADER_INPUT_1;
+    assert(!plan(&builder).supported);
+}
+
 static void test_opaque_output_ignores_alpha_dependency(void)
 {
     struct CombinerBuilder builder{};
@@ -517,6 +563,8 @@ int main(void)
     test_opaque_env_tex0_lerp_modulate();
     test_opaque_env_tex0_lerp_pass2();
     test_alpha_env_tex0_lerp_remains_unsupported();
+    test_blendia_tex0_factor_pass_graph();
+    test_custom27_tex0_factor_pass_graph();
     test_opaque_output_ignores_alpha_dependency();
     test_rejects_unmapped_state_and_alpha_only_texture();
     puts("gfx_ps2_combiner tests passed");
