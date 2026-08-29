@@ -206,7 +206,7 @@ static bool ps2_plan_opaque_tex01_lerp(const struct CCFeatures *f,
 static bool ps2_plan_alpha_tex01_lerp_modulate(
     const struct CCFeatures *f, struct Ps2CombinerPlan *plan)
 {
-    if (!f->opt_2cyc || !f->opt_alpha || f->opt_fog ||
+    if (!f->opt_2cyc || !f->opt_alpha ||
         f->opt_texture_edge || f->opt_invisible ||
         !ps2_is_tex01_lerp_cycle(f) ||
         !ps2_is_tex01_alpha_lerp_cycle(f)) {

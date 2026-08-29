@@ -97,6 +97,13 @@ jobs:
 
           g++ -std=c++20 -Wall -Wextra -Werror \
             -Iport/ps2 \
+            port/ps2/gs_state_shadow.cpp \
+            port/ps2/gs_state_shadow_test.cpp \
+            -o /tmp/gs_state_shadow_test
+          /tmp/gs_state_shadow_test
+
+          g++ -std=c++20 -Wall -Wextra -Werror \
+            -Iport/ps2 \
             port/ps2/gs_vram_allocator.cpp \
             port/ps2/gs_vram_allocator_test.cpp \
             -o /tmp/gs_vram_allocator_test

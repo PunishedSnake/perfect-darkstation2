@@ -9,6 +9,7 @@
 #include "gs_core.h"
 #include "gs_native_queue.h"
 #include "gs_render_target_layout.h"
+#include "gs_state_shadow.h"
 #include "gs_texture_convert.h"
 #include "gs_vram_allocator.h"
 #include "log_ps2.h"
@@ -86,6 +87,7 @@ static uint32_t s_scissor_x0;
 static uint32_t s_scissor_x1;
 static uint32_t s_scissor_y0;
 static uint32_t s_scissor_y1;
+static struct Ps2GsStateShadow s_state_shadow;
 
 static_assert(sizeof(Ps2GsColorVertex) == sizeof(GSPRIMPOINT),
     "packet-ready color vertex must match current gsKit A+D source layout");
@@ -241,6 +243,7 @@ static void ps2GsCoreInvalidateClutCache(void)
 {
     s_loaded_clut_vram = UINT32_MAX;
     s_loaded_clut_psm = -1;
+    ps2GsStateShadowInvalidate(&s_state_shadow, PS2_GS_STATE_TEX0);
 }
 
 static struct Ps2GsPackedReg *ps2GsCoreReserve(uint32_t register_count)
@@ -300,6 +303,21 @@ static void ps2GsCoreWriteReg(struct Ps2GsPackedReg *dst, uint64_t value, uint64
     dst->reg = reg;
 }
 
+static void ps2GsCoreEmitCachedState(enum Ps2GsStateSlot slot,
+    uint64_t value, uint64_t reg)
+{
+    if (!ps2GsStateShadowNeedsWrite(&s_state_shadow, slot, value)) {
+        return;
+    }
+
+    struct Ps2GsPackedReg *p = ps2GsCoreReserve(1u);
+    if (!p) {
+        return;
+    }
+    ps2GsCoreWriteReg(p, value, reg);
+    ps2GsStateShadowCommit(&s_state_shadow, slot, value);
+}
+
 static uint64_t ps2GsCoreCurrentTestValue(int ztst_override)
 {
     const int ztst = ztst_override >= 0 ? ztst_override : s_gs->Test->ZTST;
@@ -318,12 +336,10 @@ static uint64_t ps2GsCoreCurrentTestValue(int ztst_override)
 
 static void ps2GsCoreEmitTest(void)
 {
-    struct Ps2GsPackedReg *p = ps2GsCoreReserve(1);
-    if (p) {
-        ps2GsCoreWriteReg(p,
-            ps2GsCoreCurrentTestValue(-1),
-            GS_TEST_1 + s_gs->PrimContext);
-    }
+    ps2GsCoreEmitCachedState(
+        PS2_GS_STATE_TEST,
+        ps2GsCoreCurrentTestValue(-1),
+        GS_TEST_1 + s_gs->PrimContext);
 }
 
 static void ps2GsCoreEmitZbufWriteMask(void)
@@ -333,12 +349,12 @@ static void ps2GsCoreEmitZbufWriteMask(void)
         return;
     }
 
-    struct Ps2GsPackedReg *p = ps2GsCoreReserve(1);
-    if (p) {
-        ps2GsCoreWriteReg(p,
-            GS_SETREG_ZBUF(s_gs->ZBuffer / 8192, s_gs->PSMZ, s_depth_update ? 0 : 1),
-            GS_ZBUF_1 + s_gs->PrimContext);
-    }
+    ps2GsCoreEmitCachedState(
+        PS2_GS_STATE_ZBUF,
+        GS_SETREG_ZBUF(
+            s_gs->ZBuffer / 8192, s_gs->PSMZ,
+            s_depth_update ? 0 : 1),
+        GS_ZBUF_1 + s_gs->PrimContext);
 }
 
 static uint32_t ps2GsCoreFrameMask(void)
@@ -367,12 +383,12 @@ static uint32_t ps2GsCoreFrameMask(void)
 
 static void ps2GsCoreEmitFrameMask(void)
 {
-    struct Ps2GsPackedReg *p = ps2GsCoreReserve(1);
-    if (!p || !s_gs) {
+    if (!s_gs) {
         return;
     }
 
-    ps2GsCoreWriteReg(p,
+    ps2GsCoreEmitCachedState(
+        PS2_GS_STATE_FRAME,
         GS_SETREG_FRAME_1(
             ps2GsCoreTargetVram() / PS2_GS_FRAMEBUFFER_ALIGNMENT,
             ps2GsCoreTargetFbw(),
@@ -383,9 +399,9 @@ static void ps2GsCoreEmitFrameMask(void)
 
 static void ps2GsCoreEmitFramebufferAlphaForce(void)
 {
-    struct Ps2GsPackedReg *p = ps2GsCoreReserve(1);
-    if (p && s_gs) {
-        ps2GsCoreWriteReg(p,
+    if (s_gs) {
+        ps2GsCoreEmitCachedState(
+            PS2_GS_STATE_FBA,
             s_framebuffer_alpha_force ? 1u : 0u,
             GS_FBA_1 + s_gs->PrimContext);
     }
@@ -397,13 +413,37 @@ static void ps2GsCoreEmitAlpha(void)
         return;
     }
 
-    struct Ps2GsPackedReg *p = ps2GsCoreReserve(2);
-    if (!p) {
+    const uint64_t values[2] = { s_gs->PABE, s_gs->PrimAlpha };
+    const uint64_t registers[2] = {
+        GS_PABE, GS_ALPHA_1 + s_gs->PrimContext,
+    };
+    const enum Ps2GsStateSlot slots[2] = {
+        PS2_GS_STATE_PABE, PS2_GS_STATE_ALPHA,
+    };
+    bool emit[2] = {
+        ps2GsStateShadowNeedsWrite(
+            &s_state_shadow, slots[0], values[0]),
+        ps2GsStateShadowNeedsWrite(
+            &s_state_shadow, slots[1], values[1]),
+    };
+    const uint32_t register_count =
+        (emit[0] ? 1u : 0u) + (emit[1] ? 1u : 0u);
+    if (register_count == 0u) {
         return;
     }
 
-    ps2GsCoreWriteReg(&p[0], s_gs->PABE, GS_PABE);
-    ps2GsCoreWriteReg(&p[1], s_gs->PrimAlpha, GS_ALPHA_1 + s_gs->PrimContext);
+    struct Ps2GsPackedReg *p = ps2GsCoreReserve(register_count);
+    if (!p) {
+        return;
+    }
+    uint32_t out = 0u;
+    for (uint32_t i = 0u; i < 2u; ++i) {
+        if (emit[i]) {
+            ps2GsCoreWriteReg(&p[out++], values[i], registers[i]);
+            ps2GsStateShadowCommit(
+                &s_state_shadow, slots[i], values[i]);
+        }
+    }
 }
 
 static void ps2GsCoreEmitFogColor(void)
@@ -412,53 +452,49 @@ static void ps2GsCoreEmitFogColor(void)
         return;
     }
 
-    struct Ps2GsPackedReg *p = ps2GsCoreReserve(1);
-    if (p) {
-        ps2GsCoreWriteReg(p,
-            (uint64_t)s_fog_r | ((uint64_t)s_fog_g << 8) | ((uint64_t)s_fog_b << 16),
-            GS_FOGCOL);
-    }
+    ps2GsCoreEmitCachedState(
+        PS2_GS_STATE_FOGCOL,
+        (uint64_t)s_fog_r |
+            ((uint64_t)s_fog_g << 8) |
+            ((uint64_t)s_fog_b << 16),
+        GS_FOGCOL);
 }
 
 static void ps2GsCoreEmitClamp(void)
 {
-    struct Ps2GsPackedReg *p = ps2GsCoreReserve(1);
-    if (p) {
-        ps2GsCoreWriteReg(p,
-            GS_SETREG_CLAMP(
-                s_gs->Clamp->WMS,
-                s_gs->Clamp->WMT,
-                s_gs->Clamp->MINU,
-                s_gs->Clamp->MAXU,
-                s_gs->Clamp->MINV,
-                s_gs->Clamp->MAXV),
-            GS_CLAMP_1 + s_gs->PrimContext);
-    }
+    ps2GsCoreEmitCachedState(
+        PS2_GS_STATE_CLAMP,
+        GS_SETREG_CLAMP(
+            s_gs->Clamp->WMS,
+            s_gs->Clamp->WMT,
+            s_gs->Clamp->MINU,
+            s_gs->Clamp->MAXU,
+            s_gs->Clamp->MINV,
+            s_gs->Clamp->MAXV),
+        GS_CLAMP_1 + s_gs->PrimContext);
 }
 
 static void ps2GsCoreEmitTextureAlphaExpansion(void)
 {
-    struct Ps2GsPackedReg *p = ps2GsCoreReserve(1);
-    if (p) {
-        /*
-         * Expand the one-bit alpha of PSMCT16 to 0xff. This deliberately
-         * matches RGBA32 texel alpha, preserving the adapter's 0x40 fragment
-         * compensation for GS MODULATE across both resident formats.
-         */
-        ps2GsCoreWriteReg(p, GS_SETREG_TEXA(0x00, 0, 0xff), GS_TEXA);
-    }
+    /*
+     * Expand the one-bit alpha of PSMCT16 to 0xff. This deliberately matches
+     * RGBA32 texel alpha, preserving the adapter's 0x40 fragment compensation
+     * for GS MODULATE across both resident formats.
+     */
+    ps2GsCoreEmitCachedState(
+        PS2_GS_STATE_TEXA,
+        GS_SETREG_TEXA(0x00, 0, 0xff),
+        GS_TEXA);
 }
 
 static void ps2GsCoreEmitScissor(void)
 {
-    struct Ps2GsPackedReg *p = ps2GsCoreReserve(1);
-    if (p) {
-        ps2GsCoreWriteReg(p,
-            GS_SETREG_SCISSOR(
-                s_scissor_x0, s_scissor_x1,
-                s_scissor_y0, s_scissor_y1),
-            GS_SCISSOR_1 + s_gs->PrimContext);
-    }
+    ps2GsCoreEmitCachedState(
+        PS2_GS_STATE_SCISSOR,
+        GS_SETREG_SCISSOR(
+            s_scissor_x0, s_scissor_x1,
+            s_scissor_y0, s_scissor_y1),
+        GS_SCISSOR_1 + s_gs->PrimContext);
 }
 
 static void ps2GsCoreSetFullScissor(void)
@@ -585,6 +621,7 @@ extern "C" bool ps2GsCoreInit(const struct Ps2GsCreateInfo *info)
     s_scissor_x1 = (uint32_t)gs->Width - 1u;
     s_scissor_y0 = 0u;
     s_scissor_y1 = (uint32_t)gs->Height - 1u;
+    ps2GsStateShadowReset(&s_state_shadow);
     memset(s_textures, 0, sizeof(s_textures));
     memset(s_render_targets, 0, sizeof(s_render_targets));
     memset(s_retired_vram, 0, sizeof(s_retired_vram));
@@ -771,6 +808,10 @@ extern "C" void ps2GsCorePresent(void)
         s_scissor_x1 = (uint32_t)s_gs->Width - 1u;
         s_scissor_y0 = 0u;
         s_scissor_y1 = (uint32_t)s_gs->Height - 1u;
+        ps2GsStateShadowInvalidate(
+            &s_state_shadow, PS2_GS_STATE_FRAME);
+        ps2GsStateShadowInvalidate(
+            &s_state_shadow, PS2_GS_STATE_SCISSOR);
     }
 }
 
@@ -797,20 +838,22 @@ extern "C" void ps2GsCoreClear(bool clear_color, bool clear_depth)
     }
 
     uint32_t out = 0;
+    const uint64_t restored_test = ps2GsCoreCurrentTestValue(-1);
+    const uint64_t clear_prim = GS_SETREG_PRIM(
+        GS_PRIM_PRIM_SPRITE,
+        0,
+        0,
+        0,
+        s_gs->PrimAlphaEnable,
+        s_gs->PrimAAEnable,
+        0,
+        s_gs->PrimContext,
+        0);
     ps2GsCoreWriteReg(&p[out++],
         ps2GsCoreCurrentTestValue(1),
         GS_TEST_1 + s_gs->PrimContext);
     ps2GsCoreWriteReg(&p[out++],
-        GS_SETREG_PRIM(
-            GS_PRIM_PRIM_SPRITE,
-            0,
-            0,
-            0,
-            s_gs->PrimAlphaEnable,
-            s_gs->PrimAAEnable,
-            0,
-            s_gs->PrimContext,
-            0),
+        clear_prim,
         GS_PRIM);
     ps2GsCoreWriteReg(&p[out++],
         GS_SETREG_RGBAQ(0x00, 0x00, 0x00, 0x80, 0x00),
@@ -829,8 +872,12 @@ extern "C" void ps2GsCoreClear(bool clear_color, bool clear_depth)
     }
 
     ps2GsCoreWriteReg(&p[out++],
-        ps2GsCoreCurrentTestValue(-1),
+        restored_test,
         GS_TEST_1 + s_gs->PrimContext);
+    ps2GsStateShadowCommit(
+        &s_state_shadow, PS2_GS_STATE_TEST, restored_test);
+    ps2GsStateShadowCommit(
+        &s_state_shadow, PS2_GS_STATE_PRIM, clear_prim);
     ps2GsCoreMarkActiveRenderTargetWritten();
 }
 
@@ -1714,26 +1761,32 @@ extern "C" void ps2GsCoreDrawColorTriangles(const struct Ps2GsColorVertex *verti
         return;
     }
 
-    const uint32_t register_count = 1u + vertex_count * 2u;
+    const uint64_t prim = GS_SETREG_PRIM(
+        GS_PRIM_PRIM_TRIANGLE,
+        1,
+        0,
+        s_gs->PrimFogEnable,
+        s_gs->PrimAlphaEnable,
+        s_gs->PrimAAEnable,
+        0,
+        s_gs->PrimContext,
+        0);
+    const bool emit_prim = ps2GsStateShadowNeedsWrite(
+        &s_state_shadow, PS2_GS_STATE_PRIM, prim);
+    const uint32_t register_count =
+        (emit_prim ? 1u : 0u) + vertex_count * 2u;
     struct Ps2GsPackedReg *p = ps2GsCoreReserve(register_count);
     if (!p) {
         return;
     }
 
-    ps2GsCoreWriteReg(&p[0],
-        GS_SETREG_PRIM(
-            GS_PRIM_PRIM_TRIANGLE,
-            1,
-            0,
-            s_gs->PrimFogEnable,
-            s_gs->PrimAlphaEnable,
-            s_gs->PrimAAEnable,
-            0,
-            s_gs->PrimContext,
-            0),
-        GS_PRIM);
-
-    memcpy(&p[1], vertices, (size_t)vertex_count * sizeof(*vertices));
+    uint32_t out = 0u;
+    if (emit_prim) {
+        ps2GsCoreWriteReg(&p[out++], prim, GS_PRIM);
+        ps2GsStateShadowCommit(
+            &s_state_shadow, PS2_GS_STATE_PRIM, prim);
+    }
+    memcpy(&p[out], vertices, (size_t)vertex_count * sizeof(*vertices));
     ps2GsCoreMarkActiveRenderTargetWritten();
 }
 
@@ -1754,7 +1807,42 @@ static bool ps2GsCoreDrawTexturedTrianglesInternal(GSTEXTURE *tex,
         ps2GsCoreTextureExponent(tex->Width);
     const int th = target_view ? target_view->th :
         ps2GsCoreTextureExponent(tex->Height);
-    const uint32_t register_count = 3u + vertex_count * 3u +
+    const uint64_t tex1 = GS_SETREG_TEX1(
+        0, 0, tex->Filter, tex->Filter, 0, 0, 0);
+    const uint64_t tex0 = GS_SETREG_TEX0(
+        tex->Vram / 256,
+        tex->TBW,
+        tex->PSM,
+        tw,
+        th,
+        s_texture_alpha ? 1 : 0,
+        0,
+        indexed ? tex->VramClut / 256u : 0u,
+        indexed ? tex->ClutPSM : 0u,
+        indexed ? tex->ClutStorageMode : 0u,
+        0,
+        load_clut ? GS_CLUT_STOREMODE_LOAD : GS_CLUT_STOREMODE_NOLOAD);
+    const uint64_t prim = GS_SETREG_PRIM(
+        GS_PRIM_PRIM_TRIANGLE,
+        1,
+        1,
+        s_gs->PrimFogEnable,
+        s_gs->PrimAlphaEnable,
+        s_gs->PrimAAEnable,
+        0,
+        s_gs->PrimContext,
+        0);
+    const bool emit_tex1 = ps2GsStateShadowNeedsWrite(
+        &s_state_shadow, PS2_GS_STATE_TEX1, tex1);
+    const bool emit_tex0 = ps2GsStateShadowNeedsWrite(
+        &s_state_shadow, PS2_GS_STATE_TEX0, tex0);
+    const bool emit_prim = ps2GsStateShadowNeedsWrite(
+        &s_state_shadow, PS2_GS_STATE_PRIM, prim);
+    const uint32_t state_register_count =
+        (emit_tex1 ? 1u : 0u) +
+        (emit_tex0 ? 1u : 0u) +
+        (emit_prim ? 1u : 0u);
+    const uint32_t register_count = state_register_count + vertex_count * 3u +
         (texture_flush ? 1u : 0u) + (target_view ? 2u : 0u);
     struct Ps2GsPackedReg *p = ps2GsCoreReserve(register_count);
     if (!p) {
@@ -1765,24 +1853,18 @@ static bool ps2GsCoreDrawTexturedTrianglesInternal(GSTEXTURE *tex,
     if (texture_flush) {
         ps2GsCoreWriteReg(&p[out++], 0u, GS_TEXFLUSH);
     }
-    ps2GsCoreWriteReg(&p[out++],
-        GS_SETREG_TEX1(0, 0, tex->Filter, tex->Filter, 0, 0, 0),
-        GS_TEX1_1 + s_gs->PrimContext);
-    ps2GsCoreWriteReg(&p[out++],
-        GS_SETREG_TEX0(
-            tex->Vram / 256,
-            tex->TBW,
-            tex->PSM,
-            tw,
-            th,
-            s_texture_alpha ? 1 : 0,
-            0,
-            indexed ? tex->VramClut / 256u : 0u,
-            indexed ? tex->ClutPSM : 0u,
-            indexed ? tex->ClutStorageMode : 0u,
-            0,
-            load_clut ? GS_CLUT_STOREMODE_LOAD : GS_CLUT_STOREMODE_NOLOAD),
-        GS_TEX0_1 + s_gs->PrimContext);
+    if (emit_tex1) {
+        ps2GsCoreWriteReg(
+            &p[out++], tex1, GS_TEX1_1 + s_gs->PrimContext);
+        ps2GsStateShadowCommit(
+            &s_state_shadow, PS2_GS_STATE_TEX1, tex1);
+    }
+    if (emit_tex0) {
+        ps2GsCoreWriteReg(
+            &p[out++], tex0, GS_TEX0_1 + s_gs->PrimContext);
+        ps2GsStateShadowCommit(
+            &s_state_shadow, PS2_GS_STATE_TEX0, tex0);
+    }
     if (target_view) {
         ps2GsCoreWriteReg(&p[out++],
             GS_SETREG_CLAMP(
@@ -1794,18 +1876,11 @@ static bool ps2GsCoreDrawTexturedTrianglesInternal(GSTEXTURE *tex,
                 target_view->clamp_max_v),
             GS_CLAMP_1 + s_gs->PrimContext);
     }
-    ps2GsCoreWriteReg(&p[out++],
-        GS_SETREG_PRIM(
-            GS_PRIM_PRIM_TRIANGLE,
-            1,
-            1,
-            s_gs->PrimFogEnable,
-            s_gs->PrimAlphaEnable,
-            s_gs->PrimAAEnable,
-            0,
-            s_gs->PrimContext,
-            0),
-        GS_PRIM);
+    if (emit_prim) {
+        ps2GsCoreWriteReg(&p[out++], prim, GS_PRIM);
+        ps2GsStateShadowCommit(
+            &s_state_shadow, PS2_GS_STATE_PRIM, prim);
+    }
 
     memcpy(&p[out], vertices, (size_t)vertex_count * sizeof(*vertices));
     out += vertex_count * 3u;
@@ -1920,34 +1995,50 @@ static bool ps2GsCoreRestoreChannelBlitState(
     s_scissor_y0 = scissor_y0;
     s_scissor_y1 = scissor_y1;
 
+    const uint64_t frame = GS_SETREG_FRAME_1(
+        ps2GsCoreTargetVram() / PS2_GS_FRAMEBUFFER_ALIGNMENT,
+        ps2GsCoreTargetFbw(),
+        ps2GsCoreTargetPsm(),
+        ps2GsCoreFrameMask());
+    const uint64_t scissor = GS_SETREG_SCISSOR(
+        s_scissor_x0, s_scissor_x1,
+        s_scissor_y0, s_scissor_y1);
+    const uint64_t test = ps2GsCoreCurrentTestValue(-1);
+    const uint64_t clamp = GS_SETREG_CLAMP(
+        s_gs->Clamp->WMS,
+        s_gs->Clamp->WMT,
+        s_gs->Clamp->MINU,
+        s_gs->Clamp->MAXU,
+        s_gs->Clamp->MINV,
+        s_gs->Clamp->MAXV);
     struct Ps2GsPackedReg *p = ps2GsCoreReserveChunk(4u);
     if (!p) {
+        ps2GsStateShadowInvalidate(
+            &s_state_shadow, PS2_GS_STATE_FRAME);
+        ps2GsStateShadowInvalidate(
+            &s_state_shadow, PS2_GS_STATE_SCISSOR);
+        ps2GsStateShadowInvalidate(
+            &s_state_shadow, PS2_GS_STATE_TEST);
+        ps2GsStateShadowInvalidate(
+            &s_state_shadow, PS2_GS_STATE_CLAMP);
         return false;
     }
-    ps2GsCoreWriteReg(&p[0],
-        GS_SETREG_FRAME_1(
-            ps2GsCoreTargetVram() / PS2_GS_FRAMEBUFFER_ALIGNMENT,
-            ps2GsCoreTargetFbw(),
-            ps2GsCoreTargetPsm(),
-            ps2GsCoreFrameMask()),
-        GS_FRAME_1 + s_gs->PrimContext);
-    ps2GsCoreWriteReg(&p[1],
-        GS_SETREG_SCISSOR(
-            s_scissor_x0, s_scissor_x1,
-            s_scissor_y0, s_scissor_y1),
-        GS_SCISSOR_1 + s_gs->PrimContext);
-    ps2GsCoreWriteReg(&p[2],
-        ps2GsCoreCurrentTestValue(-1),
-        GS_TEST_1 + s_gs->PrimContext);
-    ps2GsCoreWriteReg(&p[3],
-        GS_SETREG_CLAMP(
-            s_gs->Clamp->WMS,
-            s_gs->Clamp->WMT,
-            s_gs->Clamp->MINU,
-            s_gs->Clamp->MAXU,
-            s_gs->Clamp->MINV,
-            s_gs->Clamp->MAXV),
-        GS_CLAMP_1 + s_gs->PrimContext);
+    ps2GsCoreWriteReg(
+        &p[0], frame, GS_FRAME_1 + s_gs->PrimContext);
+    ps2GsCoreWriteReg(
+        &p[1], scissor, GS_SCISSOR_1 + s_gs->PrimContext);
+    ps2GsCoreWriteReg(
+        &p[2], test, GS_TEST_1 + s_gs->PrimContext);
+    ps2GsCoreWriteReg(
+        &p[3], clamp, GS_CLAMP_1 + s_gs->PrimContext);
+    ps2GsStateShadowCommit(
+        &s_state_shadow, PS2_GS_STATE_FRAME, frame);
+    ps2GsStateShadowCommit(
+        &s_state_shadow, PS2_GS_STATE_SCISSOR, scissor);
+    ps2GsStateShadowCommit(
+        &s_state_shadow, PS2_GS_STATE_TEST, test);
+    ps2GsStateShadowCommit(
+        &s_state_shadow, PS2_GS_STATE_CLAMP, clamp);
     return true;
 }
 
@@ -2153,5 +2244,9 @@ extern "C" bool ps2GsCoreBlitRenderTargetRedToActiveAlpha(
     const bool restored = ps2GsCoreRestoreChannelBlitState(
         saved_scissor_x0, saved_scissor_x1,
         saved_scissor_y0, saved_scissor_y1);
+    /* The shuffle leaves these material registers owned by its last page. */
+    ps2GsStateShadowInvalidate(&s_state_shadow, PS2_GS_STATE_TEX0);
+    ps2GsStateShadowInvalidate(&s_state_shadow, PS2_GS_STATE_TEX1);
+    ps2GsStateShadowInvalidate(&s_state_shadow, PS2_GS_STATE_PRIM);
     return success && restored;
 }

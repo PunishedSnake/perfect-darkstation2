@@ -1082,7 +1082,7 @@ static void ps2_make_alpha_trilerp_texture_triangle(
 static void ps2_make_alpha_trilerp_workspace_triangle(
     const struct Ps2AlphaTrilerpVertex *source,
     int origin_x, int origin_y, uint8_t alpha, bool use_vertex_lod,
-    bool screen_position,
+    bool screen_position, bool apply_fog,
     struct Ps2GsTexturedVertex output[3])
 {
     for (uint32_t i = 0u; i < 3u; ++i) {
@@ -1096,10 +1096,11 @@ static void ps2_make_alpha_trilerp_workspace_triangle(
             0x80u, 0x80u, 0x80u,
             use_vertex_lod ? vertex->lod : alpha, 1.0f);
         output[i].st = ps2_pack_st(sample.s, sample.t);
-        output[i].xyz2 = ps2_pack_xyz2(
-            screen_position ? vertex->x : local_x,
-            screen_position ? vertex->y : local_y,
-            vertex->z);
+        const float x = screen_position ? vertex->x : local_x;
+        const float y = screen_position ? vertex->y : local_y;
+        output[i].xyz2 = apply_fog && s_shader->features.opt_fog
+            ? ps2_pack_xyzf2(x, y, vertex->z, vertex->fog)
+            : ps2_pack_xyz2(x, y, vertex->z);
     }
 }
 
@@ -1134,7 +1135,8 @@ static bool ps2_draw_custom24_nonlinear_alpha_tile(
     ps2_make_independent_alpha_texture_triangle(
         triangle, 1, tile->x, tile->y, true, texture1);
     ps2_make_alpha_trilerp_workspace_triangle(
-        triangle, tile->x, tile->y, 0x80u, false, true, composite);
+        triangle, tile->x, tile->y, 0x80u, false, true, false,
+        composite);
     ps2_make_custom24_scalar_triangle(
         triangle, tile->x, tile->y, scalar);
 
@@ -1404,7 +1406,8 @@ static bool ps2_draw_trilerp_independent_alpha_tile(
     ps2_make_independent_alpha_texture_triangle(
         triangle, 1, tile->x, tile->y, true, texture1);
     ps2_make_alpha_trilerp_workspace_triangle(
-        triangle, tile->x, tile->y, 0x80u, false, true, composite);
+        triangle, tile->x, tile->y, 0x80u, false, true, false,
+        composite);
 
     if (!ps2GsCoreBindRenderTarget(s_alpha_trilerp_color_target)) {
         return false;
@@ -1552,11 +1555,14 @@ static bool ps2_draw_alpha_trilerp_tile(
     ps2_make_alpha_trilerp_texture_triangle(
         triangle, 1, tile->x, tile->y, false, true, texture1_color);
     ps2_make_alpha_trilerp_workspace_triangle(
-        triangle, tile->x, tile->y, 0x80u, false, false, alpha_base);
+        triangle, tile->x, tile->y, 0x80u, false, false, false,
+        alpha_base);
     ps2_make_alpha_trilerp_workspace_triangle(
-        triangle, tile->x, tile->y, 0u, true, false, alpha_lerp);
+        triangle, tile->x, tile->y, 0u, true, false, false,
+        alpha_lerp);
     ps2_make_alpha_trilerp_workspace_triangle(
-        triangle, tile->x, tile->y, 0x80u, false, true, composite);
+        triangle, tile->x, tile->y, 0x80u, false, true, true,
+        composite);
 
     ps2GsCoreSetAlphaWrite(true);
     ps2GsCoreSetAlphaTest(false, 0u);
@@ -1630,6 +1636,8 @@ static bool ps2_draw_alpha_trilerp_tile(
             PS2_GFX_ALPHA_THRESHOLD : 0u);
     ps2GsCoreSetTextureAlpha(true);
     ps2GsCoreSetAlphaBlend(s_alpha_blend);
+    ps2GsCoreSetFog(s_shader->features.opt_fog,
+        s_draw_fog_r, s_draw_fog_g, s_draw_fog_b);
     return ps2GsCoreDrawRenderTargetTriangles(
         s_alpha_trilerp_color_target, composite, 3u, false);
 }
