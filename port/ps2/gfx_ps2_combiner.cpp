@@ -511,6 +511,45 @@ static bool ps2_plan_interference(
     return true;
 }
 
+static bool ps2_plan_independent_tex0_alpha(
+    const struct CCFeatures *f, struct Ps2CombinerPlan *plan)
+{
+    if (!f->opt_alpha || f->opt_invisible) {
+        return false;
+    }
+
+    const int color_cycle = ps2_effective_cycle(f, 0u);
+    const int alpha_cycle = ps2_effective_cycle(f, 1u);
+    if (color_cycle < 0 || alpha_cycle < 0) {
+        return false;
+    }
+
+    const enum Ps2ColorRecipe color_recipe =
+        ps2_classify_color_recipe(f, (uint8_t)color_cycle);
+    const enum Ps2AlphaRecipe alpha_recipe =
+        ps2_classify_alpha_recipe(f, (uint8_t)alpha_cycle);
+    if (color_recipe != PS2_COLOR_INPUT1 ||
+        (alpha_recipe != PS2_ALPHA_TEX0 &&
+         alpha_recipe != PS2_ALPHA_TEX0_MUL_INPUT1)) {
+        return false;
+    }
+
+    /*
+     * GS MODULATE cannot consume TEXEL0.a without applying TEXEL0.rgb. Keep
+     * the channels independent in one tiled CT32 target and composite once.
+     */
+    plan->color_cycle = (uint8_t)color_cycle;
+    plan->alpha_cycle = (uint8_t)alpha_cycle;
+    plan->color_recipe = color_recipe;
+    plan->alpha_recipe = alpha_recipe;
+    plan->textured = true;
+    plan->texture_alpha = true;
+    plan->pass_graph = PS2_PASS_GRAPH_INDEPENDENT_TEX0_ALPHA;
+    plan->hardware_validation_required = true;
+    plan->supported = true;
+    return true;
+}
+
 static bool ps2_plan_opaque_input1_tex0_lerp(const struct CCFeatures *f,
     struct Ps2CombinerPlan *plan)
 {
@@ -594,6 +633,10 @@ bool ps2GfxPlanCombiner(const struct CCFeatures *f,
     }
 
     if (ps2_plan_interference(f, plan)) {
+        return true;
+    }
+
+    if (ps2_plan_independent_tex0_alpha(f, plan)) {
         return true;
     }
 

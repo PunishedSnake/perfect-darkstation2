@@ -535,6 +535,35 @@ static void test_interference_pass_graph(void)
     assert(!plan(&builder).supported);
 }
 
+static void test_independent_tex0_alpha_pass_graph(void)
+{
+    struct CombinerBuilder builder{};
+    builder.options = SHADER_OPT_ALPHA | SHADER_OPT_FOG;
+    set_single(&builder, 0u, 0u, SHADER_INPUT_1);
+    set_multiply(
+        &builder, 0u, 1u, SHADER_TEXEL0, SHADER_INPUT_1);
+
+    struct Ps2CombinerPlan result = plan(&builder);
+    assert(result.supported);
+    assert(result.color_recipe == PS2_COLOR_INPUT1);
+    assert(result.alpha_recipe == PS2_ALPHA_TEX0_MUL_INPUT1);
+    assert(result.textured);
+    assert(result.texture_alpha);
+    assert(result.pass_graph ==
+        PS2_PASS_GRAPH_INDEPENDENT_TEX0_ALPHA);
+    assert(result.hardware_validation_required);
+
+    set_single(&builder, 0u, 1u, SHADER_TEXEL0);
+    result = plan(&builder);
+    assert(result.supported);
+    assert(result.alpha_recipe == PS2_ALPHA_TEX0);
+    assert(result.pass_graph ==
+        PS2_PASS_GRAPH_INDEPENDENT_TEX0_ALPHA);
+
+    builder.options |= SHADER_OPT_INVISIBLE;
+    assert(!plan(&builder).supported);
+}
+
 static void test_opaque_output_ignores_alpha_dependency(void)
 {
     struct CombinerBuilder builder{};
@@ -548,18 +577,12 @@ static void test_opaque_output_ignores_alpha_dependency(void)
     assert(result.alpha_recipe == PS2_ALPHA_OPAQUE);
 }
 
-static void test_rejects_unmapped_state_and_alpha_only_texture(void)
+static void test_rejects_unmapped_state(void)
 {
     struct CombinerBuilder builder{};
     builder.options = SHADER_OPT_ALPHA | SHADER_OPT_NOISE;
     set_single(&builder, 0, 0, SHADER_INPUT_1);
     set_single(&builder, 0, 1, SHADER_INPUT_1);
-    assert(!plan(&builder).supported);
-
-    memset(&builder, 0, sizeof(builder));
-    builder.options = SHADER_OPT_ALPHA;
-    set_single(&builder, 0, 0, SHADER_INPUT_1);
-    set_single(&builder, 0, 1, SHADER_TEXEL0);
     assert(!plan(&builder).supported);
 }
 
@@ -591,8 +614,9 @@ int main(void)
     test_blendia_tex0_factor_pass_graph();
     test_custom27_tex0_factor_pass_graph();
     test_interference_pass_graph();
+    test_independent_tex0_alpha_pass_graph();
     test_opaque_output_ignores_alpha_dependency();
-    test_rejects_unmapped_state_and_alpha_only_texture();
+    test_rejects_unmapped_state();
     puts("gfx_ps2_combiner tests passed");
     return 0;
 }

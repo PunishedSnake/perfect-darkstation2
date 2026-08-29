@@ -40,6 +40,8 @@
  *     channel-wise through two tiled CT32 targets for BLENDIA/CUSTOM_27
  *   - TEXEL0 * TEXEL1 * INPUT1, including independent texture alpha,
  *     reconstructed through the same two CT32 targets for INTERFERENCE
+ *   - INPUT1 RGB with TEXEL0 or TEXEL0 * INPUT1 alpha, reconstructed in one
+ *     tiled CT32 target so texture RGB cannot contaminate the color equation
  *
  * Current exact alpha recipes:
  *   - opaque/one/zero
@@ -156,6 +158,17 @@ struct Ps2Tex0FactorLerpVertex {
     uint8_t fog;
 };
 
+struct Ps2IndependentTex0AlphaVertex {
+    float x;
+    float y;
+    float inv_w;
+    float tex_u;
+    float tex_v;
+    int z;
+    uint8_t input[4];
+    uint8_t fog;
+};
+
 struct Ps2InterferenceVertex {
     float x;
     float y;
@@ -214,6 +227,8 @@ static bool s_warned_interference_workspace;
 static bool s_warned_interference_modulate;
 static bool s_logged_interference_scalar;
 static bool s_logged_interference_vector;
+static bool s_warned_independent_tex0_alpha_workspace;
+static bool s_warned_independent_tex0_alpha_modulate;
 static Ps2GsRenderTargetHandle s_alpha_trilerp_color_target;
 static Ps2GsRenderTargetHandle s_alpha_trilerp_scalar_target;
 static uint8_t s_draw_fog_r;
@@ -228,6 +243,8 @@ static struct Ps2AlphaTrilerpVertex
     s_alpha_trilerp_vertices[PS2_GFX_TRANSLATE_VERTS];
 static struct Ps2Tex0FactorLerpVertex
     s_tex0_factor_vertices[PS2_GFX_TRANSLATE_VERTS];
+static struct Ps2IndependentTex0AlphaVertex
+    s_independent_tex0_alpha_vertices[PS2_GFX_TRANSLATE_VERTS];
 static struct Ps2InterferenceVertex
     s_interference_vertices[PS2_GFX_TRANSLATE_VERTS];
 
@@ -951,6 +968,16 @@ static bool ps2_is_trilerp_independent_alpha(
             PS2_ALPHA_TEX0_MUL_INPUT1_MINUS_INPUT2_PLUS_INPUT3_EDGE);
 }
 
+static bool ps2_is_independent_tex0_alpha(
+    const struct Ps2CombinerPlan *plan)
+{
+    return plan &&
+        plan->pass_graph == PS2_PASS_GRAPH_INDEPENDENT_TEX0_ALPHA &&
+        plan->color_recipe == PS2_COLOR_INPUT1 &&
+        (plan->alpha_recipe == PS2_ALPHA_TEX0 ||
+         plan->alpha_recipe == PS2_ALPHA_TEX0_MUL_INPUT1);
+}
+
 static bool ps2_independent_alpha_is_custom24(
     const struct Ps2CombinerPlan *plan)
 {
@@ -1190,6 +1217,7 @@ static void ps2_restore_alpha_trilerp_state(void)
     ps2GsCoreSetColorWrite(true);
     ps2GsCoreSetAlphaWrite(true);
     ps2GsCoreSetAlphaBlend(s_alpha_blend);
+    ps2GsCoreSetFramebufferAlphaForce(false);
     ps2GsCoreSetAlphaTest(
         s_shader && s_shader->features.opt_alpha_threshold,
         s_shader && s_shader->features.opt_alpha_threshold ?
@@ -1198,6 +1226,189 @@ static void ps2_restore_alpha_trilerp_state(void)
     ps2GsCoreSetTextureAlpha(
         s_shader && s_shader->plan.texture_alpha);
     ps2_apply_texture_clamp(0);
+}
+
+static void ps2_make_independent_tex0_alpha_texture_triangle(
+    const struct Ps2IndependentTex0AlphaVertex *source,
+    int origin_x, int origin_y, struct Ps2GsTexturedVertex output[3])
+{
+    for (uint32_t i = 0u; i < 3u; ++i) {
+        const struct Ps2IndependentTex0AlphaVertex *vertex = &source[i];
+        output[i].rgbaq = ps2_pack_rgbaq(
+            0x80u, 0x80u, 0x80u, vertex->input[3], vertex->inv_w);
+        output[i].st = ps2_pack_st(
+            vertex->tex_u * vertex->inv_w,
+            vertex->tex_v * vertex->inv_w);
+        output[i].xyz2 = ps2_pack_xyz2(
+            vertex->x - (float)origin_x,
+            vertex->y - (float)origin_y,
+            vertex->z);
+    }
+}
+
+static void ps2_make_independent_tex0_alpha_color_triangle(
+    const struct Ps2IndependentTex0AlphaVertex *source,
+    int origin_x, int origin_y, struct Ps2GsColorVertex output[3])
+{
+    for (uint32_t i = 0u; i < 3u; ++i) {
+        const struct Ps2IndependentTex0AlphaVertex *vertex = &source[i];
+        output[i].rgbaq = ps2_pack_rgbaq(
+            vertex->input[0], vertex->input[1], vertex->input[2],
+            0x80u, 0.0f);
+        output[i].xyz2 = ps2_pack_xyz2(
+            vertex->x - (float)origin_x,
+            vertex->y - (float)origin_y,
+            vertex->z);
+    }
+}
+
+static void ps2_make_independent_tex0_alpha_composite_triangle(
+    const struct Ps2IndependentTex0AlphaVertex *source,
+    int origin_x, int origin_y, struct Ps2GsTexturedVertex output[3])
+{
+    for (uint32_t i = 0u; i < 3u; ++i) {
+        const struct Ps2IndependentTex0AlphaVertex *vertex = &source[i];
+        const struct Ps2GfxPassGraphSample sample =
+            ps2GfxMapPassGraphSample(
+                vertex->x, vertex->y, origin_x, origin_y);
+        output[i].rgbaq = ps2_pack_rgbaq(
+            0x80u, 0x80u, 0x80u, 0x80u, 1.0f);
+        output[i].st = ps2_pack_st(sample.s, sample.t);
+        output[i].xyz2 = s_shader->features.opt_fog
+            ? ps2_pack_xyzf2(
+                vertex->x, vertex->y, vertex->z, vertex->fog)
+            : ps2_pack_xyz2(vertex->x, vertex->y, vertex->z);
+    }
+}
+
+static bool ps2_draw_independent_tex0_alpha_tile(
+    const struct Ps2IndependentTex0AlphaVertex *triangle,
+    const struct Ps2GfxPassGraphRect *tile)
+{
+    struct Ps2GsTexturedVertex alpha_vertices[3];
+    struct Ps2GsColorVertex color_vertices[3];
+    struct Ps2GsTexturedVertex composite_vertices[3];
+    ps2_make_independent_tex0_alpha_texture_triangle(
+        triangle, tile->x, tile->y, alpha_vertices);
+    ps2_make_independent_tex0_alpha_color_triangle(
+        triangle, tile->x, tile->y, color_vertices);
+    ps2_make_independent_tex0_alpha_composite_triangle(
+        triangle, tile->x, tile->y, composite_vertices);
+
+    if (!ps2GsCoreBindRenderTarget(s_alpha_trilerp_color_target)) {
+        return false;
+    }
+    ps2GsCoreSetAlphaTest(false, 0u);
+    ps2GsCoreSetFog(false, 0u, 0u, 0u);
+    ps2GsCoreSetDepthMode(false, false, false);
+    ps2GsCoreSetAlphaBlend(false);
+    ps2GsCoreSetFramebufferAlphaForce(false);
+    ps2GsCoreSetColorWrite(true);
+    ps2GsCoreSetAlphaWrite(true);
+    ps2GsCoreClear(true, false);
+
+    /* Capture TEXEL0 alpha without allowing its RGB lanes to reach the target. */
+    ps2GsCoreSetColorWrite(false);
+    ps2GsCoreSetTextureAlpha(true);
+    ps2_apply_texture_clamp(0);
+    ps2GsCoreDrawTexturedTriangles(
+        s_selected_texture[0], alpha_vertices, 3u);
+
+    /* Fill the independent INPUT1 RGB equation while preserving target alpha. */
+    ps2GsCoreSetColorWrite(true);
+    ps2GsCoreSetAlphaWrite(false);
+    ps2GsCoreSetTextureAlpha(false);
+    ps2GsCoreDrawColorTriangles(color_vertices, 3u);
+
+    ps2GsCoreBindDefaultRenderTarget();
+    ps2GsCoreSetScissor(tile->x, tile->y, tile->width, tile->height);
+    ps2GsCoreSetDepthMode(s_depth_test, s_depth_update, s_depth_compare);
+    ps2GsCoreSetColorWrite(true);
+    ps2GsCoreSetAlphaWrite(true);
+    const bool texture_edge = s_shader->features.opt_texture_edge;
+    ps2GsCoreSetAlphaTest(
+        texture_edge || s_shader->features.opt_alpha_threshold,
+        texture_edge ? PS2_GFX_TEXTURE_EDGE_THRESHOLD :
+            (s_shader->features.opt_alpha_threshold ?
+                PS2_GFX_ALPHA_THRESHOLD : 0u));
+    ps2GsCoreSetFramebufferAlphaForce(texture_edge);
+    ps2GsCoreSetAlphaBlend(texture_edge ? false : s_alpha_blend);
+    ps2GsCoreSetTextureAlpha(true);
+    ps2GsCoreSetFog(s_shader->features.opt_fog,
+        s_draw_fog_r, s_draw_fog_g, s_draw_fog_b);
+    return ps2GsCoreDrawRenderTargetTriangles(
+        s_alpha_trilerp_color_target, composite_vertices, 3u, false);
+}
+
+static bool ps2_draw_independent_tex0_alpha(uint32_t vertex_count)
+{
+    if (s_modulate) {
+        if (!s_warned_independent_tex0_alpha_modulate) {
+            sysLogPrintf(LOG_WARNING,
+                "GfxPS2 independent TEXEL0 alpha rejects destination-color blend mode");
+            s_warned_independent_tex0_alpha_modulate = true;
+        }
+        return false;
+    }
+    if (!ps2_ensure_alpha_trilerp_color_workspace()) {
+        if (!s_warned_independent_tex0_alpha_workspace) {
+            sysLogPrintf(LOG_ERROR,
+                "GfxPS2 independent TEXEL0 alpha workspace allocation failed (%dx%d CT32)",
+                PS2_GFX_PASS_GRAPH_TILE_WIDTH,
+                PS2_GFX_PASS_GRAPH_TILE_HEIGHT);
+            s_warned_independent_tex0_alpha_workspace = true;
+        }
+        return false;
+    }
+
+    int clip_x0 = s_scissor.x > 0 ? s_scissor.x : 0;
+    int clip_y0 = s_scissor.y > 0 ? s_scissor.y : 0;
+    int clip_x1 = s_scissor.x + s_scissor.width;
+    int clip_y1 = s_scissor.y + s_scissor.height;
+    const int screen_width = ps2GsCoreGetWidth();
+    const int screen_height = ps2GsCoreGetHeight();
+    if (clip_x1 > screen_width) clip_x1 = screen_width;
+    if (clip_y1 > screen_height) clip_y1 = screen_height;
+    if (clip_x0 >= clip_x1 || clip_y0 >= clip_y1) {
+        return true;
+    }
+    const struct Ps2GfxPassGraphRect clip = {
+        clip_x0, clip_y0, clip_x1 - clip_x0, clip_y1 - clip_y0,
+    };
+
+    bool success = true;
+    for (uint32_t vertex = 0u; vertex < vertex_count && success;
+         vertex += 3u) {
+        struct Ps2GfxPassGraphTriangle geometry = {};
+        for (uint32_t i = 0u; i < 3u; ++i) {
+            geometry.x[i] =
+                s_independent_tex0_alpha_vertices[vertex + i].x;
+            geometry.y[i] =
+                s_independent_tex0_alpha_vertices[vertex + i].y;
+        }
+        struct Ps2GfxPassGraphTiles tiles = {};
+        if (!ps2GfxDescribePassGraphTiles(&geometry, &clip, &tiles)) {
+            continue;
+        }
+
+        const uint32_t tile_count = tiles.columns * tiles.rows;
+        for (uint32_t tile_index = 0u;
+             tile_index < tile_count && success; ++tile_index) {
+            struct Ps2GfxPassGraphRect tile = {};
+            success = ps2GfxGetPassGraphTile(
+                &tiles, tile_index, &tile) &&
+                ps2_draw_independent_tex0_alpha_tile(
+                    &s_independent_tex0_alpha_vertices[vertex], &tile);
+        }
+    }
+
+    ps2_restore_alpha_trilerp_state();
+    if (!success && !s_warned_independent_tex0_alpha_workspace) {
+        sysLogPrintf(LOG_ERROR,
+            "GfxPS2 independent TEXEL0 alpha submission failed");
+        s_warned_independent_tex0_alpha_workspace = true;
+    }
+    return success;
 }
 
 static void ps2_make_tex0_factor_capture_triangle(
@@ -2382,6 +2593,8 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
         PS2_PASS_GRAPH_ALPHA_TRILERP_MODULATE;
     const bool independent_alpha_trilerp =
         ps2_is_trilerp_independent_alpha(&s_shader->plan);
+    const bool independent_tex0_alpha =
+        ps2_is_independent_tex0_alpha(&s_shader->plan);
     const bool opaque_trilerp = s_shader->plan.pass_graph ==
         PS2_PASS_GRAPH_OPAQUE_TRILERP &&
         ps2_color_recipe_is_opaque_trilerp(s_shader->plan.color_recipe);
@@ -2573,7 +2786,24 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
                 packed_position = ps2_pack_xyz2(sx, sy, iz);
             }
 
-            if (interference) {
+            if (independent_tex0_alpha) {
+                struct Ps2IndependentTex0AlphaVertex *vertex =
+                    &s_independent_tex0_alpha_vertices[i];
+                vertex->x = sx;
+                vertex->y = sy;
+                vertex->inv_w = inv_w;
+                vertex->tex_u = tex_u[0];
+                vertex->tex_v = tex_v[0];
+                vertex->z = iz;
+                vertex->input[0] = ps2_u8_component(input[0][0]);
+                vertex->input[1] = ps2_u8_component(input[0][1]);
+                vertex->input[2] = ps2_u8_component(input[0][2]);
+                vertex->input[3] = s_shader->plan.alpha_recipe ==
+                        PS2_ALPHA_TEX0_MUL_INPUT1
+                    ? ps2_texture_alpha_fragment_component(input[0][3])
+                    : 0x40u;
+                vertex->fog = ps2_fog_coefficient(fog_factor);
+            } else if (interference) {
                 struct Ps2InterferenceVertex *vertex =
                     &s_interference_vertices[i];
                 vertex->x = sx;
@@ -2727,7 +2957,10 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
             }
         }
 
-        if (interference) {
+        if (independent_tex0_alpha) {
+            (void)ps2_draw_independent_tex0_alpha(
+                (uint32_t)batch_vertices);
+        } else if (interference) {
             (void)ps2_draw_interference(
                 (uint32_t)batch_vertices);
         } else if (tex0_factor_lerp) {
