@@ -23,6 +23,7 @@
 
 /* GS TEST.ATST encodings, cross-checked against current PS2SDK libgs. */
 #define PS2_GS_ATST_ALWAYS  1u
+#define PS2_GS_ATST_LEQUAL  3u
 #define PS2_GS_ATST_GEQUAL  5u
 #define PS2_GS_AFAIL_KEEP   0u
 
@@ -936,12 +937,22 @@ extern "C" void ps2GsCoreSetColorWrite(bool enable)
 
 extern "C" void ps2GsCoreSetAlphaTest(bool enable, uint8_t reference)
 {
+    ps2GsCoreSetAlphaTestComparison(
+        enable, reference, PS2_GS_ALPHA_TEST_GEQUAL);
+}
+
+extern "C" void ps2GsCoreSetAlphaTestComparison(
+    bool enable, uint8_t reference,
+    enum Ps2GsAlphaTestComparison comparison)
+{
     if (!s_gs) {
         return;
     }
 
     s_gs->Test->ATE = enable ? GS_SETTING_ON : GS_SETTING_OFF;
-    s_gs->Test->ATST = enable ? PS2_GS_ATST_GEQUAL : PS2_GS_ATST_ALWAYS;
+    s_gs->Test->ATST = !enable ? PS2_GS_ATST_ALWAYS :
+        (comparison == PS2_GS_ALPHA_TEST_LEQUAL ?
+            PS2_GS_ATST_LEQUAL : PS2_GS_ATST_GEQUAL);
     s_gs->Test->AREF = reference;
     s_gs->Test->AFAIL = PS2_GS_AFAIL_KEEP;
 

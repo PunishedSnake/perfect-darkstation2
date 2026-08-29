@@ -127,3 +127,90 @@ extern "C" struct Ps2GfxPassGraphSample ps2GfxMapPassGraphSample(
     };
     return sample;
 }
+
+static struct Ps2GfxSignedAlphaVertex ps2GfxInterpolateSignedAlphaVertex(
+    const struct Ps2GfxSignedAlphaVertex *a,
+    const struct Ps2GfxSignedAlphaVertex *b)
+{
+    const float denominator = a->delta - b->delta;
+    const float factor = denominator != 0.0f ? a->delta / denominator : 0.0f;
+    struct Ps2GfxSignedAlphaVertex result = {
+        a->x + (b->x - a->x) * factor,
+        a->y + (b->y - a->y) * factor,
+        a->z + (b->z - a->z) * factor,
+        a->s + (b->s - a->s) * factor,
+        a->t + (b->t - a->t) * factor,
+        a->q + (b->q - a->q) * factor,
+        0.0f,
+    };
+    return result;
+}
+
+static bool ps2GfxSignedAlphaInside(
+    const struct Ps2GfxSignedAlphaVertex *vertex, bool positive)
+{
+    /* Give the zero-width boundary to the positive half only. */
+    return positive ? vertex->delta >= 0.0f : vertex->delta < 0.0f;
+}
+
+extern "C" bool ps2GfxClipSignedAlphaTriangle(
+    const struct Ps2GfxSignedAlphaVertex triangle[3],
+    bool positive,
+    struct Ps2GfxSignedAlphaTriangles *result)
+{
+    if (!triangle || !result) {
+        return false;
+    }
+
+    struct Ps2GfxSignedAlphaVertex polygon[4] = {};
+    uint32_t polygon_count = 0u;
+    const struct Ps2GfxSignedAlphaVertex *previous = &triangle[2];
+    bool previous_inside = ps2GfxSignedAlphaInside(previous, positive);
+    for (uint32_t i = 0u; i < 3u; ++i) {
+        const struct Ps2GfxSignedAlphaVertex *current = &triangle[i];
+        const bool current_inside =
+            ps2GfxSignedAlphaInside(current, positive);
+        if (current_inside != previous_inside) {
+            polygon[polygon_count++] =
+                ps2GfxInterpolateSignedAlphaVertex(previous, current);
+        }
+        if (current_inside) {
+            polygon[polygon_count++] = *current;
+        }
+        previous = current;
+        previous_inside = current_inside;
+    }
+
+    result->vertex_count = 0u;
+    if (polygon_count < 3u) {
+        return true;
+    }
+
+    for (uint32_t i = 1u; i + 1u < polygon_count; ++i) {
+        result->vertices[result->vertex_count++] = polygon[0];
+        result->vertices[result->vertex_count++] = polygon[i];
+        result->vertices[result->vertex_count++] = polygon[i + 1u];
+    }
+    return true;
+}
+
+extern "C" struct Ps2GfxAlphaEdgeTest ps2GfxPlanSignedAlphaEdgeTest(
+    uint8_t threshold, uint8_t primitive_alpha, bool positive)
+{
+    struct Ps2GfxAlphaEdgeTest result = {
+        PS2_GFX_ALPHA_EDGE_REJECT,
+        0u,
+    };
+    if (positive) {
+        if (primitive_alpha >= threshold) {
+            result.comparison = PS2_GFX_ALPHA_EDGE_ALWAYS;
+        } else {
+            result.comparison = PS2_GFX_ALPHA_EDGE_GEQUAL;
+            result.reference = (uint8_t)(threshold - primitive_alpha);
+        }
+    } else if (primitive_alpha >= threshold) {
+        result.comparison = PS2_GFX_ALPHA_EDGE_LEQUAL;
+        result.reference = (uint8_t)(primitive_alpha - threshold);
+    }
+    return result;
+}

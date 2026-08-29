@@ -1,7 +1,13 @@
 #include "gfx_ps2_pass_graph.h"
 
 #include <assert.h>
+#include <math.h>
 #include <stdio.h>
+
+static bool nearly_equal(float a, float b)
+{
+    return fabsf(a - b) < 0.0001f;
+}
 
 static void test_clips_and_partitions_large_triangle(void)
 {
@@ -76,12 +82,72 @@ static void test_maps_screen_pixels_to_normalized_stq(void)
     assert(sample.t == 1.0f);
 }
 
+static void test_splits_signed_alpha_and_preserves_stq_planes(void)
+{
+    const struct Ps2GfxSignedAlphaVertex triangle[3] = {
+        { 0.0f, 0.0f, 10.0f, 0.0f, 0.0f, 1.0f, -0.5f },
+        { 4.0f, 0.0f, 20.0f, 2.0f, 0.0f, 0.5f, 0.5f },
+        { 0.0f, 4.0f, 30.0f, 0.0f, 1.0f, 0.25f, 0.5f },
+    };
+    struct Ps2GfxSignedAlphaTriangles positive = {};
+    struct Ps2GfxSignedAlphaTriangles negative = {};
+    assert(ps2GfxClipSignedAlphaTriangle(
+        triangle, true, &positive));
+    assert(ps2GfxClipSignedAlphaTriangle(
+        triangle, false, &negative));
+    assert(positive.vertex_count == 6u);
+    assert(negative.vertex_count == 3u);
+
+    /* The two zero crossings are halfway along their source edges. */
+    bool saw_top_crossing = false;
+    bool saw_left_crossing = false;
+    for (uint32_t i = 0u; i < positive.vertex_count; ++i) {
+        const struct Ps2GfxSignedAlphaVertex *vertex =
+            &positive.vertices[i];
+        if (nearly_equal(vertex->x, 2.0f) &&
+            nearly_equal(vertex->y, 0.0f)) {
+            assert(nearly_equal(vertex->z, 15.0f));
+            assert(nearly_equal(vertex->s, 1.0f));
+            assert(nearly_equal(vertex->q, 0.75f));
+            saw_top_crossing = true;
+        }
+        if (nearly_equal(vertex->x, 0.0f) &&
+            nearly_equal(vertex->y, 2.0f)) {
+            assert(nearly_equal(vertex->z, 20.0f));
+            assert(nearly_equal(vertex->t, 0.5f));
+            assert(nearly_equal(vertex->q, 0.625f));
+            saw_left_crossing = true;
+        }
+    }
+    assert(saw_top_crossing && saw_left_crossing);
+}
+
+static void test_signed_alpha_edge_test_plan(void)
+{
+    struct Ps2GfxAlphaEdgeTest test =
+        ps2GfxPlanSignedAlphaEdgeTest(25u, 10u, true);
+    assert(test.comparison == PS2_GFX_ALPHA_EDGE_GEQUAL);
+    assert(test.reference == 15u);
+
+    test = ps2GfxPlanSignedAlphaEdgeTest(25u, 40u, true);
+    assert(test.comparison == PS2_GFX_ALPHA_EDGE_ALWAYS);
+
+    test = ps2GfxPlanSignedAlphaEdgeTest(25u, 10u, false);
+    assert(test.comparison == PS2_GFX_ALPHA_EDGE_REJECT);
+
+    test = ps2GfxPlanSignedAlphaEdgeTest(25u, 40u, false);
+    assert(test.comparison == PS2_GFX_ALPHA_EDGE_LEQUAL);
+    assert(test.reference == 15u);
+}
+
 int main(void)
 {
     test_clips_and_partitions_large_triangle();
     test_respects_nonzero_scissor();
     test_rejects_empty_or_outside_geometry();
     test_maps_screen_pixels_to_normalized_stq();
+    test_splits_signed_alpha_and_preserves_stq_planes();
+    test_signed_alpha_edge_test_plan();
     puts("gfx_ps2_pass_graph tests passed");
     return 0;
 }

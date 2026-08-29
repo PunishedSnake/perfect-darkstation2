@@ -31,6 +31,8 @@ enum Ps2AlphaRecipe {
     PS2_ALPHA_INPUT1_PLUS_INPUT2_EDGE,
     /* INPUT2 * INPUT1 * (1 - INPUT1), reconstructed in a scalar target. */
     PS2_ALPHA_INPUT1_INV_INPUT1_MUL_INPUT2,
+    /* INPUT3 + TEX0 * (INPUT1 - INPUT2), used by signed TEX_EDGE. */
+    PS2_ALPHA_TEX0_MUL_INPUT1_MINUS_INPUT2_PLUS_INPUT3_EDGE,
 };
 
 enum Ps2PassGraph {

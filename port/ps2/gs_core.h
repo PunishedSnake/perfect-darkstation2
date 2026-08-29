@@ -42,6 +42,11 @@ enum Ps2GsN64PaletteEncoding {
     PS2_GS_N64_PALETTE_IA16,
 };
 
+enum Ps2GsAlphaTestComparison {
+    PS2_GS_ALPHA_TEST_GEQUAL = 0,
+    PS2_GS_ALPHA_TEST_LEQUAL,
+};
+
 struct Ps2GsCreateInfo {
     int color_psm;
     int depth_psm;
@@ -106,6 +111,8 @@ void ps2GsCoreSetColorWrite(bool enable);
 /* Preserve framebuffer alpha while RGB is accumulated by a multipass draw. */
 void ps2GsCoreSetAlphaWrite(bool enable);
 void ps2GsCoreSetAlphaTest(bool enable, uint8_t reference);
+void ps2GsCoreSetAlphaTestComparison(bool enable, uint8_t reference,
+    enum Ps2GsAlphaTestComparison comparison);
 /* GS FBA forces the stored framebuffer alpha MSB for accepted fragments. */
 void ps2GsCoreSetFramebufferAlphaForce(bool enable);
 void ps2GsCoreSetFog(bool enable, uint8_t r, uint8_t g, uint8_t b);

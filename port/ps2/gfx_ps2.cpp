@@ -43,6 +43,7 @@
  *   - TEXEL0
  *   - TEXEL0 * INPUT1
  *   - INPUT2 * INPUT1 * (1 - INPUT1), reconstructed through GS ALPHA
+ *   - INPUT3 + TEXEL0 * (INPUT1 - INPUT2), reduced to signed TEX_EDGE tests
  *
  * Alpha-bearing TEXEL0/TEXEL1 trilerp has a tiled CT32 execution graph. Its
  * low-lane channel shuffle passed the deterministic image A/B on physical PS2
@@ -133,6 +134,8 @@ struct Ps2AlphaTrilerpVertex {
     uint8_t lod;
     uint8_t independent_alpha;
     uint8_t fog;
+    uint8_t primitive_alpha;
+    float signed_alpha_delta;
 };
 
 static struct ShaderProgram s_shaders[PS2_GFX_MAX_SHADERS];
@@ -866,7 +869,9 @@ static bool ps2_is_trilerp_independent_alpha(
          plan->alpha_recipe ==
             PS2_ALPHA_INPUT1_PLUS_INPUT2_EDGE ||
          plan->alpha_recipe ==
-            PS2_ALPHA_INPUT1_INV_INPUT1_MUL_INPUT2);
+            PS2_ALPHA_INPUT1_INV_INPUT1_MUL_INPUT2 ||
+         plan->alpha_recipe ==
+            PS2_ALPHA_TEX0_MUL_INPUT1_MINUS_INPUT2_PLUS_INPUT3_EDGE);
 }
 
 static bool ps2_independent_alpha_is_custom24(
@@ -874,6 +879,13 @@ static bool ps2_independent_alpha_is_custom24(
 {
     return plan->alpha_recipe ==
         PS2_ALPHA_INPUT1_INV_INPUT1_MUL_INPUT2;
+}
+
+static bool ps2_independent_alpha_is_custom22_23(
+    const struct Ps2CombinerPlan *plan)
+{
+    return plan->alpha_recipe ==
+        PS2_ALPHA_TEX0_MUL_INPUT1_MINUS_INPUT2_PLUS_INPUT3_EDGE;
 }
 
 static void ps2_trilerp_set_base_state(void)
@@ -1185,6 +1197,201 @@ static bool ps2_draw_custom24_nonlinear_alpha_tile(
         s_alpha_trilerp_color_target, composite, 3u, false);
 }
 
+static void ps2_make_signed_alpha_triangle(
+    const struct Ps2AlphaTrilerpVertex *source,
+    struct Ps2GfxSignedAlphaVertex output[3])
+{
+    for (uint32_t i = 0u; i < 3u; ++i) {
+        output[i].x = source[i].x;
+        output[i].y = source[i].y;
+        output[i].z = (float)source[i].z;
+        output[i].s = source[i].tex_u[0] * source[i].inv_w;
+        output[i].t = source[i].tex_v[0] * source[i].inv_w;
+        output[i].q = source[i].inv_w;
+        output[i].delta = source[i].signed_alpha_delta;
+    }
+}
+
+static void ps2_make_signed_alpha_texture_vertices(
+    const struct Ps2GfxSignedAlphaTriangles *source,
+    int origin_x, int origin_y,
+    struct Ps2GsTexturedVertex output[
+        PS2_GFX_SIGNED_ALPHA_MAX_TRIANGLE_VERTICES])
+{
+    for (uint32_t i = 0u; i < source->vertex_count; ++i) {
+        const struct Ps2GfxSignedAlphaVertex *vertex =
+            &source->vertices[i];
+        const float magnitude = vertex->delta < 0.0f ?
+            -vertex->delta : vertex->delta;
+        output[i].rgbaq = ps2_pack_rgbaq(
+            0x80u, 0x80u, 0x80u,
+            ps2_texture_alpha_fragment_component(magnitude),
+            vertex->q);
+        output[i].st = ps2_pack_st(vertex->s, vertex->t);
+        output[i].xyz2 = ps2_pack_xyz2(
+            vertex->x - (float)origin_x,
+            vertex->y - (float)origin_y,
+            (int)(vertex->z + 0.5f));
+    }
+}
+
+static void ps2_make_signed_alpha_composite_vertices(
+    const struct Ps2GfxSignedAlphaTriangles *source,
+    int origin_x, int origin_y,
+    struct Ps2GsTexturedVertex output[
+        PS2_GFX_SIGNED_ALPHA_MAX_TRIANGLE_VERTICES])
+{
+    for (uint32_t i = 0u; i < source->vertex_count; ++i) {
+        const struct Ps2GfxSignedAlphaVertex *vertex =
+            &source->vertices[i];
+        const struct Ps2GfxPassGraphSample sample =
+            ps2GfxMapPassGraphSample(
+                vertex->x, vertex->y, origin_x, origin_y);
+        output[i].rgbaq = ps2_pack_rgbaq(
+            0x80u, 0x80u, 0x80u, 0x80u, 1.0f);
+        output[i].st = ps2_pack_st(sample.s, sample.t);
+        output[i].xyz2 = ps2_pack_xyz2(
+            vertex->x, vertex->y, (int)(vertex->z + 0.5f));
+    }
+}
+
+static bool ps2_composite_signed_alpha_region(
+    const struct Ps2GfxSignedAlphaTriangles *geometry,
+    const struct Ps2GfxAlphaEdgeTest *test,
+    const struct Ps2GsTexturedVertex *vertices)
+{
+    if (geometry->vertex_count == 0u ||
+        test->comparison == PS2_GFX_ALPHA_EDGE_REJECT) {
+        return true;
+    }
+
+    switch (test->comparison) {
+        case PS2_GFX_ALPHA_EDGE_ALWAYS:
+            ps2GsCoreSetAlphaTest(false, 0u);
+            break;
+        case PS2_GFX_ALPHA_EDGE_GEQUAL:
+            ps2GsCoreSetAlphaTestComparison(
+                true, test->reference, PS2_GS_ALPHA_TEST_GEQUAL);
+            break;
+        case PS2_GFX_ALPHA_EDGE_LEQUAL:
+            ps2GsCoreSetAlphaTestComparison(
+                true, test->reference, PS2_GS_ALPHA_TEST_LEQUAL);
+            break;
+        case PS2_GFX_ALPHA_EDGE_REJECT:
+        default:
+            return true;
+    }
+    return ps2GsCoreDrawRenderTargetTriangles(
+        s_alpha_trilerp_color_target, vertices,
+        geometry->vertex_count, false);
+}
+
+static bool ps2_draw_custom22_23_signed_alpha_tile(
+    const struct Ps2AlphaTrilerpVertex *triangle,
+    const struct Ps2GfxPassGraphRect *tile)
+{
+    struct Ps2GsTexturedVertex texture0[3];
+    struct Ps2GsTexturedVertex texture1[3];
+    ps2_make_independent_alpha_texture_triangle(
+        triangle, 0, tile->x, tile->y, false, texture0);
+    ps2_make_independent_alpha_texture_triangle(
+        triangle, 1, tile->x, tile->y, true, texture1);
+
+    struct Ps2GfxSignedAlphaVertex signed_triangle[3];
+    struct Ps2GfxSignedAlphaTriangles positive = {};
+    struct Ps2GfxSignedAlphaTriangles negative = {};
+    ps2_make_signed_alpha_triangle(triangle, signed_triangle);
+    if (!ps2GfxClipSignedAlphaTriangle(
+            signed_triangle, true, &positive) ||
+        !ps2GfxClipSignedAlphaTriangle(
+            signed_triangle, false, &negative)) {
+        return false;
+    }
+
+    struct Ps2GsTexturedVertex positive_alpha[
+        PS2_GFX_SIGNED_ALPHA_MAX_TRIANGLE_VERTICES];
+    struct Ps2GsTexturedVertex negative_alpha[
+        PS2_GFX_SIGNED_ALPHA_MAX_TRIANGLE_VERTICES];
+    struct Ps2GsTexturedVertex positive_composite[
+        PS2_GFX_SIGNED_ALPHA_MAX_TRIANGLE_VERTICES];
+    struct Ps2GsTexturedVertex negative_composite[
+        PS2_GFX_SIGNED_ALPHA_MAX_TRIANGLE_VERTICES];
+    ps2_make_signed_alpha_texture_vertices(
+        &positive, tile->x, tile->y, positive_alpha);
+    ps2_make_signed_alpha_texture_vertices(
+        &negative, tile->x, tile->y, negative_alpha);
+    ps2_make_signed_alpha_composite_vertices(
+        &positive, tile->x, tile->y, positive_composite);
+    ps2_make_signed_alpha_composite_vertices(
+        &negative, tile->x, tile->y, negative_composite);
+
+    const uint8_t primitive_alpha = triangle[0].primitive_alpha;
+    const struct Ps2GfxAlphaEdgeTest positive_test =
+        ps2GfxPlanSignedAlphaEdgeTest(
+            PS2_GFX_TEXTURE_EDGE_THRESHOLD,
+            primitive_alpha, true);
+    const struct Ps2GfxAlphaEdgeTest negative_test =
+        ps2GfxPlanSignedAlphaEdgeTest(
+            PS2_GFX_TEXTURE_EDGE_THRESHOLD,
+            primitive_alpha, false);
+
+    /* Reconstruct RGB once. Alpha writes remain masked until signed capture. */
+    if (!ps2GsCoreBindRenderTarget(s_alpha_trilerp_color_target)) {
+        return false;
+    }
+    ps2GsCoreSetAlphaTest(false, 0u);
+    ps2GsCoreSetDepthMode(false, false, false);
+    ps2GsCoreSetFramebufferAlphaForce(false);
+    ps2GsCoreSetTextureAlpha(false);
+    ps2GsCoreSetAlphaWrite(false);
+    ps2GsCoreSetColorWrite(true);
+    ps2GsCoreSetAlphaBlend(false);
+    ps2GsCoreSetFog(s_shader->features.opt_fog,
+        s_draw_fog_r, s_draw_fog_g, s_draw_fog_b);
+    ps2GsCoreClear(true, false);
+    ps2_apply_texture_clamp(0);
+    ps2GsCoreDrawTexturedTriangles(
+        s_selected_texture[0], texture0, 3u);
+    ps2GsCoreSetAlphaBlend(true);
+    ps2_apply_texture_clamp(1);
+    ps2GsCoreDrawTexturedTriangles(
+        s_selected_texture[1], texture1, 3u);
+
+    /* Store |SHADE.a-ENV.a|*TEXEL0.a only where a test consumes it. */
+    ps2GsCoreSetFog(false, 0u, 0u, 0u);
+    ps2GsCoreSetAlphaBlend(false);
+    ps2GsCoreSetColorWrite(false);
+    ps2GsCoreSetAlphaWrite(true);
+    ps2GsCoreSetTextureAlpha(true);
+    ps2_apply_texture_clamp(0);
+    if (positive_test.comparison == PS2_GFX_ALPHA_EDGE_GEQUAL &&
+        positive.vertex_count != 0u) {
+        ps2GsCoreDrawTexturedTriangles(
+            s_selected_texture[0], positive_alpha,
+            positive.vertex_count);
+    }
+    if (negative_test.comparison == PS2_GFX_ALPHA_EDGE_LEQUAL &&
+        negative.vertex_count != 0u) {
+        ps2GsCoreDrawTexturedTriangles(
+            s_selected_texture[0], negative_alpha,
+            negative.vertex_count);
+    }
+    ps2GsCoreSetColorWrite(true);
+
+    ps2GsCoreBindDefaultRenderTarget();
+    ps2GsCoreSetScissor(tile->x, tile->y, tile->width, tile->height);
+    ps2GsCoreSetDepthMode(s_depth_test, s_depth_update, s_depth_compare);
+    ps2GsCoreSetAlphaWrite(true);
+    ps2GsCoreSetFog(false, 0u, 0u, 0u);
+    ps2GsCoreSetTextureAlpha(true);
+    ps2GsCoreSetFramebufferAlphaForce(true);
+    ps2GsCoreSetAlphaBlend(false);
+    return ps2_composite_signed_alpha_region(
+               &positive, &positive_test, positive_composite) &&
+           ps2_composite_signed_alpha_region(
+               &negative, &negative_test, negative_composite);
+}
+
 static bool ps2_draw_trilerp_independent_alpha_tile(
     const struct Ps2AlphaTrilerpVertex *triangle,
     const struct Ps2GfxPassGraphRect *tile)
@@ -1253,6 +1460,8 @@ static bool ps2_draw_trilerp_independent_alpha(uint32_t vertex_count)
     }
     const bool custom24 = ps2_independent_alpha_is_custom24(
         &s_shader->plan);
+    const bool custom22_23 = ps2_independent_alpha_is_custom22_23(
+        &s_shader->plan);
     const bool workspace_ready = custom24
         ? ps2_ensure_alpha_trilerp_workspace()
         : ps2_ensure_alpha_trilerp_color_workspace();
@@ -1303,6 +1512,9 @@ static bool ps2_draw_trilerp_independent_alpha(uint32_t vertex_count)
                 success = false;
             } else if (custom24) {
                 success = ps2_draw_custom24_nonlinear_alpha_tile(
+                    &s_alpha_trilerp_vertices[vertex], &tile);
+            } else if (custom22_23) {
+                success = ps2_draw_custom22_23_signed_alpha_tile(
                     &s_alpha_trilerp_vertices[vertex], &tile);
             } else {
                 success = ps2_draw_trilerp_independent_alpha_tile(
@@ -1708,7 +1920,17 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
                 vertex->shade_g = ps2_modulate_component(input[1][1]);
                 vertex->shade_b = ps2_modulate_component(input[1][2]);
                 vertex->lod = ps2_modulate_component(input[0][0]);
-                if (ps2_independent_alpha_is_custom24(
+                vertex->primitive_alpha = 0u;
+                vertex->signed_alpha_delta = 0.0f;
+                if (ps2_independent_alpha_is_custom22_23(
+                        &s_shader->plan)) {
+                    vertex->shade_a = 0u;
+                    vertex->independent_alpha = 0u;
+                    vertex->primitive_alpha =
+                        ps2_modulate_component(input[2][3]);
+                    vertex->signed_alpha_delta =
+                        input[0][3] - input[1][3];
+                } else if (ps2_independent_alpha_is_custom24(
                         &s_shader->plan)) {
                     vertex->shade_a =
                         ps2_modulate_component(input[0][3]);

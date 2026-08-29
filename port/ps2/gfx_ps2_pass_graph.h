@@ -36,6 +36,42 @@ struct Ps2GfxPassGraphSample {
     float t;
 };
 
+enum Ps2GfxAlphaEdgeComparison {
+    PS2_GFX_ALPHA_EDGE_REJECT = 0,
+    PS2_GFX_ALPHA_EDGE_ALWAYS,
+    PS2_GFX_ALPHA_EDGE_GEQUAL,
+    PS2_GFX_ALPHA_EDGE_LEQUAL,
+};
+
+struct Ps2GfxAlphaEdgeTest {
+    enum Ps2GfxAlphaEdgeComparison comparison;
+    uint8_t reference;
+};
+
+/*
+ * Screen-linear payload used to split signed alpha equations at zero without
+ * asking the GS to represent a negative framebuffer channel. ST and Q are
+ * carried separately so newly created vertices preserve the original
+ * perspective-correct texture plane.
+ */
+struct Ps2GfxSignedAlphaVertex {
+    float x;
+    float y;
+    float z;
+    float s;
+    float t;
+    float q;
+    float delta;
+};
+
+#define PS2_GFX_SIGNED_ALPHA_MAX_TRIANGLE_VERTICES 6u
+
+struct Ps2GfxSignedAlphaTriangles {
+    struct Ps2GfxSignedAlphaVertex
+        vertices[PS2_GFX_SIGNED_ALPHA_MAX_TRIANGLE_VERTICES];
+    uint32_t vertex_count;
+};
+
 /*
  * Clip a screen-space triangle to the active framebuffer/scissor rectangle and
  * describe the fixed-size workspace tiles that cover its conservative pixel
@@ -53,6 +89,19 @@ bool ps2GfxGetPassGraphTile(
 /* GS STQ is normalized; convert a screen point into one workspace texture. */
 struct Ps2GfxPassGraphSample ps2GfxMapPassGraphSample(
     float screen_x, float screen_y, int tile_origin_x, int tile_origin_y);
+
+/*
+ * Clip one triangle to delta >= 0 or delta < 0 and return a triangle list.
+ * A half-plane can turn one triangle into a quad, hence the six-vertex bound.
+ */
+bool ps2GfxClipSignedAlphaTriangle(
+    const struct Ps2GfxSignedAlphaVertex triangle[3],
+    bool positive,
+    struct Ps2GfxSignedAlphaTriangles *result);
+
+/* Plan PRIMITIVE + signed_term >= threshold for one signed half-plane. */
+struct Ps2GfxAlphaEdgeTest ps2GfxPlanSignedAlphaEdgeTest(
+    uint8_t threshold, uint8_t primitive_alpha, bool positive);
 
 #ifdef __cplusplus
 }
