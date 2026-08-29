@@ -957,7 +957,8 @@ static bool ps2_is_trilerp_independent_alpha(
             PS2_PASS_GRAPH_TRILERP_INDEPENDENT_ALPHA &&
         plan->color_recipe ==
             PS2_COLOR_TEX01_LERP_INPUT1_MUL_INPUT2 &&
-        (plan->alpha_recipe == PS2_ALPHA_INPUT1_MUL_INPUT2 ||
+        (plan->alpha_recipe == PS2_ALPHA_INPUT1 ||
+         plan->alpha_recipe == PS2_ALPHA_INPUT1_MUL_INPUT2 ||
          plan->alpha_recipe ==
             PS2_ALPHA_TEX0_MUL_INPUT1_MUL_INPUT2 ||
          plan->alpha_recipe ==
@@ -2871,6 +2872,11 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
                     vertex->independent_alpha =
                         ps2_modulate_component(
                             input[0][3] * input[1][3]);
+                } else if (s_shader->plan.alpha_recipe ==
+                        PS2_ALPHA_INPUT1) {
+                    vertex->shade_a = 0x80u;
+                    vertex->independent_alpha =
+                        ps2_modulate_component(input[0][3]);
                 } else if (s_shader->plan.alpha_recipe ==
                         PS2_ALPHA_INPUT1_PLUS_INPUT2_EDGE) {
                     vertex->shade_a =
