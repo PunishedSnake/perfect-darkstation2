@@ -305,7 +305,7 @@ static void test_custom26_tex0_independent_alpha_pass_graph(void)
         PS2_PASS_GRAPH_TRILERP_INDEPENDENT_ALPHA);
 }
 
-static void test_custom24_nonlinear_alpha_remains_unsupported(void)
+static void test_custom24_nonlinear_alpha_pass_graph(void)
 {
     struct CombinerBuilder builder{};
     builder.options = SHADER_OPT_2CYC | SHADER_OPT_ALPHA | SHADER_OPT_FOG;
@@ -317,6 +317,18 @@ static void test_custom24_nonlinear_alpha_remains_unsupported(void)
     set_multiply(&builder, 1, 0, SHADER_COMBINED, SHADER_INPUT_2);
     set_multiply(&builder, 1, 1, SHADER_COMBINED, SHADER_INPUT_1);
 
+    const struct Ps2CombinerPlan result = plan(&builder);
+    assert(result.supported);
+    assert(result.color_recipe ==
+        PS2_COLOR_TEX01_LERP_INPUT1_MUL_INPUT2);
+    assert(result.alpha_recipe ==
+        PS2_ALPHA_INPUT1_INV_INPUT1_MUL_INPUT2);
+    assert(result.textured);
+    assert(!result.texture_alpha);
+    assert(result.pass_graph ==
+        PS2_PASS_GRAPH_TRILERP_INDEPENDENT_ALPHA);
+
+    builder.c[0][1][1] = SHADER_INPUT_2;
     assert(!plan(&builder).supported);
 }
 
@@ -463,7 +475,7 @@ int main(void)
     test_alpha_trilerp_modulate_pass_graph();
     test_custom25_independent_alpha_pass_graph();
     test_custom26_tex0_independent_alpha_pass_graph();
-    test_custom24_nonlinear_alpha_remains_unsupported();
+    test_custom24_nonlinear_alpha_pass_graph();
     test_custom21_texture_edge_pass_graph();
     test_alpha_trilerp_rejects_mismatched_final_channels();
     test_alpha_trilerp_rejects_fogged_graph();

@@ -284,6 +284,44 @@ static bool ps2_plan_tex01_lerp_independent_alpha(
     return true;
 }
 
+static bool ps2_plan_custom24_nonlinear_alpha(
+    const struct CCFeatures *f, struct Ps2CombinerPlan *plan)
+{
+    if (!f->opt_2cyc || !f->opt_alpha ||
+        f->opt_texture_edge || f->opt_invisible ||
+        !ps2_is_tex01_lerp_cycle(f) ||
+        !ps2_cycle_multiplies_combined_by_input2(f, 0u) ||
+        !f->do_multiply[1][1]) {
+        return false;
+    }
+
+    /* CUSTOM_24 alpha: ((1 - INPUT1) * INPUT2) * INPUT1. */
+    if (f->c[0][1][0] != SHADER_1 ||
+        f->c[0][1][1] != SHADER_INPUT_1 ||
+        f->c[0][1][2] != SHADER_INPUT_2 ||
+        f->c[0][1][3] != SHADER_0) {
+        return false;
+    }
+    const uint8_t alpha_a = f->c[1][1][0];
+    const uint8_t alpha_c = f->c[1][1][2];
+    if (!((alpha_a == SHADER_COMBINED &&
+           alpha_c == SHADER_INPUT_1) ||
+          (alpha_a == SHADER_INPUT_1 &&
+           alpha_c == SHADER_COMBINED))) {
+        return false;
+    }
+
+    plan->color_recipe = PS2_COLOR_TEX01_LERP_INPUT1_MUL_INPUT2;
+    plan->alpha_recipe = PS2_ALPHA_INPUT1_INV_INPUT1_MUL_INPUT2;
+    plan->color_cycle = 1;
+    plan->alpha_cycle = 1;
+    plan->textured = true;
+    plan->texture_alpha = false;
+    plan->pass_graph = PS2_PASS_GRAPH_TRILERP_INDEPENDENT_ALPHA;
+    plan->supported = true;
+    return true;
+}
+
 static bool ps2_plan_custom21_texture_edge(
     const struct CCFeatures *f, struct Ps2CombinerPlan *plan)
 {
@@ -376,6 +414,10 @@ bool ps2GfxPlanCombiner(const struct CCFeatures *f,
     }
 
     if (ps2_plan_custom21_texture_edge(f, plan)) {
+        return true;
+    }
+
+    if (ps2_plan_custom24_nonlinear_alpha(f, plan)) {
         return true;
     }
 

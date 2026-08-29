@@ -885,11 +885,28 @@ extern "C" void ps2GsCoreSetAlphaBlend(bool enable)
 
     s_gs->PrimAlphaEnable = enable ? GS_SETTING_ON : GS_SETTING_OFF;
     if (enable) {
-        s_gs->PrimAlpha = GS_SETREG_ALPHA(0, 1, 0, 1, 0);
         s_gs->PABE = 0;
-        if (s_frame_building) {
-            ps2GsCoreEmitAlpha();
-        }
+        ps2GsCoreSetAlphaBlendEquation(
+            PS2_GS_ALPHA_BLEND_SOURCE_OVER);
+    }
+}
+
+extern "C" void ps2GsCoreSetAlphaBlendEquation(
+    enum Ps2GsAlphaBlendEquation equation)
+{
+    if (!s_gs) {
+        return;
+    }
+
+    struct Ps2GsAlphaBlendFactors factors;
+    if (!ps2GsDescribeAlphaBlendEquation(equation, &factors)) {
+        return;
+    }
+
+    s_gs->PrimAlpha = GS_SETREG_ALPHA(
+        factors.a, factors.b, factors.c, factors.d, factors.fix);
+    if (s_frame_building && s_gs->PrimAlphaEnable) {
+        ps2GsCoreEmitAlpha();
     }
 }
 

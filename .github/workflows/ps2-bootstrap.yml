@@ -83,6 +83,13 @@ jobs:
         run: |
           g++ -std=c++20 -Wall -Wextra -Werror \
             -Iport/ps2 \
+            port/ps2/gs_alpha_equation.cpp \
+            port/ps2/gs_alpha_equation_test.cpp \
+            -o /tmp/gs_alpha_equation_test
+          /tmp/gs_alpha_equation_test
+
+          g++ -std=c++20 -Wall -Wextra -Werror \
+            -Iport/ps2 \
             port/ps2/gs_command_budget.cpp \
             port/ps2/gs_command_budget_test.cpp \
             -o /tmp/gs_command_budget_test

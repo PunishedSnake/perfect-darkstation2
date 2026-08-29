@@ -335,6 +335,8 @@ This semantic layer should remain backend-independent where possible. PS2-specif
 - PS2 detail textures default on and the PS2-only Fast3D seam exposes the explicit tile pair because the GS path does not own OpenGL-style generated mip chains;
 - **CURRENT IMPLEMENTATION:** `CUSTOM_25/26 -> MODULATEIA2` use a default-enabled one-target tiled graph. RGB is reconstructed as `(lerp(TEXEL0,TEXEL1,LOD) * SHADE)`, while the first pass writes the independent final alpha `ENV.a * SHADE.a` or `TEXEL0.a * ENV.a * SHADE.a`. The TEXEL1 interpolation masks alpha writes, so the completed PSMCT32 tile can be composited once through the caller's original alpha/depth state without the unvalidated low-byte channel shuffle;
 - **CURRENT IMPLEMENTATION:** `CUSTOM_21 -> CUSTOM_18` with `TEX_EDGE` reuses the one-target graph for RGB and stores interpolated `SHADE.a` in target alpha. Because `ENV.a` is draw-constant and this mode observes `SHADE.a + ENV.a` only through the edge predicate, the final GS alpha reference is reduced by quantized `ENV.a`. The composite performs the sole alpha test and FBA promotion, avoiding both a second scalar target and incorrect per-pass rejection;
+- **CURRENT IMPLEMENTATION:** `CUSTOM_24 -> MODULATEIA2` uses the two-target tiled graph for its nonlinear final alpha `ENV.a * SHADE.a * (1 - SHADE.a)`. A solid scalar pass places the linear `ENV.a * SHADE.a` term in source RGB and `SHADE.a` in source alpha, then programs GS `ALPHA` as `(0-Cs)*As+Cs`. The hardware-validated red-to-alpha shuffle assembles that scalar lane with the independently reconstructed trilerp RGB before the sole depth/blend composite;
+- the GS `ALPHA` factor selection is now a small host-tested device contract instead of a raw register literal hidden in the renderer. Ordinary source-over and the `CUSTOM_24` inverse-source-alpha equation are explicit states, and enabling normal alpha blending always restores source-over;
 - native fog remains exact for this graph because the same per-vertex fog coefficient and fog colour are applied to both texture endpoints before their LOD interpolation. Destination-colour modulation remains rejected because it would require framebuffer feedback outside this graph's ownership contract;
 - **CURRENT IMPLEMENTATION:** alpha-bearing `TRILERP/MODULATEIA2` now has an explicit tiled pass graph and VBO contract. Two fixed 128x64 PSMCT32 targets consume 64 KiB total instead of reserving two screen-sized surfaces. Each triangle is partitioned against the active scissor, reconstructed per tile, and composited with its original screen-space Z so overlapping batches keep primitive ownership;
 - the graph first captures `TEXEL0.a * SHADE.a` and `TEXEL1.a * SHADE.a`, exposes each high byte through the PSMT8H identity view, and interpolates the scalar result by vertex LOD into the red lane of the scalar target. It separately reconstructs RGB as the existing opaque two-pass trilerp, copies scalar red into result alpha, then samples the completed RGBA target once through the caller's alpha/depth state;
@@ -517,10 +519,11 @@ PCSX2 is useful for correctness, packet/state inspection and fast iteration. It 
 - use the implemented page-local PSMT8 red-to-alpha blit to assemble a CT32 color result with the separately reconstructed alpha lane;
 - retain the hardware-validated 128x64 tiled `MODULATEIA2` graph in ordinary builds and keep `PD_PS2_ALPHA_TRILERP_DIAGNOSTIC=ON` only as the deterministic A/B scene selector;
 - preserve the `pd-ps2-alpha-trilerp-diag.elf` regression screen: left is the live GS graph and right is the CPU reference, `Select` returns to the cube, and the lower bars expose ROM, PAD and heartbeat. Future reports should add console model and video mode to CI commit and PAD-colour metadata;
-- retain the existing opaque `CUSTOM_20` collapse and the implemented
-  `CUSTOM_21 -> CUSTOM_18` texture-edge graph; extend the same explicit model
-  to `CUSTOM_22..24`, which remain rejected until their framebuffer/depth/alpha
-  equations are exact;
+- retain the existing opaque `CUSTOM_20` collapse, the implemented
+  `CUSTOM_21 -> CUSTOM_18` texture-edge graph and the nonlinear
+  `CUSTOM_24 -> MODULATEIA2` scalar graph; extend the same explicit model to
+  `CUSTOM_22/23`, which remains rejected until its texture-dependent signed
+  alpha difference and edge predicate have an exact GS decomposition;
 - log unsupported recipes instead of silently approximating them.
 - retain explicit rejection for region bounds outside the GS 10-bit
   `CLAMP.MIN/MAX` contract instead of silently truncating them.

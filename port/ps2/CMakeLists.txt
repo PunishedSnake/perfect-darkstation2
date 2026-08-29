@@ -197,6 +197,7 @@ add_executable(pd_ps2_bootstrap
   audio_ps2_queue.c
   "${PD_PS2_AUDSRV_IRX_C}"
   video_diag.c
+  gs_alpha_equation.cpp
   gs_command_budget.cpp
   gs_core.cpp
   gs_native_queue.cpp

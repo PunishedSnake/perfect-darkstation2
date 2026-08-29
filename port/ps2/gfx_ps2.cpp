@@ -42,10 +42,11 @@
  *   - INPUT1
  *   - TEXEL0
  *   - TEXEL0 * INPUT1
+ *   - INPUT2 * INPUT1 * (1 - INPUT1), reconstructed through GS ALPHA
  *
- * Alpha-bearing TEXEL0/TEXEL1 trilerp has a tiled CT32 execution graph. It is
- * compiled and host-tested but remains an explicit diagnostic opt-in until the
- * low-lane channel shuffle passes its real-hardware image A/B gate.
+ * Alpha-bearing TEXEL0/TEXEL1 trilerp has a tiled CT32 execution graph. Its
+ * low-lane channel shuffle passed the deterministic image A/B on physical PS2
+ * hardware and is available to ordinary gameplay builds.
  *
  * GS texture MODULATE uses 0x80 as unity and multiplies with >>7. RGBA32 alpha
  * remains in 0..255, while native PSMCT16 alpha is expanded to the same range
@@ -863,7 +864,16 @@ static bool ps2_is_trilerp_independent_alpha(
          plan->alpha_recipe ==
             PS2_ALPHA_TEX0_MUL_INPUT1_MUL_INPUT2 ||
          plan->alpha_recipe ==
-            PS2_ALPHA_INPUT1_PLUS_INPUT2_EDGE);
+            PS2_ALPHA_INPUT1_PLUS_INPUT2_EDGE ||
+         plan->alpha_recipe ==
+            PS2_ALPHA_INPUT1_INV_INPUT1_MUL_INPUT2);
+}
+
+static bool ps2_independent_alpha_is_custom24(
+    const struct Ps2CombinerPlan *plan)
+{
+    return plan->alpha_recipe ==
+        PS2_ALPHA_INPUT1_INV_INPUT1_MUL_INPUT2;
 }
 
 static void ps2_trilerp_set_base_state(void)
@@ -1017,6 +1027,22 @@ static void ps2_make_independent_alpha_texture_triangle(
     }
 }
 
+static void ps2_make_custom24_scalar_triangle(
+    const struct Ps2AlphaTrilerpVertex *source,
+    int origin_x, int origin_y, struct Ps2GsColorVertex output[3])
+{
+    for (uint32_t i = 0u; i < 3u; ++i) {
+        const struct Ps2AlphaTrilerpVertex *vertex = &source[i];
+        const uint8_t base = vertex->independent_alpha;
+        output[i].rgbaq = ps2_pack_rgbaq(
+            base, base, base, vertex->shade_a, 0.0f);
+        output[i].xyz2 = ps2_pack_xyz2(
+            vertex->x - (float)origin_x,
+            vertex->y - (float)origin_y,
+            vertex->z);
+    }
+}
+
 static void ps2_make_alpha_trilerp_texture_triangle(
     const struct Ps2AlphaTrilerpVertex *source, int texture_index,
     int origin_x, int origin_y, bool capture_alpha, bool lerp_color,
@@ -1081,6 +1107,82 @@ static void ps2_restore_alpha_trilerp_state(void)
     ps2GsCoreSetTextureAlpha(
         s_shader && s_shader->plan.texture_alpha);
     ps2_apply_texture_clamp(0);
+}
+
+static bool ps2_draw_custom24_nonlinear_alpha_tile(
+    const struct Ps2AlphaTrilerpVertex *triangle,
+    const struct Ps2GfxPassGraphRect *tile)
+{
+    struct Ps2GsTexturedVertex texture0[3];
+    struct Ps2GsTexturedVertex texture1[3];
+    struct Ps2GsTexturedVertex composite[3];
+    struct Ps2GsColorVertex scalar[3];
+    ps2_make_independent_alpha_texture_triangle(
+        triangle, 0, tile->x, tile->y, false, texture0);
+    ps2_make_independent_alpha_texture_triangle(
+        triangle, 1, tile->x, tile->y, true, texture1);
+    ps2_make_alpha_trilerp_workspace_triangle(
+        triangle, tile->x, tile->y, 0x80u, false, true, composite);
+    ps2_make_custom24_scalar_triangle(
+        triangle, tile->x, tile->y, scalar);
+
+    /*
+     * CUSTOM_24 alpha is ENV.a * SHADE.a * (1 - SHADE.a). The vertex RGB
+     * carries the linear ENV.a * SHADE.a base and source alpha carries
+     * SHADE.a. GS ALPHA (0-Cs)*As+Cs evaluates the remaining nonlinear factor
+     * per fragment into the scalar target's red lane.
+     */
+    if (!ps2GsCoreBindRenderTarget(s_alpha_trilerp_scalar_target)) {
+        return false;
+    }
+    ps2GsCoreSetAlphaWrite(true);
+    ps2GsCoreSetAlphaTest(false, 0u);
+    ps2GsCoreSetFog(false, 0u, 0u, 0u);
+    ps2GsCoreSetDepthMode(false, false, false);
+    ps2GsCoreSetAlphaBlend(false);
+    ps2GsCoreSetFramebufferAlphaForce(false);
+    ps2GsCoreSetTextureAlpha(false);
+    ps2GsCoreClear(true, false);
+    ps2GsCoreSetAlphaBlend(true);
+    ps2GsCoreSetAlphaBlendEquation(
+        PS2_GS_ALPHA_BLEND_SOURCE_RGB_TIMES_INV_SOURCE_ALPHA);
+    ps2GsCoreDrawColorTriangles(scalar, 3u);
+
+    if (!ps2GsCoreBindRenderTarget(s_alpha_trilerp_color_target)) {
+        return false;
+    }
+    ps2GsCoreSetAlphaBlend(false);
+    ps2GsCoreSetAlphaWrite(false);
+    ps2GsCoreSetFog(s_shader->features.opt_fog,
+        s_draw_fog_r, s_draw_fog_g, s_draw_fog_b);
+    ps2GsCoreClear(true, false);
+    ps2_apply_texture_clamp(0);
+    ps2GsCoreDrawTexturedTriangles(
+        s_selected_texture[0], texture0, 3u);
+    ps2GsCoreSetAlphaBlend(true);
+    ps2_apply_texture_clamp(1);
+    ps2GsCoreDrawTexturedTriangles(
+        s_selected_texture[1], texture1, 3u);
+
+    ps2GsCoreSetAlphaWrite(true);
+    ps2GsCoreSetAlphaBlend(false);
+    if (!ps2GsCoreBlitRenderTargetRedToActiveAlpha(
+            s_alpha_trilerp_scalar_target)) {
+        return false;
+    }
+
+    ps2GsCoreBindDefaultRenderTarget();
+    ps2GsCoreSetScissor(tile->x, tile->y, tile->width, tile->height);
+    ps2GsCoreSetDepthMode(s_depth_test, s_depth_update, s_depth_compare);
+    ps2GsCoreSetAlphaTest(
+        s_shader->features.opt_alpha_threshold,
+        s_shader->features.opt_alpha_threshold ?
+            PS2_GFX_ALPHA_THRESHOLD : 0u);
+    ps2GsCoreSetFog(false, 0u, 0u, 0u);
+    ps2GsCoreSetTextureAlpha(true);
+    ps2GsCoreSetAlphaBlend(s_alpha_blend);
+    return ps2GsCoreDrawRenderTargetTriangles(
+        s_alpha_trilerp_color_target, composite, 3u, false);
 }
 
 static bool ps2_draw_trilerp_independent_alpha_tile(
@@ -1149,7 +1251,12 @@ static bool ps2_draw_trilerp_independent_alpha(uint32_t vertex_count)
         }
         return false;
     }
-    if (!ps2_ensure_alpha_trilerp_color_workspace()) {
+    const bool custom24 = ps2_independent_alpha_is_custom24(
+        &s_shader->plan);
+    const bool workspace_ready = custom24
+        ? ps2_ensure_alpha_trilerp_workspace()
+        : ps2_ensure_alpha_trilerp_color_workspace();
+    if (!workspace_ready) {
         if (!s_warned_independent_alpha_workspace) {
             sysLogPrintf(LOG_ERROR,
                 "GfxPS2 independent-alpha workspace allocation failed (%dx%d CT32)",
@@ -1191,10 +1298,16 @@ static bool ps2_draw_trilerp_independent_alpha(uint32_t vertex_count)
         for (uint32_t tile_index = 0u;
              tile_index < tile_count && success; ++tile_index) {
             struct Ps2GfxPassGraphRect tile = {};
-            success = ps2GfxGetPassGraphTile(
-                &tiles, tile_index, &tile) &&
-                ps2_draw_trilerp_independent_alpha_tile(
+            if (!ps2GfxGetPassGraphTile(
+                    &tiles, tile_index, &tile)) {
+                success = false;
+            } else if (custom24) {
+                success = ps2_draw_custom24_nonlinear_alpha_tile(
                     &s_alpha_trilerp_vertices[vertex], &tile);
+            } else {
+                success = ps2_draw_trilerp_independent_alpha_tile(
+                    &s_alpha_trilerp_vertices[vertex], &tile);
+            }
         }
     }
 
@@ -1594,11 +1707,19 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
                 vertex->shade_r = ps2_modulate_component(input[1][0]);
                 vertex->shade_g = ps2_modulate_component(input[1][1]);
                 vertex->shade_b = ps2_modulate_component(input[1][2]);
-                vertex->shade_a =
-                    ps2_texture_alpha_fragment_component(input[1][3]);
                 vertex->lod = ps2_modulate_component(input[0][0]);
-                if (s_shader->plan.alpha_recipe ==
+                if (ps2_independent_alpha_is_custom24(
+                        &s_shader->plan)) {
+                    vertex->shade_a =
+                        ps2_modulate_component(input[0][3]);
+                    vertex->independent_alpha =
+                        ps2_modulate_component(
+                            input[0][3] * input[1][3]);
+                } else if (s_shader->plan.alpha_recipe ==
                         PS2_ALPHA_INPUT1_PLUS_INPUT2_EDGE) {
+                    vertex->shade_a =
+                        ps2_texture_alpha_fragment_component(
+                            input[1][3]);
                     vertex->independent_alpha =
                         ps2_modulate_component(input[0][3]);
                     if (i == 0u) {
@@ -1610,6 +1731,9 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
                                 environment);
                     }
                 } else {
+                    vertex->shade_a =
+                        ps2_texture_alpha_fragment_component(
+                            input[1][3]);
                     vertex->independent_alpha =
                         s_shader->plan.alpha_recipe ==
                             PS2_ALPHA_TEX0_MUL_INPUT1_MUL_INPUT2
