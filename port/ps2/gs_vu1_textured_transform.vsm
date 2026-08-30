@@ -57,14 +57,28 @@ vertexLoop:
 	NOP                             NOP
 	NOP                             NOP
 	mulq.xyz      VF03,VF03,Q       NOP
-	max.z         VF03,VF03,VF00z   NOP
-	mini.z        VF03,VF03,VF00w   NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	maxz.z        VF03,VF03,VF00z   NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	miniw.z       VF03,VF03,VF00w   NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
 	mulaw.xyz     ACC,VF02,VF00w    NOP
 	madd.xyz      VF06,VF03,VF01    NOP
-	move.w        VF06,VF04         NOP
+	mul.w         VF06,VF04,VF00    NOP
+	NOP                             NOP
+	NOP                             NOP
 	ftoi4.xy      VF06,VF06         NOP
 	ftoi0.z       VF06,VF06         NOP
 	mulq.xyz      VF04,VF04,Q       isubiu        VI05,VI05,1
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
 	NOP                             sqi           VF04,(VI04++)
 	NOP                             sqi           VF05,(VI04++)
 	NOP                             ibne          VI05,VI00,vertexLoop
