@@ -16,6 +16,7 @@
 #include "gs_vu1_queue.h"
 #include "gs_vram_allocator.h"
 #include "log_ps2.h"
+#include "ps2_renderer_stats.h"
 #include "system.h"
 
 #define PS2_GS_MAX_TEXTURES 64
@@ -1803,9 +1804,12 @@ extern "C" void ps2GsCoreDrawColorTriangles(const struct Ps2GsColorVertex *verti
                 ps2GsStateShadowCommit(
                     &s_state_shadow, PS2_GS_STATE_PRIM, prim);
             }
+            ps2RendererStatsRecordPath1(false, vertex_count,
+                vertex_count * 2u + (emit_prim ? 1u : 0u));
             ps2GsCoreMarkActiveRenderTargetWritten();
             return;
         }
+        ps2RendererStatsRecordVu1Reject(vertex_count);
         if (!s_logged_vu1_color_fallback) {
             sysLogPrintf(LOG_WARNING,
                 "GS core: VU1 color batch rejected; preserving PATH3 fallback");
@@ -1828,6 +1832,8 @@ extern "C" void ps2GsCoreDrawColorTriangles(const struct Ps2GsColorVertex *verti
             &s_state_shadow, PS2_GS_STATE_PRIM, prim);
     }
     memcpy(&p[out], vertices, (size_t)vertex_count * sizeof(*vertices));
+    ps2RendererStatsRecordPath3(
+        false, vertex_count, register_count);
     ps2GsCoreMarkActiveRenderTargetWritten();
 }
 
@@ -1950,10 +1956,13 @@ static bool ps2GsCoreDrawTexturedTrianglesInternal(GSTEXTURE *tex,
                 s_loaded_clut_vram = tex->VramClut;
                 s_loaded_clut_psm = tex->ClutPSM;
             }
+            ps2RendererStatsRecordPath1(true, vertex_count,
+                prefix_count + vertex_count * 3u + suffix_count);
             ps2GsCoreMarkActiveRenderTargetWritten();
             return true;
         }
 
+        ps2RendererStatsRecordVu1Reject(vertex_count);
         if (!s_logged_vu1_textured_fallback) {
             sysLogPrintf(LOG_WARNING,
                 "GS core: VU1 textured batch rejected; "
@@ -2021,6 +2030,8 @@ static bool ps2GsCoreDrawTexturedTrianglesInternal(GSTEXTURE *tex,
         s_loaded_clut_vram = tex->VramClut;
         s_loaded_clut_psm = tex->ClutPSM;
     }
+    ps2RendererStatsRecordPath3(
+        true, vertex_count, register_count);
     ps2GsCoreMarkActiveRenderTargetWritten();
     return true;
 }

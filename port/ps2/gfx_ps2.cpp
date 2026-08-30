@@ -10,6 +10,7 @@
 #include "gfx_ps2_pass_graph.h"
 #include "gs_core.h"
 #include "gs_vu1_batch.h"
+#include "ps2_renderer_stats.h"
 #include "rdp_tmem_live.h"
 #include "system.h"
 
@@ -2725,6 +2726,7 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
         memset(s_draw_region_clamp, 0, sizeof(s_draw_region_clamp));
         s_draw_texture_edge_reference = PS2_GFX_TEXTURE_EDGE_THRESHOLD;
 
+        const uint64_t translation_start = sysGetMicroseconds();
         for (size_t i = 0; i < batch_vertices; ++i) {
             const float *src = &buf_vbo[(base_vertex + i) * stride];
             size_t pos = 0;
@@ -3049,6 +3051,9 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
                 s_color_vertices[i].xyz2 = packed_position;
             }
         }
+        ps2RendererStatsRecordTranslation(
+            (uint32_t)batch_vertices,
+            sysGetMicroseconds() - translation_start);
 
         if (independent_tex0_alpha) {
             (void)ps2_draw_independent_tex0_alpha(
@@ -3114,6 +3119,7 @@ static void ps2_reset_viewport(void)
 
 static void ps2_init(void)
 {
+    ps2RendererStatsReset();
     ps2_clear_shaders();
     s_selected_texture[0] = PS2_GS_TEXTURE_INVALID;
     s_selected_texture[1] = PS2_GS_TEXTURE_INVALID;
@@ -3158,12 +3164,41 @@ static void ps2_on_resize(void)
 
 static void ps2_start_frame(void)
 {
+    ps2RendererStatsBeginFrame();
     ps2GsCoreBeginFrame();
 }
 
 static void ps2_end_frame(void)
 {
     ps2GsCoreSubmit();
+
+    struct Ps2RendererStats stats;
+    ps2RendererStatsGet(&stats);
+    if (stats.frames == 1u || stats.frames % 300u == 0u) {
+        sysLogPrintf(LOG_NOTE,
+            "GfxPS2 stats: frames=%llu translate_batches=%llu "
+            "vertices=%llu ee_us=%llu",
+            (unsigned long long)stats.frames,
+            (unsigned long long)stats.translation_batches,
+            (unsigned long long)stats.translated_vertices,
+            (unsigned long long)stats.translation_microseconds);
+        sysLogPrintf(LOG_NOTE,
+            "GfxPS2 paths: path1_color=%llu path1_textured=%llu "
+            "path1_vertices=%llu path1_records=%llu "
+            "path3_color=%llu path3_textured=%llu "
+            "path3_vertices=%llu path3_records=%llu "
+            "vu1_rejects=%llu/%llu vertices",
+            (unsigned long long)stats.path1_color_batches,
+            (unsigned long long)stats.path1_textured_batches,
+            (unsigned long long)stats.path1_vertices,
+            (unsigned long long)stats.path1_records,
+            (unsigned long long)stats.path3_color_batches,
+            (unsigned long long)stats.path3_textured_batches,
+            (unsigned long long)stats.path3_vertices,
+            (unsigned long long)stats.path3_records,
+            (unsigned long long)stats.vu1_rejected_batches,
+            (unsigned long long)stats.vu1_rejected_vertices);
+    }
 }
 
 static void ps2_finish_render(void)

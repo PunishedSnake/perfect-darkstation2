@@ -130,6 +130,13 @@ jobs:
             -o /tmp/gs_vu1_batch_test
           /tmp/gs_vu1_batch_test
 
+          g++ -std=c++20 -Wall -Wextra -Werror \
+            -Iport/ps2 \
+            port/ps2/ps2_renderer_stats.cpp \
+            port/ps2/ps2_renderer_stats_test.cpp \
+            -o /tmp/ps2_renderer_stats_test
+          /tmp/ps2_renderer_stats_test
+
       - name: Test native GS texture conversion
         run: |
           g++ -std=c++20 -Wall -Wextra -Werror \

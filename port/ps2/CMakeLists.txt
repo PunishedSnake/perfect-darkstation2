@@ -238,6 +238,7 @@ add_executable(pd_ps2_bootstrap
   gs_vu1_batch.cpp
   gs_vu1_queue.cpp
   gs_vram_allocator.cpp
+  ps2_renderer_stats.cpp
   gfx_api_scene.c
   gfx_frame_ps2.c
   gfx_run_tmem_ps2.cpp
