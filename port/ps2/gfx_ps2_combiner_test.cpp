@@ -593,6 +593,34 @@ static void test_custom00_01_shield_pass_graph(void)
     assert(!plan(&builder).supported);
 }
 
+static void test_text_blend_pass_graph(void)
+{
+    struct CombinerBuilder builder{};
+    builder.options = SHADER_OPT_2CYC | SHADER_OPT_ALPHA;
+    builder.c[0][0][0] = SHADER_INPUT_1;
+    builder.c[0][0][1] = SHADER_INPUT_2;
+    builder.c[0][0][2] = SHADER_TEXEL1A;
+    builder.c[0][0][3] = SHADER_INPUT_2;
+    set_single(&builder, 0u, 1u, SHADER_TEXEL0);
+    set_single(&builder, 1u, 0u, SHADER_COMBINED);
+    set_multiply(
+        &builder, 1u, 1u, SHADER_COMBINED, SHADER_INPUT_1);
+
+    const struct Ps2CombinerPlan result = plan(&builder);
+    assert(result.supported);
+    assert(result.color_recipe ==
+        PS2_COLOR_INPUT2_INPUT1_LERP_TEX1_ALPHA);
+    assert(result.alpha_recipe == PS2_ALPHA_TEX0_MUL_INPUT1);
+    assert(result.pass_graph ==
+        PS2_PASS_GRAPH_TEX1_ALPHA_FACTOR_LERP);
+    assert(result.textured);
+    assert(result.texture_alpha);
+    assert(result.hardware_validation_required);
+
+    builder.c[0][0][2] = SHADER_TEXEL1;
+    assert(!plan(&builder).supported);
+}
+
 static void test_interference_pass_graph(void)
 {
     struct CombinerBuilder builder{};
@@ -699,6 +727,7 @@ int main(void)
     test_custom27_tex0_factor_pass_graph();
     test_skydome_tex0_factor_pass_graph();
     test_custom00_01_shield_pass_graph();
+    test_text_blend_pass_graph();
     test_interference_pass_graph();
     test_independent_tex0_alpha_pass_graph();
     test_opaque_output_ignores_alpha_dependency();

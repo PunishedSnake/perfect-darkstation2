@@ -150,11 +150,12 @@ struct Ps2Tex0FactorLerpVertex {
     float x;
     float y;
     float inv_w;
-    float tex_u;
-    float tex_v;
+    float tex_u[2];
+    float tex_v[2];
     int z;
     uint8_t input1[4];
     uint8_t input2[4];
+    uint8_t tex0_alpha_input;
     uint8_t fog;
 };
 
@@ -1414,7 +1415,8 @@ static bool ps2_draw_independent_tex0_alpha(uint32_t vertex_count)
 
 static void ps2_make_tex0_factor_capture_triangle(
     const struct Ps2Tex0FactorLerpVertex *source,
-    int origin_x, int origin_y, struct Ps2GsTexturedVertex output[3])
+    int texture_index, int origin_x, int origin_y,
+    struct Ps2GsTexturedVertex output[3])
 {
     for (uint32_t i = 0u; i < 3u; ++i) {
         const struct Ps2Tex0FactorLerpVertex *vertex = &source[i];
@@ -1422,8 +1424,26 @@ static void ps2_make_tex0_factor_capture_triangle(
         output[i].rgbaq = ps2_pack_rgbaq(
             0x40u, 0x40u, 0x40u, 0x40u, vertex->inv_w);
         output[i].st = ps2_pack_st(
-            vertex->tex_u * vertex->inv_w,
-            vertex->tex_v * vertex->inv_w);
+            vertex->tex_u[texture_index] * vertex->inv_w,
+            vertex->tex_v[texture_index] * vertex->inv_w);
+        output[i].xyz2 = ps2_pack_xyz2(
+            vertex->x - (float)origin_x,
+            vertex->y - (float)origin_y, vertex->z);
+    }
+}
+
+static void ps2_make_tex0_factor_texture_alpha_triangle(
+    const struct Ps2Tex0FactorLerpVertex *source,
+    int origin_x, int origin_y, struct Ps2GsTexturedVertex output[3])
+{
+    for (uint32_t i = 0u; i < 3u; ++i) {
+        const struct Ps2Tex0FactorLerpVertex *vertex = &source[i];
+        output[i].rgbaq = ps2_pack_rgbaq(
+            0x80u, 0x80u, 0x80u,
+            vertex->tex0_alpha_input, vertex->inv_w);
+        output[i].st = ps2_pack_st(
+            vertex->tex_u[0] * vertex->inv_w,
+            vertex->tex_v[0] * vertex->inv_w);
         output[i].xyz2 = ps2_pack_xyz2(
             vertex->x - (float)origin_x,
             vertex->y - (float)origin_y, vertex->z);
@@ -1496,17 +1516,23 @@ static bool ps2_draw_tex0_factor_lerp_tile(
 {
     struct Ps2GsTexturedVertex capture[3];
     struct Ps2GsTexturedVertex alpha_sample[3];
+    struct Ps2GsTexturedVertex tex0_alpha[3];
     struct Ps2GsTexturedVertex composite[3];
     struct Ps2GsColorVertex base_rgb[3];
     struct Ps2GsColorVertex source_rgb[3];
     struct Ps2GsColorVertex base_alpha[3];
     struct Ps2GsColorVertex source_alpha[3];
     struct Ps2GsColorVertex output_alpha[3];
+    const bool tex1_alpha_factor = s_shader->plan.pass_graph ==
+        PS2_PASS_GRAPH_TEX1_ALPHA_FACTOR_LERP;
+    const int factor_texture = tex1_alpha_factor ? 1 : 0;
     ps2_make_tex0_factor_capture_triangle(
-        triangle, tile->x, tile->y, capture);
+        triangle, factor_texture, tile->x, tile->y, capture);
     ps2_make_tex0_factor_workspace_sample(
         triangle, tile->x, tile->y, false,
         0u, true, false, alpha_sample);
+    ps2_make_tex0_factor_texture_alpha_triangle(
+        triangle, tile->x, tile->y, tex0_alpha);
     ps2_make_tex0_factor_workspace_sample(
         triangle, tile->x, tile->y, true,
         0x80u, false, true, composite);
@@ -1536,9 +1562,9 @@ static bool ps2_draw_tex0_factor_lerp_tile(
         return false;
     }
     ps2GsCoreClear(true, false);
-    ps2_apply_texture_clamp(0);
+    ps2_apply_texture_clamp(factor_texture);
     ps2GsCoreDrawTexturedTriangles(
-        s_selected_texture[0], capture, 3u);
+        s_selected_texture[factor_texture], capture, 3u);
 
     const bool alpha_lerp = s_shader->plan.alpha_recipe ==
             PS2_ALPHA_INPUT2_INPUT1_LERP_TEX0 ||
@@ -1597,16 +1623,19 @@ static bool ps2_draw_tex0_factor_lerp_tile(
         PS2_GS_COLOR_WRITE_GREEN,
         PS2_GS_COLOR_WRITE_BLUE,
     };
-    const uint32_t channel_count =
-        gfxPs2MaterialRgbChannelPasses(monochrome);
+    const uint32_t channel_count = tex1_alpha_factor
+        ? 1u : gfxPs2MaterialRgbChannelPasses(monochrome);
     for (uint32_t channel = 0u; channel < channel_count; ++channel) {
         if (!ps2GsCoreBlitRenderTargetChannelRectToActiveAlpha(
-                s_alpha_trilerp_scalar_target, channels[channel],
+                s_alpha_trilerp_scalar_target,
+                tex1_alpha_factor ? PS2_GS_CT32_CHANNEL_ALPHA
+                                  : channels[channel],
                 (uint32_t)tile->width, (uint32_t)tile->height)) {
             return false;
         }
         ps2GsCoreSetColorChannelWriteMask(
-            monochrome ? (uint8_t)PS2_GS_COLOR_WRITE_RGB :
+            (monochrome || tex1_alpha_factor)
+                ? (uint8_t)PS2_GS_COLOR_WRITE_RGB :
                 write_masks[channel]);
         ps2GsCoreSetAlphaWrite(false);
         ps2GsCoreSetAlphaBlend(true);
@@ -1626,6 +1655,11 @@ static bool ps2_draw_tex0_factor_lerp_tile(
                 (uint32_t)tile->width, (uint32_t)tile->height)) {
             return false;
         }
+    } else if (tex1_alpha_factor &&
+        s_shader->plan.alpha_recipe == PS2_ALPHA_TEX0_MUL_INPUT1) {
+        ps2_apply_texture_clamp(0);
+        ps2GsCoreDrawTexturedTriangles(
+            s_selected_texture[0], tex0_alpha, 3u);
     } else if (s_shader->plan.alpha_recipe == PS2_ALPHA_INPUT1 ||
         s_shader->plan.alpha_recipe == PS2_ALPHA_OPAQUE ||
         s_shader->plan.alpha_recipe == PS2_ALPHA_ONE) {
@@ -1658,7 +1692,7 @@ static bool ps2_draw_tex0_factor_lerp(uint32_t vertex_count)
     if (s_modulate) {
         if (!s_warned_tex0_factor_modulate) {
             sysLogPrintf(LOG_WARNING,
-                "GfxPS2 TEXEL0-factor lerp rejects destination-color blend mode");
+                "GfxPS2 texture-factor lerp rejects destination-color blend mode");
             s_warned_tex0_factor_modulate = true;
         }
         return false;
@@ -1667,16 +1701,20 @@ static bool ps2_draw_tex0_factor_lerp(uint32_t vertex_count)
         return false;
     }
 
-    const Ps2GsTextureHandle handle = s_selected_texture[0];
-    const bool monochrome = handle < PS2_GFX_TEXTURE_STATE_SLOTS &&
-        s_texture_sampler[handle].monochrome_rgb;
+    const bool tex1_alpha_factor = s_shader->plan.pass_graph ==
+        PS2_PASS_GRAPH_TEX1_ALPHA_FACTOR_LERP;
+    const Ps2GsTextureHandle handle =
+        s_selected_texture[tex1_alpha_factor ? 1 : 0];
+    const bool monochrome = tex1_alpha_factor ||
+        (handle < PS2_GFX_TEXTURE_STATE_SLOTS &&
+         s_texture_sampler[handle].monochrome_rgb);
     if (monochrome && !s_logged_tex0_factor_scalar) {
         sysLogPrintf(LOG_NOTE,
-            "GfxPS2 TEXEL0-factor material uses one-channel RGB graph");
+            "GfxPS2 texture-factor material uses one-channel RGB graph");
         s_logged_tex0_factor_scalar = true;
     } else if (!monochrome && !s_logged_tex0_factor_vector) {
         sysLogPrintf(LOG_NOTE,
-            "GfxPS2 TEXEL0-factor material uses exact three-channel RGB graph");
+            "GfxPS2 texture-factor material uses exact three-channel RGB graph");
         s_logged_tex0_factor_vector = true;
     }
 
@@ -1722,7 +1760,7 @@ static bool ps2_draw_tex0_factor_lerp(uint32_t vertex_count)
     ps2_restore_alpha_trilerp_state();
     if (!success && !s_warned_tex0_factor_workspace) {
         sysLogPrintf(LOG_ERROR,
-            "GfxPS2 TEXEL0-factor material graph submission failed");
+            "GfxPS2 texture-factor material graph submission failed");
         s_warned_tex0_factor_workspace = true;
     }
     return success;
@@ -2632,9 +2670,15 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
         ps2_color_recipe_is_opaque_input1_tex0_lerp(
             s_shader->plan.color_recipe);
     const bool tex0_factor_lerp = s_shader->plan.pass_graph ==
-        PS2_PASS_GRAPH_TEX0_FACTOR_LERP &&
+            PS2_PASS_GRAPH_TEX0_FACTOR_LERP &&
         s_shader->plan.color_recipe ==
             PS2_COLOR_INPUT2_INPUT1_LERP_TEX0;
+    const bool tex1_alpha_factor_lerp = s_shader->plan.pass_graph ==
+            PS2_PASS_GRAPH_TEX1_ALPHA_FACTOR_LERP &&
+        s_shader->plan.color_recipe ==
+            PS2_COLOR_INPUT2_INPUT1_LERP_TEX1_ALPHA;
+    const bool texture_factor_lerp = tex0_factor_lerp ||
+        tex1_alpha_factor_lerp;
     const bool interference = s_shader->plan.pass_graph ==
         PS2_PASS_GRAPH_INTERFERENCE &&
         s_shader->plan.color_recipe ==
@@ -2642,7 +2686,8 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
     if (s_shader->plan.textured &&
         (!ps2GsCoreTextureReady(s_selected_texture[0]) ||
          ((opaque_trilerp || alpha_trilerp ||
-           independent_alpha_trilerp || interference) &&
+           independent_alpha_trilerp || interference ||
+           tex1_alpha_factor_lerp) &&
           !ps2GsCoreTextureReady(s_selected_texture[1])))) {
         return;
     }
@@ -2848,14 +2893,16 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
                         ps2_modulate_component(input[0][channel]);
                 }
                 vertex->fog = ps2_fog_coefficient(fog_factor);
-            } else if (tex0_factor_lerp) {
+            } else if (texture_factor_lerp) {
                 struct Ps2Tex0FactorLerpVertex *vertex =
                     &s_tex0_factor_vertices[i];
                 vertex->x = sx;
                 vertex->y = sy;
                 vertex->inv_w = inv_w;
-                vertex->tex_u = tex_u[0];
-                vertex->tex_v = tex_v[0];
+                vertex->tex_u[0] = tex_u[0];
+                vertex->tex_u[1] = tex_u[1];
+                vertex->tex_v[0] = tex_v[0];
+                vertex->tex_v[1] = tex_v[1];
                 vertex->z = iz;
                 for (uint32_t channel = 0u; channel < 3u; ++channel) {
                     vertex->input1[channel] =
@@ -2872,6 +2919,8 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
                         : ps2_modulate_component(input[0][3]);
                 vertex->input2[3] =
                     ps2_modulate_component(input[1][3]);
+                vertex->tex0_alpha_input =
+                    ps2_texture_alpha_fragment_component(input[0][3]);
                 vertex->fog = ps2_fog_coefficient(fog_factor);
             } else if (alpha_trilerp || independent_alpha_trilerp) {
                 struct Ps2AlphaTrilerpVertex *vertex =
@@ -3002,7 +3051,7 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
         } else if (interference) {
             (void)ps2_draw_interference(
                 (uint32_t)batch_vertices);
-        } else if (tex0_factor_lerp) {
+        } else if (texture_factor_lerp) {
             (void)ps2_draw_tex0_factor_lerp(
                 (uint32_t)batch_vertices);
         } else if (alpha_trilerp) {
