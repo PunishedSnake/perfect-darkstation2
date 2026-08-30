@@ -611,6 +611,11 @@ PCSX2 is useful for correctness, packet/state inspection and fast iteration. It 
   translation time, translated vertices and final transport volume;
 - **IN PROGRESS:** define packed VIF-ready vertex batches. The transport
   supports 96 color vertices or 81 textured vertices plus draw-local GS state;
+- **CURRENT IMPLEMENTATION:** the next geometry stage has a host-tested raw
+  input/output memory contract. Each 256-QW TOPS input bank contains a six-QW
+  control/tag header, draw-local A+D state and up to 81 clip/STQ/RGBA vertices.
+  Its disjoint output bank at QW 512 or 768 has room for the corresponding
+  multi-tag GIF PACKED stream, including optional post-draw state restoration;
 - VU1 transform/light/texgen/fog candidate;
 - **IN PROGRESS:** direct GS-ready output and XGKICK. The transport diagnostic
   executes this route, but initially passes through already packed A+D records;

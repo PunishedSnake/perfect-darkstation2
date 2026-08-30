@@ -132,6 +132,13 @@ jobs:
 
           g++ -std=c++20 -Wall -Wextra -Werror \
             -Iport/ps2 \
+            port/ps2/gs_vu1_transform.cpp \
+            port/ps2/gs_vu1_transform_test.cpp \
+            -o /tmp/gs_vu1_transform_test
+          /tmp/gs_vu1_transform_test
+
+          g++ -std=c++20 -Wall -Wextra -Werror \
+            -Iport/ps2 \
             port/ps2/ps2_renderer_stats.cpp \
             port/ps2/ps2_renderer_stats_test.cpp \
             -o /tmp/ps2_renderer_stats_test
