@@ -33,6 +33,24 @@ build-ps2-vu1-diag/pd-ps2-vu1-color-diag.elf
 
 The ordinary `pd-ps2-bootstrap.elf` remains the PATH3 comparison artifact.
 
+## Runtime A/B controls
+
+The VU1 ELF starts on the textured cube with VU1 enabled and fog off.
+
+- `Select`: drain pending PATH1 work and toggle VU1/PATH1 versus EE/PATH3.
+  The serial log names the selected mode. A failed switch is logged and does
+  not silently change mode. The green heartbeat bar means VU1 is selected,
+  not that the image has passed validation.
+- `Triangle`: toggle depth-varying fog on the same cube, exercising XYZF2.
+- Keep both sticks centered with a connected pad for stationary captures.
+  The unattended cube rotates when no pad is connected.
+- `Cross`: reset cube position/orientation. Existing stick and rumble tests
+  remain available.
+
+Capture all four combinations: VU1/PATH3 with fog off/on. Changing transport
+keeps the scene, shader and texture fixed; only the heartbeat status bar
+changes deliberately. The PATH3 mode does not increase VU1 submission counts.
+
 ## Current ownership contract
 
 - Two 256-QW input banks are selected with VIF1 `BASE=0`, `OFFSET=256` and
@@ -99,7 +117,7 @@ The log reports cumulative counters on frame 1 and every 300 frames.
 ## Physical PS2 A/B
 
 Run both the baseline and VU1 diagnostic with the same ROM, loader, video mode
-and controller setup. Record:
+and controller setup; use runtime toggles for same-ELF comparisons too. Record:
 
 1. console model and hardware revision;
 2. PS2SDK/toolchain revision from the CI run;

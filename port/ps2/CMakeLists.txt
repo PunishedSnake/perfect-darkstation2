@@ -14,9 +14,12 @@ option(PD_PS2_ALPHA_TRILERP_DIAGNOSTIC
   OFF
 )
 option(PD_PS2_VU1_COLOR_DIAGNOSTIC
-  "Route packet-ready color/textured batches through VIF1/VU1 for hardware A/B"
+  "Enable VU1 textured transforms, A+D transport and runtime hardware A/B"
   OFF
 )
+if(PD_PS2_ALPHA_TRILERP_DIAGNOSTIC AND PD_PS2_VU1_COLOR_DIAGNOSTIC)
+  message(FATAL_ERROR "Select one hardware diagnostic per build directory")
+endif()
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_EXTENSIONS OFF)

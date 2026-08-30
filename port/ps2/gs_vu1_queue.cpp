@@ -41,6 +41,7 @@ extern "C" uint32_t Ps2GsVu1TexturedTransformCodeEnd;
 static struct Ps2GsVu1QueueSlot s_slots[2];
 static uint32_t s_build_slot;
 static bool s_initialized;
+static bool s_enabled;
 static bool s_pending;
 
 static_assert(sizeof(struct Ps2GsColorVertex) ==
@@ -72,6 +73,7 @@ static void ps2GsVu1QueueRelease(void)
         s_slots[i].ucab = NULL;
     }
     s_initialized = false;
+    s_enabled = false;
     s_pending = false;
 }
 
@@ -217,6 +219,7 @@ extern "C" bool ps2GsVu1QueueInit(void)
     s_build_slot = 0u;
     s_pending = false;
     s_initialized = true;
+    s_enabled = true;
     sysLogPrintf(LOG_NOTE,
         "GS VU1 queue: PATH1 A+D transport ready banks=%u+%u QW max_records=%u",
         PS2_GS_VU1_BUFFER_BASE_QW,
@@ -238,7 +241,7 @@ extern "C" bool ps2GsVu1QueueInit(void)
 extern "C" bool ps2GsVu1QueueEnabled(void)
 {
 #if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
-    return s_initialized;
+    return s_initialized && s_enabled;
 #else
     return false;
 #endif
@@ -260,6 +263,19 @@ extern "C" bool ps2GsVu1QueueWaitIdle(void)
 #endif
 }
 
+extern "C" bool ps2GsVu1QueueSetEnabled(bool enabled)
+{
+#if !defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
+    return !enabled;
+#else
+    if (!s_initialized || !ps2GsVu1QueueWaitIdle()) {
+        return false;
+    }
+    s_enabled = enabled;
+    return true;
+#endif
+}
+
 extern "C" bool ps2GsVu1QueueSubmitAd(
     const struct Ps2GsPackedReg *prefix, uint32_t prefix_count,
     const struct Ps2GsPackedReg *records, uint32_t record_count,
@@ -275,7 +291,7 @@ extern "C" bool ps2GsVu1QueueSubmitAd(
     return false;
 #else
     struct Ps2GsVu1BatchLayout layout;
-    if (!s_initialized || !records || record_count == 0u ||
+    if (!ps2GsVu1QueueEnabled() || !records || record_count == 0u ||
         (prefix_count != 0u && !prefix) ||
         (suffix_count != 0u && !suffix) ||
         prefix_count > UINT32_MAX - record_count ||
@@ -348,7 +364,7 @@ extern "C" bool ps2GsVu1QueueSubmitTexturedTransform(
     (void)suffix_count;
     return false;
 #else
-    if (!s_initialized || !scale || !offset || !vertices ||
+    if (!ps2GsVu1QueueEnabled() || !scale || !offset || !vertices ||
         (prefix_count != 0u && !prefix) ||
         (suffix_count != 0u && !suffix)) {
         return false;

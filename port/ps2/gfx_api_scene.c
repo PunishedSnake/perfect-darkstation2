@@ -7,6 +7,7 @@
 #include "gfx_ps2.h"
 #include "gfx_window_ps2.h"
 #include "gs_core.h"
+#include "gs_vu1_queue.h"
 #include "pad_ps2.h"
 #include "system.h"
 #include "log_ps2.h"
@@ -23,6 +24,12 @@
 #define API_SCENE_TEXTURED_STRIDE 10
 #define API_SCENE_STATUS_VERTEX_COUNT 18
 #define API_SCENE_UNTEXTURED_STRIDE 7
+
+#if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
+/* clip4 + tex2 + fog rgba4 + INPUT1 rgba4 */
+#define API_SCENE_FOG_STRIDE 14
+static float sFogCubeVbo[API_SCENE_DRAW_VERTEX_COUNT * API_SCENE_FOG_STRIDE];
+#endif
 
 #if defined(PERFECT_DARK_PS2_ALPHA_TRILERP_DIAGNOSTIC)
 #define API_SCENE_ALPHA_DIAG_STRIDE 16
@@ -379,6 +386,22 @@ static void buildCubeVbo(
     }
 }
 
+#if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
+static void buildFogCubeVbo(void)
+{
+    for (int i = 0; i < API_SCENE_DRAW_VERTEX_COUNT; ++i) {
+        const float *src = &sCubeVbo[i * API_SCENE_TEXTURED_STRIDE];
+        float *dst = &sFogCubeVbo[i * API_SCENE_FOG_STRIDE];
+        for (int j = 0; j < 6; ++j) dst[j] = src[j];
+        dst[6] = 0.12f;
+        dst[7] = 0.20f;
+        dst[8] = 0.32f;
+        dst[9] = clampfLocal((src[3] - 3.0f) / 3.0f, 0.0f, 1.0f);
+        for (int j = 0; j < 4; ++j) dst[10 + j] = src[6 + j];
+    }
+}
+#endif
+
 static void writeUntexturedVertex(float **dst, float x, float y, float z, float r, float g, float b)
 {
     float *p = *dst;
@@ -551,6 +574,11 @@ bool ps2GfxApiSceneRun(int romStatus)
     struct ShaderProgram *untexturedShader =
         api->create_and_load_new_shader(untexturedShaderId, 0);
 
+#if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
+    struct ShaderProgram *fogShader = api->create_and_load_new_shader(
+        texturedShaderId, texturedShaderOptions | SHADER_OPT_FOG);
+#endif
+
 #if defined(PERFECT_DARK_PS2_ALPHA_TRILERP_DIAGNOSTIC)
     const uint64_t alphaDiagId = alphaDiagShaderId();
     const uint32_t alphaDiagOptions = SHADER_OPT_2CYC | SHADER_OPT_ALPHA;
@@ -561,6 +589,9 @@ bool ps2GfxApiSceneRun(int romStatus)
 #endif
 
     if (!texturedShader || !untexturedShader
+#if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
+        || !fogShader
+#endif
 #if defined(PERFECT_DARK_PS2_ALPHA_TRILERP_DIAGNOSTIC)
         || !alphaDiagShader || !alphaDiagReferenceShader
 #endif
@@ -629,6 +660,12 @@ bool ps2GfxApiSceneRun(int romStatus)
         "GfxAPI scene: MODULATEIA alpha-cutout smoke expects transparent checker cells to be discarded");
     sysLogPrintf(LOG_NOTE,
         "GfxAPI scene: DS2 smoke right=rotate left=move/zoom R1=fire+rumble L1=precision Cross=reset");
+#if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
+    sysLogPrintf(LOG_WARNING,
+        "GfxAPI VU1 diagnostic: Select toggles VU1/PATH3; Triangle toggles fog; green heartbeat=VU1 selected");
+    sysLogPrintf(LOG_WARNING,
+        "GfxAPI VU1 diagnostic: keep sticks centered for a stationary A/B capture; default fog=off");
+#endif
 #if defined(PERFECT_DARK_PS2_ALPHA_TRILERP_DIAGNOSTIC)
     sysLogPrintf(LOG_WARNING,
         "GfxAPI scene: Select toggles validated alpha-trilerp A/B; left=GS graph right=CPU reference");
@@ -650,6 +687,9 @@ bool ps2GfxApiSceneRun(int romStatus)
     float offsetX = 0.0f;
     float cameraDistance = 4.6f;
     const float aspect = (float)width / (float)height;
+#if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
+    bool vu1FogActive = false;
+#endif
 #if defined(PERFECT_DARK_PS2_ALPHA_TRILERP_DIAGNOSTIC)
     /*
      * A diagnostic binary must identify itself without relying on controller
@@ -678,6 +718,9 @@ bool ps2GfxApiSceneRun(int romStatus)
         const struct Ps2PadDiagnostics *visiblePadDiagnostics = NULL;
         int visiblePadScore = -1;
         bool rawDebugPressed = false;
+#if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
+        bool rawFogPressed = false;
+#endif
 
         for (int player = 0; player < PS2_PAD_MAX_PLAYERS; ++player) {
             if (!ps2PadGetDiagnostics(player, &padDiagnostics[player])) {
@@ -688,6 +731,11 @@ bool ps2GfxApiSceneRun(int romStatus)
             if (rawPad && (rawPad->pressed & PS2_PAD_SELECT) != 0u) {
                 rawDebugPressed = true;
             }
+#if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
+            if (rawPad && (rawPad->pressed & PS2_PAD_TRIANGLE) != 0u) {
+                rawFogPressed = true;
+            }
+#endif
 
             int score = padDiagnostics[player].backend_initialized ? 1 : 0;
             if (padDiagnostics[player].port_open) score = 2;
@@ -731,8 +779,32 @@ bool ps2GfxApiSceneRun(int romStatus)
                 alphaDiagActive ? "enabled" : "disabled");
             ps2LogCheckpoint();
         }
+#elif defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
+        if (rawDebugPressed) {
+            if (ps2GsVu1QueueSetEnabled(!ps2GsVu1QueueEnabled())) {
+                sysLogPrintf(LOG_WARNING,
+                    "GfxAPI VU1 A/B: mode=%s fog=%s",
+                    ps2GsVu1QueueEnabled() ? "VU1/PATH1" : "EE/PATH3",
+                    vu1FogActive ? "on" : "off");
+            } else {
+                sysLogPrintf(LOG_ERROR,
+                    "GfxAPI VU1 A/B: switch rejected; queue unavailable or pending work failed");
+            }
+            ps2LogCheckpoint();
+        }
 #else
         (void)rawDebugPressed;
+#endif
+
+#if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
+        if (rawFogPressed) {
+            vu1FogActive = !vu1FogActive;
+            sysLogPrintf(LOG_WARNING,
+                "GfxAPI VU1 A/B: mode=%s fog=%s",
+                ps2GsVu1QueueEnabled() ? "VU1/PATH1" : "EE/PATH3",
+                vu1FogActive ? "on" : "off");
+            ps2LogCheckpoint();
+        }
 #endif
 
         if (controls && controls->connected) {
@@ -770,11 +842,16 @@ bool ps2GfxApiSceneRun(int romStatus)
         buildStatusVbo(romStatus, visiblePadDiagnostics, frameCounter,
 #if defined(PERFECT_DARK_PS2_ALPHA_TRILERP_DIAGNOSTIC)
             alphaDiagActive
+#elif defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
+            ps2GsVu1QueueEnabled()
 #else
             false
 #endif
         );
         buildCubeVbo(sinY, cosY, sinX, cosX, aspect, offsetX, cameraDistance);
+#if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
+        if (vu1FogActive) buildFogCubeVbo();
+#endif
 
         api->start_frame();
         api->set_depth_mode(true, true, true, false, 0);
@@ -809,10 +886,20 @@ bool ps2GfxApiSceneRun(int romStatus)
         {
             api->select_texture(0, textureId, false);
             api->set_sampler_parameters(0, false, 2, 2, false);
-            api->load_shader(texturedShader);
-            api->draw_triangles(sCubeVbo,
-                sizeof(sCubeVbo) / sizeof(sCubeVbo[0]),
-                API_SCENE_DRAW_VERTEX_COUNT / 3);
+#if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
+            if (vu1FogActive) {
+                api->load_shader(fogShader);
+                api->draw_triangles(sFogCubeVbo,
+                    sizeof(sFogCubeVbo) / sizeof(sFogCubeVbo[0]),
+                    API_SCENE_DRAW_VERTEX_COUNT / 3);
+            } else
+#endif
+            {
+                api->load_shader(texturedShader);
+                api->draw_triangles(sCubeVbo,
+                    sizeof(sCubeVbo) / sizeof(sCubeVbo[0]),
+                    API_SCENE_DRAW_VERTEX_COUNT / 3);
+            }
         }
 
         api->end_frame();

@@ -15,6 +15,8 @@ extern "C" {
 /* Optional hardware-validation transport. Disabled builds remain PATH3-only. */
 bool ps2GsVu1QueueInit(void);
 bool ps2GsVu1QueueEnabled(void);
+/* Diagnostic A/B switch. Drains pending PATH1 work before changing mode. */
+bool ps2GsVu1QueueSetEnabled(bool enabled);
 
 /*
  * Complete a pending validation batch before a later PATH3 claimant may alter

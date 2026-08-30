@@ -97,6 +97,18 @@ static void test_one_cycle_modulate(void)
     assert(result.textured);
     assert(result.texture_alpha);
     assert(!result.hardware_validation_required);
+
+    /* The VU1 hardware cube must remain one-pass when fog/alpha cutout are on. */
+    builder.options |= SHADER_OPT_ALPHA_THRESHOLD | SHADER_OPT_FOG;
+    const struct CCFeatures fog_features = decode(&builder);
+    const struct Ps2CombinerPlan fog_result = plan(&builder);
+    assert(fog_features.opt_fog);
+    assert(fog_result.supported);
+    assert(fog_result.pass_graph == PS2_PASS_GRAPH_DIRECT);
+    assert(fog_result.textured);
+    assert(fog_result.color_recipe == PS2_COLOR_TEX0_MUL_INPUT1);
+    assert(fog_result.alpha_recipe == PS2_ALPHA_TEX0_MUL_INPUT1);
+    assert(!fog_result.hardware_validation_required);
 }
 
 static void test_one_cycle_texture_edge(void)
