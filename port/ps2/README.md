@@ -32,6 +32,9 @@ It does **not** prove that the full game builds, renders, fits in memory, or per
 - Project-owned PATH3/GS command submission, native texture residency, indexed
   formats, multipass combiner graphs and native framebuffer presentation are
   active behind the shared Fast3D frontend.
+- An opt-in VIF1/VU1 color-batch diagnostic now submits complete GS-ready A+D
+  packets through VU1 XGKICK/PATH1 while preserving the PATH3 renderer as the
+  automatic fallback and physical-console A/B baseline.
 - DualShock 2 input implements the portable controller contract through
   ROM-resident PADMAN modules.
 - ROM data is read through a bounded file-backed source instead of retaining a
@@ -67,6 +70,9 @@ Expected output:
 ```text
 build-ps2/pd-ps2-bootstrap.elf
 ```
+
+For the first VIF1/VU1/PATH1 hardware artifact and its validation procedure,
+see [VU1_COLOR_DIAGNOSTIC.md](VU1_COLOR_DIAGNOSTIC.md).
 
 Expected runtime output:
 

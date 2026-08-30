@@ -1,0 +1,21 @@
+; VU1 PATH1 transport bring-up for final color A+D records.
+;
+; VIF1 UNPACK writes a complete GIF packet into the active TOPS bank. The
+; microprogram obtains the matching TOP address, waits out the integer result
+; latency and submits the packet directly through XGKICK.
+
+	.vu
+	.align 4
+	.global Ps2GsVu1ColorPathCodeStart
+	.global Ps2GsVu1ColorPathCodeEnd
+Ps2GsVu1ColorPathCodeStart:
+	NOP                             xtop          VI01
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             xgkick        VI01
+	NOP[E]                          NOP
+	NOP                             NOP
+	.align 4
+Ps2GsVu1ColorPathCodeEnd:

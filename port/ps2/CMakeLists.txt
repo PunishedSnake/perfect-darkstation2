@@ -13,6 +13,10 @@ option(PD_PS2_ALPHA_TRILERP_DIAGNOSTIC
   "Start the PS2 bootstrap on the hardware-validated alpha-trilerp A/B scene"
   OFF
 )
+option(PD_PS2_VU1_COLOR_DIAGNOSTIC
+  "Route packet-ready color batches through VIF1/VU1/XGKICK for hardware A/B"
+  OFF
+)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_EXTENSIONS OFF)
@@ -54,6 +58,32 @@ find_program(PD_PS2_BIN2C NAMES bin2c
   HINTS "$ENV{PS2SDK}/bin"
   REQUIRED
 )
+
+set(PD_PS2_VU1_PROGRAM_OBJECT "")
+if(PD_PS2_VU1_COLOR_DIAGNOSTIC)
+  find_program(PD_PS2_DVP_AS NAMES dvp-as
+    HINTS "$ENV{PS2DEV}/bin" "$ENV{PS2SDK}/bin"
+    REQUIRED
+  )
+  set(PD_PS2_VU1_PROGRAM_OBJECT
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/gs_vu1_color_path.o"
+  )
+  add_custom_command(
+    OUTPUT "${PD_PS2_VU1_PROGRAM_OBJECT}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory
+      "${CMAKE_CURRENT_BINARY_DIR}/generated"
+    COMMAND "${PD_PS2_DVP_AS}"
+      "${CMAKE_CURRENT_LIST_DIR}/gs_vu1_color_path.vsm"
+      -o "${PD_PS2_VU1_PROGRAM_OBJECT}"
+    DEPENDS "${CMAKE_CURRENT_LIST_DIR}/gs_vu1_color_path.vsm"
+    COMMENT "Assembling VU1 PATH1 color transport microprogram"
+    VERBATIM
+  )
+  set_source_files_properties(
+    "${PD_PS2_VU1_PROGRAM_OBJECT}"
+    PROPERTIES GENERATED TRUE EXTERNAL_OBJECT TRUE
+  )
+endif()
 
 set(PD_PS2_AUDSRV_IRX "$ENV{PS2SDK}/iop/irx/audsrv.irx")
 if(NOT EXISTS "${PD_PS2_AUDSRV_IRX}")
@@ -205,6 +235,8 @@ add_executable(pd_ps2_bootstrap
   gs_render_target_layout.cpp
   gs_state_shadow.cpp
   gs_texture_convert.cpp
+  gs_vu1_batch.cpp
+  gs_vu1_queue.cpp
   gs_vram_allocator.cpp
   gfx_api_scene.c
   gfx_frame_ps2.c
@@ -223,11 +255,18 @@ add_executable(pd_ps2_bootstrap
   "${PD_ROOT}/port/fast3d/rdp_tmem_runtime.cpp"
   "${PD_ROOT}/port/fast3d/rdp_tmem_live.cpp"
   "${PD_ROOT}/port/fast3d/rdp_tmem_trace.cpp"
+  ${PD_PS2_VU1_PROGRAM_OBJECT}
 )
 
 if(PD_PS2_ALPHA_TRILERP_DIAGNOSTIC)
   target_compile_definitions(pd_ps2_bootstrap PRIVATE
     PERFECT_DARK_PS2_ALPHA_TRILERP_DIAGNOSTIC=1
+  )
+endif()
+
+if(PD_PS2_VU1_COLOR_DIAGNOSTIC)
+  target_compile_definitions(pd_ps2_bootstrap PRIVATE
+    PERFECT_DARK_PS2_VU1_COLOR_BATCH=1
   )
 endif()
 
@@ -259,6 +298,8 @@ target_link_libraries(pd_ps2_bootstrap PRIVATE
 
 if(PD_PS2_ALPHA_TRILERP_DIAGNOSTIC)
   set(PD_PS2_BOOTSTRAP_OUTPUT_NAME "pd-ps2-alpha-trilerp-diag")
+elseif(PD_PS2_VU1_COLOR_DIAGNOSTIC)
+  set(PD_PS2_BOOTSTRAP_OUTPUT_NAME "pd-ps2-vu1-color-diag")
 else()
   set(PD_PS2_BOOTSTRAP_OUTPUT_NAME "pd-ps2-bootstrap")
 endif()

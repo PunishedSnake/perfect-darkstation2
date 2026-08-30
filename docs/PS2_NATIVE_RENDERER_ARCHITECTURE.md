@@ -299,6 +299,13 @@ This semantic layer should remain backend-independent where possible. PS2-specif
 **CURRENT IMPLEMENTATION:**
 
 - frame/state/primitive PATH3 commands use a project-owned native GIF PACKED A+D queue;
+- **CURRENT IMPLEMENTATION:** an opt-in VU1 validation artifact can route
+  untextured color batches through `DMAC -> VIF1 UNPACK -> VU1 -> XGKICK ->
+  PATH1`. It uses two 256-QW VU1 banks and two EE staging slots, emits the same
+  final A+D records as the PATH3 baseline, and falls back to PATH3 if setup or
+  submission fails. The first physical A/B intentionally serializes each batch
+  with `FLUSHA -> MSCAL -> FLUSH`; overlap is not claimed until that ordering
+  scaffold passes on retail hardware;
 - **CURRENT IMPLEMENTATION:** ordinary state and primitive reservations may spill across any number of the two alternating PATH3 command arenas in one logical frame. A spill submits the full arena, begins the other one and continues in-order with persistent GS register state; it waits only for GIF-channel ownership and never inserts `FINISH`. Single packets larger than an arena remain a hard error, with host-tested boundary arithmetic preventing unsigned-capacity wraparound;
 - texture uploads use project-owned GIF IMAGE source chains with two persistent staging slots;
 - upload staging is prepared before claiming the GIF channel, following `submit early, wait late` as far as dependency allows;
@@ -597,10 +604,14 @@ PCSX2 is useful for correctness, packet/state inspection and fast iteration. It 
 ### M5: VIF1/VU1 geometry path
 
 - establish CPU baseline counters;
-- define packed VIF-ready vertex batches;
+- **IN PROGRESS:** define packed VIF-ready vertex batches. The first 96-vertex
+  color transport contract and host-tested VIF/GIF stream are implemented;
 - VU1 transform/light/texgen/fog candidate;
-- direct GS-ready output and XGKICK;
-- double-buffer VU input/output ownership;
+- **IN PROGRESS:** direct GS-ready output and XGKICK. The transport diagnostic
+  executes this route, but initially passes through already packed A+D records;
+- **IN PROGRESS:** double-buffer VU input/output ownership. BASE/OFFSET banks
+  and alternating EE slots exist, while execution remains serialized for the
+  first hardware correctness test;
 - real-hardware A/B against CPU path.
 
 ### M6: IPU image jobs

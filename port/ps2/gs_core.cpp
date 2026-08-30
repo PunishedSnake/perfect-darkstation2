@@ -12,6 +12,7 @@
 #include "gs_render_target_layout.h"
 #include "gs_state_shadow.h"
 #include "gs_texture_convert.h"
+#include "gs_vu1_queue.h"
 #include "gs_vram_allocator.h"
 #include "log_ps2.h"
 #include "system.h"
@@ -78,6 +79,7 @@ static bool s_native_finish_failed;
 static bool s_native_present_failed;
 static bool s_logged_command_arena_spill;
 static bool s_logged_oversized_command;
+static bool s_logged_vu1_color_fallback;
 static Ps2GsRenderTargetHandle s_active_render_target;
 static uint32_t s_loaded_clut_vram;
 static int s_loaded_clut_psm;
@@ -575,9 +577,16 @@ extern "C" bool ps2GsCoreInit(const struct Ps2GsCreateInfo *info)
     gs->ZBuffering = config->z_buffering ? GS_SETTING_ON : GS_SETTING_OFF;
     gs->Dithering = config->dithering ? GS_SETTING_ON : GS_SETTING_OFF;
 
+    uint16_t dma_fastwait_channels = 1u << DMA_CHANNEL_GIF;
+#if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
+    dma_fastwait_channels |= 1u << DMA_CHANNEL_VIF1;
+#endif
     dmaKit_init(D_CTRL_RELE_OFF, D_CTRL_MFD_OFF, D_CTRL_STS_UNSPEC,
-        D_CTRL_STD_OFF, D_CTRL_RCYC_8, 1 << DMA_CHANNEL_GIF);
+        D_CTRL_STD_OFF, D_CTRL_RCYC_8, dma_fastwait_channels);
     dmaKit_chan_init(DMA_CHANNEL_GIF);
+#if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
+    dmaKit_chan_init(DMA_CHANNEL_VIF1);
+#endif
 
     /*
      * CURRENT IMPLEMENTATION: gsKit still owns CRT setup and initial system
@@ -600,6 +609,7 @@ extern "C" bool ps2GsCoreInit(const struct Ps2GsCreateInfo *info)
     s_native_present_failed = false;
     s_logged_command_arena_spill = false;
     s_logged_oversized_command = false;
+    s_logged_vu1_color_fallback = false;
     s_active_render_target = PS2_GS_RENDER_TARGET_DEFAULT;
     ps2GsCoreInvalidateClutCache();
     s_fog_r = 0;
@@ -625,6 +635,12 @@ extern "C" bool ps2GsCoreInit(const struct Ps2GsCreateInfo *info)
         ps2LogCheckpoint();
         s_gs = NULL;
         return false;
+    }
+
+    if (!ps2GsVu1QueueInit()) {
+        sysLogPrintf(LOG_WARNING,
+            "GS core: VU1 PATH1 validation transport unavailable; using PATH3 fallback");
+        ps2LogCheckpoint();
     }
 
     if (!ps2GsVramAllocatorInit(
@@ -1775,6 +1791,26 @@ extern "C" void ps2GsCoreDrawColorTriangles(const struct Ps2GsColorVertex *verti
         0);
     const bool emit_prim = ps2GsStateShadowNeedsWrite(
         &s_state_shadow, PS2_GS_STATE_PRIM, prim);
+
+    if (ps2GsVu1QueueEnabled()) {
+        const struct Ps2GsPackedReg prim_record = { prim, GS_PRIM };
+        if (ps2GsVu1QueueSubmitColor(
+                &prim_record, emit_prim, vertices, vertex_count)) {
+            if (emit_prim) {
+                ps2GsStateShadowCommit(
+                    &s_state_shadow, PS2_GS_STATE_PRIM, prim);
+            }
+            ps2GsCoreMarkActiveRenderTargetWritten();
+            return;
+        }
+        if (!s_logged_vu1_color_fallback) {
+            sysLogPrintf(LOG_WARNING,
+                "GS core: VU1 color batch rejected; preserving PATH3 fallback");
+            ps2LogCheckpoint();
+            s_logged_vu1_color_fallback = true;
+        }
+    }
+
     const uint32_t register_count =
         (emit_prim ? 1u : 0u) + vertex_count * 2u;
     struct Ps2GsPackedReg *p = ps2GsCoreReserve(register_count);

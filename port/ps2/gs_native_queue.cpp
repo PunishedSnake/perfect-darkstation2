@@ -8,6 +8,7 @@
 
 #include "gs_native_queue.h"
 #include "gs_texture_convert.h"
+#include "gs_vu1_queue.h"
 #include "log_ps2.h"
 #include "system.h"
 
@@ -450,7 +451,8 @@ static bool ps2GsNativeQueueUploadTextureInternal(GSGLOBAL *gs,
      * Return immediately after submission; the next GIF claimant performs the
      * dependency wait instead of forcing completion here.
      */
-    if (dmaKit_wait(DMA_CHANNEL_GIF, 0) < 0) {
+    if (!ps2GsVu1QueueWaitIdle() ||
+        dmaKit_wait(DMA_CHANNEL_GIF, 0) < 0) {
         return false;
     }
     dmaKit_send_chain(DMA_CHANNEL_GIF, slot->chain, chain_qw);
@@ -502,7 +504,8 @@ extern "C" bool ps2GsNativeQueueSubmit(void)
      * to claim it. Texture IMAGE transfers use the same rule, so their TEXFLUSH
      * is ordered before any dependent draw chain submitted here.
      */
-    if (dmaKit_wait(DMA_CHANNEL_GIF, 0) < 0) {
+    if (!ps2GsVu1QueueWaitIdle() ||
+        dmaKit_wait(DMA_CHANNEL_GIF, 0) < 0) {
         return false;
     }
 
@@ -523,7 +526,8 @@ extern "C" bool ps2GsNativeQueueWaitGs(void)
      * before submitting this token, then distinguish GIF completion from actual
      * GS completion by polling the privileged FINISH bit.
      */
-    if (dmaKit_wait(DMA_CHANNEL_GIF, 0) < 0) {
+    if (!ps2GsVu1QueueWaitIdle() ||
+        dmaKit_wait(DMA_CHANNEL_GIF, 0) < 0) {
         return false;
     }
     GS_SETREG_CSR_FINISH(1);
@@ -544,7 +548,8 @@ extern "C" bool ps2GsNativeQueuePresent(GSGLOBAL *gs)
     }
 
     /* Own the tiny dynamic packet before rewriting its UCAB storage. */
-    if (dmaKit_wait(DMA_CHANNEL_GIF, 0) < 0) {
+    if (!ps2GsVu1QueueWaitIdle() ||
+        dmaKit_wait(DMA_CHANNEL_GIF, 0) < 0) {
         return false;
     }
 

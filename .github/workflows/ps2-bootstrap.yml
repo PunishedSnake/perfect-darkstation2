@@ -123,6 +123,13 @@ jobs:
             -o /tmp/gs_render_target_layout_test
           /tmp/gs_render_target_layout_test
 
+          g++ -std=c++20 -Wall -Wextra -Werror \
+            -Iport/ps2 \
+            port/ps2/gs_vu1_batch.cpp \
+            port/ps2/gs_vu1_batch_test.cpp \
+            -o /tmp/gs_vu1_batch_test
+          /tmp/gs_vu1_batch_test
+
       - name: Test native GS texture conversion
         run: |
           g++ -std=c++20 -Wall -Wextra -Werror \
@@ -235,6 +242,19 @@ jobs:
           mips64r5900el-ps2-elf-size \
             build-ps2-alpha-diag/pd-ps2-alpha-trilerp-diag.elf
 
+      - name: Build VU1 PATH1 color diagnostic
+        run: |
+          cmake -S port/ps2 -B build-ps2-vu1-diag -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/port/ps2/ps2dev-toolchain.cmake" \
+            -DPD_PS2_VU1_COLOR_DIAGNOSTIC=ON
+          cmake --build build-ps2-vu1-diag -j2 --verbose
+          test -f build-ps2-vu1-diag/pd-ps2-vu1-color-diag.elf
+          mips64r5900el-ps2-elf-size \
+            build-ps2-vu1-diag/pd-ps2-vu1-color-diag.elf
+          mips64r5900el-ps2-elf-nm \
+            build-ps2-vu1-diag/pd-ps2-vu1-color-diag.elf | \
+            grep -E ' Ps2GsVu1ColorPathCode(Start|End)$'
+
       - name: Upload bootstrap ELF
         uses: actions/upload-artifact@v4
         with:
@@ -248,5 +268,13 @@ jobs:
         with:
           name: pd-ps2-alpha-trilerp-diag
           path: build-ps2-alpha-diag/pd-ps2-alpha-trilerp-diag.elf
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload VU1 PATH1 color diagnostic ELF
+        uses: actions/upload-artifact@v4
+        with:
+          name: pd-ps2-vu1-color-diag
+          path: build-ps2-vu1-diag/pd-ps2-vu1-color-diag.elf
           if-no-files-found: error
           retention-days: 14
