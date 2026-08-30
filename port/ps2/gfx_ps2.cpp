@@ -1448,6 +1448,23 @@ static void ps2_make_tex0_factor_solid_triangle(
     }
 }
 
+static void ps2_make_tex0_factor_output_alpha_triangle(
+    const struct Ps2Tex0FactorLerpVertex *source,
+    int origin_x, int origin_y, bool use_input1,
+    struct Ps2GsColorVertex output[3])
+{
+    for (uint32_t i = 0u; i < 3u; ++i) {
+        const struct Ps2Tex0FactorLerpVertex *vertex = &source[i];
+        const uint8_t alpha = use_input1
+            ? vertex->input1[3] : 0x80u;
+        output[i].rgbaq = ps2_pack_rgbaq(
+            0u, 0u, 0u, alpha, 0.0f);
+        output[i].xyz2 = ps2_pack_xyz2(
+            vertex->x - (float)origin_x,
+            vertex->y - (float)origin_y, vertex->z);
+    }
+}
+
 static void ps2_make_tex0_factor_workspace_sample(
     const struct Ps2Tex0FactorLerpVertex *source,
     int origin_x, int origin_y, bool screen_position,
@@ -1484,6 +1501,7 @@ static bool ps2_draw_tex0_factor_lerp_tile(
     struct Ps2GsColorVertex source_rgb[3];
     struct Ps2GsColorVertex base_alpha[3];
     struct Ps2GsColorVertex source_alpha[3];
+    struct Ps2GsColorVertex output_alpha[3];
     ps2_make_tex0_factor_capture_triangle(
         triangle, tile->x, tile->y, capture);
     ps2_make_tex0_factor_workspace_sample(
@@ -1500,6 +1518,10 @@ static bool ps2_draw_tex0_factor_lerp_tile(
         triangle, tile->x, tile->y, false, true, base_alpha);
     ps2_make_tex0_factor_solid_triangle(
         triangle, tile->x, tile->y, true, true, source_alpha);
+    ps2_make_tex0_factor_output_alpha_triangle(
+        triangle, tile->x, tile->y,
+        s_shader->plan.alpha_recipe == PS2_ALPHA_INPUT1,
+        output_alpha);
 
     /* Capture T.rgba/2 once. It supplies GS ALPHA's native 0..128 factors. */
     ps2GsCoreSetColorWrite(true);
@@ -1604,6 +1626,10 @@ static bool ps2_draw_tex0_factor_lerp_tile(
                 (uint32_t)tile->width, (uint32_t)tile->height)) {
             return false;
         }
+    } else if (s_shader->plan.alpha_recipe == PS2_ALPHA_INPUT1 ||
+        s_shader->plan.alpha_recipe == PS2_ALPHA_OPAQUE ||
+        s_shader->plan.alpha_recipe == PS2_ALPHA_ONE) {
+        ps2GsCoreDrawColorTriangles(output_alpha, 3u);
     } else if (!ps2GsCoreDrawRenderTargetAlphaTriangles(
             s_alpha_trilerp_scalar_target,
             alpha_sample, 3u, false)) {

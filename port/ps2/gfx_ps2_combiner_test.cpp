@@ -535,6 +535,35 @@ static void test_custom27_tex0_factor_pass_graph(void)
     assert(!plan(&builder).supported);
 }
 
+static void test_skydome_tex0_factor_pass_graph(void)
+{
+    struct CombinerBuilder builder{};
+    builder.options = SHADER_OPT_ALPHA;
+    set_tex0_factor_lerp(&builder, 0u, 0u);
+    set_single(&builder, 0u, 1u, SHADER_INPUT_1);
+
+    struct Ps2CombinerPlan result = plan(&builder);
+    assert(result.supported);
+    assert(result.color_recipe ==
+        PS2_COLOR_INPUT2_INPUT1_LERP_TEX0);
+    assert(result.alpha_recipe == PS2_ALPHA_INPUT1);
+    assert(result.pass_graph == PS2_PASS_GRAPH_TEX0_FACTOR_LERP);
+    assert(result.textured);
+    assert(!result.texture_alpha);
+    assert(result.hardware_validation_required);
+
+    builder.options = 0u;
+    result = plan(&builder);
+    assert(result.supported);
+    assert(result.alpha_recipe == PS2_ALPHA_OPAQUE);
+    assert(result.pass_graph == PS2_PASS_GRAPH_TEX0_FACTOR_LERP);
+    assert(!result.texture_alpha);
+
+    builder.options = SHADER_OPT_ALPHA;
+    set_single(&builder, 0u, 1u, SHADER_INPUT_2);
+    assert(!plan(&builder).supported);
+}
+
 static void test_custom00_01_shield_pass_graph(void)
 {
     struct CombinerBuilder builder{};
@@ -668,6 +697,7 @@ int main(void)
     test_alpha_env_tex0_lerp_remains_unsupported();
     test_blendia_tex0_factor_pass_graph();
     test_custom27_tex0_factor_pass_graph();
+    test_skydome_tex0_factor_pass_graph();
     test_custom00_01_shield_pass_graph();
     test_interference_pass_graph();
     test_independent_tex0_alpha_pass_graph();
