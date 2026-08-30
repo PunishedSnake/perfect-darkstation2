@@ -434,6 +434,63 @@ static bool ps2_is_tex0_factor_lerp_cycle(
            f->c[cycle][channel][3] == SHADER_INPUT_2;
 }
 
+static bool ps2_cycle_multiplies_tex0_by_input1(
+    const struct CCFeatures *f, uint8_t cycle, uint8_t channel)
+{
+    if (!f->do_multiply[cycle][channel]) {
+        return false;
+    }
+
+    const uint8_t a = f->c[cycle][channel][0];
+    const uint8_t c = f->c[cycle][channel][2];
+    if (channel == 0u) {
+        return (a == SHADER_TEXEL0 && c == SHADER_INPUT_1) ||
+               (a == SHADER_INPUT_1 && c == SHADER_TEXEL0);
+    }
+    return (ps2_shader_item_is_tex0_alpha(a) &&
+            c == SHADER_INPUT_1) ||
+           (a == SHADER_INPUT_1 &&
+            ps2_shader_item_is_tex0_alpha(c));
+}
+
+static bool ps2_plan_custom00_01_shield(
+    const struct CCFeatures *f, struct Ps2CombinerPlan *plan)
+{
+    if (!f->opt_2cyc || !f->opt_alpha || f->opt_texture_edge ||
+        f->opt_invisible ||
+        !ps2_cycle_multiplies_tex0_by_input1(f, 0u, 0u) ||
+        !ps2_cycle_multiplies_tex0_by_input1(f, 0u, 1u) ||
+        !ps2_channel_passes_combined(f, 0u)) {
+        return false;
+    }
+
+    /* CUSTOM_01 alpha: (1 - COMBINED) * INPUT2 + COMBINED. */
+    if (f->c[1][1][0] != SHADER_1 ||
+        f->c[1][1][1] != SHADER_COMBINED ||
+        f->c[1][1][2] != SHADER_INPUT_2 ||
+        f->c[1][1][3] != SHADER_COMBINED) {
+        return false;
+    }
+
+    /*
+     * RGB = lerp(0, INPUT1, TEX0).
+     * A = lerp(INPUT2, INPUT2 + INPUT1 * (1 - INPUT2), TEX0).
+     * Both fit the existing channel-wise TEXEL0-factor graph once the alpha
+     * endpoints are prepared by the vertex translator.
+     */
+    plan->color_recipe = PS2_COLOR_INPUT2_INPUT1_LERP_TEX0;
+    plan->alpha_recipe =
+        PS2_ALPHA_INPUT2_INPUT1_COVERAGE_LERP_TEX0;
+    plan->color_cycle = 1u;
+    plan->alpha_cycle = 1u;
+    plan->textured = true;
+    plan->texture_alpha = true;
+    plan->pass_graph = PS2_PASS_GRAPH_TEX0_FACTOR_LERP;
+    plan->hardware_validation_required = true;
+    plan->supported = true;
+    return true;
+}
+
 static bool ps2_plan_alpha_tex0_factor_lerp(
     const struct CCFeatures *f, struct Ps2CombinerPlan *plan)
 {
@@ -652,6 +709,10 @@ bool ps2GfxPlanCombiner(const struct CCFeatures *f,
     }
 
     if (ps2_plan_opaque_input1_tex0_lerp(f, plan)) {
+        return true;
+    }
+
+    if (ps2_plan_custom00_01_shield(f, plan)) {
         return true;
     }
 

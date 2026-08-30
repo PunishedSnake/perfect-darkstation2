@@ -26,6 +26,12 @@ static inline uint32_t gfxPs2MaterialRgbChannelPasses(bool monochrome_rgb)
     return monochrome_rgb ? 1u : 3u;
 }
 
+/* Union of two normalized coverage values: B + A * (1 - B). */
+static inline float gfxPs2CoverageUnion(float a, float b)
+{
+    return b + a * (1.0f - b);
+}
+
 static inline bool gfxPs2Rgba32IsMonochrome(
     const uint8_t *rgba32, uint32_t texel_count)
 {

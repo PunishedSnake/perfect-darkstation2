@@ -1519,7 +1519,9 @@ static bool ps2_draw_tex0_factor_lerp_tile(
         s_selected_texture[0], capture, 3u);
 
     const bool alpha_lerp = s_shader->plan.alpha_recipe ==
-        PS2_ALPHA_INPUT2_INPUT1_LERP_TEX0;
+            PS2_ALPHA_INPUT2_INPUT1_LERP_TEX0 ||
+        s_shader->plan.alpha_recipe ==
+            PS2_ALPHA_INPUT2_INPUT1_COVERAGE_LERP_TEX0;
     if (alpha_lerp) {
         /* Build lerp(INPUT2.a, INPUT1.a, TEXEL0.a) in output red. */
         if (!ps2GsCoreBindRenderTarget(s_alpha_trilerp_color_target)) {
@@ -2836,7 +2838,12 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
                         ps2_u8_component(input[1][channel]);
                 }
                 vertex->input1[3] =
-                    ps2_modulate_component(input[0][3]);
+                    s_shader->plan.alpha_recipe ==
+                            PS2_ALPHA_INPUT2_INPUT1_COVERAGE_LERP_TEX0
+                        ? ps2_modulate_component(
+                            gfxPs2CoverageUnion(
+                                input[0][3], input[1][3]))
+                        : ps2_modulate_component(input[0][3]);
                 vertex->input2[3] =
                     ps2_modulate_component(input[1][3]);
                 vertex->fog = ps2_fog_coefficient(fog_factor);
