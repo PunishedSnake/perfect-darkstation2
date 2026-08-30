@@ -243,6 +243,18 @@ jobs:
             -Iinclude -Iinclude/PR -Isrc/include -Isrc/lib/ultra/audio \
             port/ps2/gfx_api_scene.c
 
+      - name: Test VU1 fog diagnostic VBO
+        run: |
+          gcc -std=c11 -Wall -Wextra -Werror \
+            -ffunction-sections -fdata-sections -Wl,--gc-sections \
+            -DPERFECT_DARK_PS2_VU1_COLOR_BATCH=1 -D_LANGUAGE_C=1 \
+            -include include/PR/ultratypes.h \
+            -Iport/ps2 -Iport/fast3d -Iport/include \
+            -Iinclude -Iinclude/PR -Isrc/include -Isrc/lib/ultra/audio \
+            port/ps2/gfx_api_scene_vu1_test.c \
+            -o /tmp/gfx_api_scene_vu1_test
+          /tmp/gfx_api_scene_vu1_test
+
       - name: Configure PS2 bootstrap
         run: |
           cmake -S port/ps2 -B build-ps2 -G Ninja \

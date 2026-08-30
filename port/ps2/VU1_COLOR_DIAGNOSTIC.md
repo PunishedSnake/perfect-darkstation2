@@ -20,7 +20,7 @@ not a claim of reduced CPU time or a hardware-validated renderer.
 
 ```sh
 cmake -S port/ps2 -B build-ps2-vu1-diag -G Ninja \
-  -DCMAKE_TOOLCHAIN_FILE="$PS2SDK/samples/ps2dev.cmake" \
+  -DCMAKE_TOOLCHAIN_FILE="$PWD/port/ps2/ps2dev-toolchain.cmake" \
   -DPD_PS2_VU1_COLOR_DIAGNOSTIC=ON
 cmake --build build-ps2-vu1-diag -j2
 ```
