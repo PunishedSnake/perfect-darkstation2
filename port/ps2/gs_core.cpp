@@ -12,6 +12,7 @@
 #include "gs_render_target_layout.h"
 #include "gs_state_shadow.h"
 #include "gs_texture_convert.h"
+#include "gs_vu1_batch.h"
 #include "gs_vu1_queue.h"
 #include "gs_vram_allocator.h"
 #include "log_ps2.h"
