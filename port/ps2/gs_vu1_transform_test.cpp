@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <string.h>
+#include <limits>
 
 #include "gs_vu1_transform.h"
 
@@ -12,6 +13,41 @@ static struct Ps2GsPackedReg makeReg(uint64_t value, uint64_t reg)
 int main(void)
 {
     struct Ps2GsVu1TransformLayout layout = {};
+    float mapped_scale[4] = {};
+    float mapped_offset[4] = {};
+    assert(ps2GsVu1BuildViewportMapping(
+        0, 0, 320, 240, 16, 32, 0.0f, 1.0f,
+        mapped_scale, mapped_offset));
+    assert(mapped_scale[0] == 160.0f);
+    assert(mapped_scale[1] == -120.0f);
+    assert(mapped_scale[2] == -65534.0f);
+    assert(mapped_scale[3] == 0.0f);
+    assert(mapped_offset[0] == 161.0f);
+    assert(mapped_offset[1] == 122.0f);
+    assert(mapped_offset[2] == 65535.0f);
+    assert(mapped_offset[3] == 4095.9375f);
+    assert(!ps2GsVu1BuildViewportMapping(
+        0, 0, 0, 240, 16, 32, 0.0f, 1.0f,
+        mapped_scale, mapped_offset));
+    assert(!ps2GsVu1BuildViewportMapping(
+        0, 0, 320, 240, 16, 32, -0.1f, 1.0f,
+        mapped_scale, mapped_offset));
+    assert(!ps2GsVu1BuildViewportMapping(
+        0, 0, 320, 240, 16, 32,
+        std::numeric_limits<float>::quiet_NaN(), 1.0f,
+        mapped_scale, mapped_offset));
+    assert(!ps2GsVu1BuildViewportMapping(
+        0, 0, 320, 240, 16, 32,
+        0.0f, std::numeric_limits<float>::infinity(),
+        mapped_scale, mapped_offset));
+    assert(ps2GsVu1BuildViewportMapping(
+        10, 20, 640, 448, 32768, 32768, 1.0f, 0.0f,
+        mapped_scale, mapped_offset));
+    assert(mapped_scale[2] == 65534.0f);
+    assert(mapped_offset[2] == 1.0f);
+    assert(mapped_offset[0] == 2378.0f);
+    assert(mapped_offset[1] == 2292.0f);
+
     assert(!ps2GsVu1PlanTexturedTransform(0u, 0u, 0u, &layout));
     assert(!ps2GsVu1PlanTexturedTransform(4u, 0u, 0u, &layout));
     assert(!ps2GsVu1PlanTexturedTransform(84u, 0u, 0u, &layout));
@@ -20,6 +56,7 @@ int main(void)
     assert(ps2GsVu1PlanTexturedTransform(81u, 5u, 1u, &layout));
     assert(layout.input_qw == 255u);
     assert(layout.output_qw == 252u);
+    assert(layout.dma_chain_qw == 258u);
 
     const float scale[4] = { 2560.0f, -1792.0f, -65534.0f, 0.0f };
     const float offset[4] = { 32768.0f, 32768.0f, 65535.0f, 0.0f };
@@ -50,6 +87,7 @@ int main(void)
         prefix, 2u, vertices, 3u, &suffix, 1u, &layout));
     assert(layout.input_qw == 21u);
     assert(layout.output_qw == 18u);
+    assert(layout.dma_chain_qw == 24u);
     assert(payload[0] == 3u);
     assert(payload[1] == 2u);
     assert(payload[2] == 1u);
@@ -138,6 +176,47 @@ int main(void)
         &suffix, PS2_GS_VU1_TRANSFORM_MAX_SUFFIX_RECORDS, &layout));
     assert(layout.input_qw == 255u);
     assert(layout.output_qw == 252u);
+    assert(layout.dma_chain_qw == 258u);
+
+    uint32_t stream[
+        (PS2_GS_VU1_BUFFER_QW + PS2_GS_VU1_DMA_CHAIN_OVERHEAD_QW) *
+        4u] = {};
+    assert(ps2GsVu1BuildTexturedTransformStream(
+        stream,
+        PS2_GS_VU1_BUFFER_QW + PS2_GS_VU1_DMA_CHAIN_OVERHEAD_QW,
+        0x00102030u, scale, offset, PS2_GS_VU1_TRANSFORM_FLAG_FOG,
+        prefix, 2u, vertices, 3u, &suffix, 1u, &layout));
+    assert(layout.dma_chain_qw == 24u);
+
+    uint64_t dma_tag = 0u;
+    memcpy(&dma_tag, &stream[0], sizeof(dma_tag));
+    assert(dma_tag == 0x0010203030000015ull);
+    assert(stream[2] == 0x01000101u);
+    assert(stream[3] == 0x6c15c000u);
+    memcpy(&dma_tag, &stream[4], sizeof(dma_tag));
+    assert(dma_tag == 0x0000000010000000ull);
+    assert(stream[6] == 0x13000000u);
+    assert(stream[7] == 0x14000040u);
+    memcpy(&dma_tag, &stream[8], sizeof(dma_tag));
+    assert(dma_tag == 0x0000000070000000ull);
+    assert(stream[10] == 0x11000000u);
+    assert(stream[11] == 0u);
+
+    uint32_t expected_payload[PS2_GS_VU1_BUFFER_QW * 4u] = {};
+    assert(ps2GsVu1BuildTexturedTransformPayload(
+        expected_payload, PS2_GS_VU1_BUFFER_QW, scale, offset,
+        PS2_GS_VU1_TRANSFORM_FLAG_FOG,
+        prefix, 2u, vertices, 3u, &suffix, 1u, NULL));
+    assert(memcmp(&stream[12], expected_payload,
+        (size_t)layout.input_qw * 16u) == 0);
+    assert(!ps2GsVu1BuildTexturedTransformStream(
+        stream, layout.dma_chain_qw - 1u,
+        0x00102030u, scale, offset, 0u,
+        prefix, 2u, vertices, 3u, &suffix, 1u, NULL));
+    assert(!ps2GsVu1BuildTexturedTransformStream(
+        stream, layout.dma_chain_qw,
+        0x00102034u, scale, offset, 0u,
+        prefix, 2u, vertices, 3u, &suffix, 1u, NULL));
 
     return 0;
 }

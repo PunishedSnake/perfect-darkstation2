@@ -223,6 +223,12 @@ extern "C" bool ps2GsVu1QueueInit(void)
         PS2_GS_VU1_BUFFER_OFFSET_QW,
         PS2_GS_VU1_MAX_AD_REGISTERS);
     sysLogPrintf(LOG_NOTE,
+        "GS VU1 queue: textured transform ready entry=%u output=%u+%u QW max_vertices=%u",
+        PS2_GS_VU1_TRANSFORM_PROGRAM_ADDRESS,
+        PS2_GS_VU1_TRANSFORM_OUTPUT_BASE_QW,
+        PS2_GS_VU1_TRANSFORM_OUTPUT_SECOND_BASE_QW,
+        PS2_GS_VU1_MAX_TEXTURED_VERTICES);
+    sysLogPrintf(LOG_NOTE,
         "GS VU1 queue: validation ordering FLUSHA->MSCAL->FLUSH active");
     ps2LogCheckpoint();
     return true;
@@ -322,4 +328,56 @@ extern "C" bool ps2GsVu1QueueSubmitColor(
         emit_prim ? prim : NULL, emit_prim ? 1u : 0u,
         &vertices[0].rgbaq, vertex_count * 2u,
         NULL, 0u);
+}
+
+extern "C" bool ps2GsVu1QueueSubmitTexturedTransform(
+    const float scale[4], const float offset[4], uint32_t flags,
+    const struct Ps2GsPackedReg *prefix, uint32_t prefix_count,
+    const struct Ps2GsVu1TransformVertex *vertices, uint32_t vertex_count,
+    const struct Ps2GsPackedReg *suffix, uint32_t suffix_count)
+{
+#if !defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
+    (void)scale;
+    (void)offset;
+    (void)flags;
+    (void)prefix;
+    (void)prefix_count;
+    (void)vertices;
+    (void)vertex_count;
+    (void)suffix;
+    (void)suffix_count;
+    return false;
+#else
+    if (!s_initialized || !scale || !offset || !vertices ||
+        (prefix_count != 0u && !prefix) ||
+        (suffix_count != 0u && !suffix)) {
+        return false;
+    }
+
+    /* Preserve earlier PATH3 state before the validation FLUSHA transition. */
+    if (!ps2GsNativeQueueSubmit()) {
+        return false;
+    }
+    ps2GsNativeQueueBeginFrame();
+
+    struct Ps2GsVu1QueueSlot *slot = &s_slots[s_build_slot];
+    const uint32_t payload_dma_address =
+        (uint32_t)(uintptr_t)slot->canonical +
+        PS2_GS_VU1_DMA_CHAIN_OVERHEAD_QW * 16u;
+    if (!ps2GsVu1BuildTexturedTransformStream(
+            slot->ucab, PS2_GS_VU1_DMA_SLOT_QW,
+            payload_dma_address, scale, offset, flags,
+            prefix, prefix_count, vertices, vertex_count,
+            suffix, suffix_count, NULL)) {
+        return false;
+    }
+
+    if (!ps2GsVu1QueueWaitVifIdle()) {
+        return false;
+    }
+    dmaKit_send_chain_ucab(DMA_CHANNEL_VIF1, slot->ucab);
+    s_pending = true;
+    s_build_slot ^= 1u;
+    return true;
+#endif
 }

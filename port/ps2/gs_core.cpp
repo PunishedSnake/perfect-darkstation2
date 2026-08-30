@@ -14,6 +14,7 @@
 #include "gs_texture_convert.h"
 #include "gs_vu1_batch.h"
 #include "gs_vu1_queue.h"
+#include "gs_vu1_transform.h"
 #include "gs_vram_allocator.h"
 #include "log_ps2.h"
 #include "ps2_renderer_stats.h"
@@ -1839,7 +1840,9 @@ extern "C" void ps2GsCoreDrawColorTriangles(const struct Ps2GsColorVertex *verti
 
 static bool ps2GsCoreDrawTexturedTrianglesInternal(GSTEXTURE *tex,
     const struct Ps2GsTexturedVertex *vertices, uint32_t vertex_count,
-    bool texture_flush, const struct Ps2GsRenderTargetTextureView *target_view)
+    bool texture_flush, const struct Ps2GsRenderTargetTextureView *target_view,
+    const struct Ps2GsVu1TransformVertex *transform_vertices,
+    const float transform_scale[4], const float transform_offset[4])
 {
     if (!tex || !vertices || vertex_count == 0u) {
         return false;
@@ -1934,12 +1937,31 @@ static bool ps2GsCoreDrawTexturedTrianglesInternal(GSTEXTURE *tex,
                 GS_CLAMP_1 + s_gs->PrimContext);
         }
 
+        bool submitted = false;
+        uint32_t final_register_count =
+            prefix_count + vertex_count * 3u + suffix_count;
         if (vertex_count <= PS2_GS_VU1_MAX_TEXTURED_VERTICES &&
-            vertex_count % 3u == 0u &&
-            ps2GsVu1QueueSubmitAd(
-                prefix_count != 0u ? prefix : NULL, prefix_count,
-                &vertices[0].rgbaq, vertex_count * 3u,
-                suffix_count != 0u ? suffix : NULL, suffix_count)) {
+            vertex_count % 3u == 0u) {
+            if (transform_vertices && transform_scale && transform_offset) {
+                submitted = ps2GsVu1QueueSubmitTexturedTransform(
+                    transform_scale, transform_offset,
+                    s_gs->PrimFogEnable != 0
+                        ? PS2_GS_VU1_TRANSFORM_FLAG_FOG : 0u,
+                    prefix_count != 0u ? prefix : NULL, prefix_count,
+                    transform_vertices, vertex_count,
+                    suffix_count != 0u ? suffix : NULL, suffix_count);
+                final_register_count =
+                    PS2_GS_VU1_TRANSFORM_MAX_PREFIX_RECORDS +
+                    vertex_count * 3u +
+                    PS2_GS_VU1_TRANSFORM_MAX_SUFFIX_RECORDS;
+            } else {
+                submitted = ps2GsVu1QueueSubmitAd(
+                    prefix_count != 0u ? prefix : NULL, prefix_count,
+                    &vertices[0].rgbaq, vertex_count * 3u,
+                    suffix_count != 0u ? suffix : NULL, suffix_count);
+            }
+        }
+        if (submitted) {
             if (emit_tex1) {
                 ps2GsStateShadowCommit(
                     &s_state_shadow, PS2_GS_STATE_TEX1, tex1);
@@ -1957,7 +1979,10 @@ static bool ps2GsCoreDrawTexturedTrianglesInternal(GSTEXTURE *tex,
                 s_loaded_clut_psm = tex->ClutPSM;
             }
             ps2RendererStatsRecordPath1(true, vertex_count,
-                prefix_count + vertex_count * 3u + suffix_count);
+                final_register_count);
+            if (transform_vertices) {
+                ps2RendererStatsRecordVu1Transform(vertex_count);
+            }
             ps2GsCoreMarkActiveRenderTargetWritten();
             return true;
         }
@@ -2049,7 +2074,29 @@ extern "C" void ps2GsCoreDrawTexturedTriangles(Ps2GsTextureHandle handle,
     }
 
     ps2GsCoreDrawTexturedTrianglesInternal(
-        &slot->texture, vertices, vertex_count, false, NULL);
+        &slot->texture, vertices, vertex_count, false, NULL,
+        NULL, NULL, NULL);
+}
+
+extern "C" void ps2GsCoreDrawTexturedTrianglesTransform(
+    Ps2GsTextureHandle handle,
+    const struct Ps2GsTexturedVertex *fallback_vertices,
+    const struct Ps2GsVu1TransformVertex *transform_vertices,
+    uint32_t vertex_count, const float scale[4], const float offset[4])
+{
+    if (!s_gs || !s_frame_building || !fallback_vertices ||
+        !transform_vertices || !scale || !offset || vertex_count == 0u) {
+        return;
+    }
+
+    struct Ps2GsTextureSlot *slot = ps2GsCoreTextureSlot(handle);
+    if (!slot || !slot->uploaded) {
+        return;
+    }
+
+    ps2GsCoreDrawTexturedTrianglesInternal(
+        &slot->texture, fallback_vertices, vertex_count, false, NULL,
+        transform_vertices, scale, offset);
 }
 
 static bool ps2GsCoreDrawRenderTargetView(
@@ -2093,7 +2140,8 @@ static bool ps2GsCoreDrawRenderTargetView(
 
     if (!ps2GsCoreDrawTexturedTrianglesInternal(
             &texture, vertices, vertex_count,
-            slot->texture_cache_dirty, &view)) {
+            slot->texture_cache_dirty, &view,
+            NULL, NULL, NULL)) {
         return false;
     }
 

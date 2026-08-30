@@ -18,6 +18,7 @@ int main(void)
     ps2RendererStatsRecordTranslation(3u, 12u);
     ps2RendererStatsRecordPath1(false, 3u, 7u);
     ps2RendererStatsRecordPath1(true, 81u, 249u);
+    ps2RendererStatsRecordVu1Transform(81u);
     ps2RendererStatsRecordPath3(false, 6u, 13u);
     ps2RendererStatsRecordPath3(true, 9u, 31u);
     ps2RendererStatsRecordVu1Reject(9u);
@@ -29,6 +30,8 @@ int main(void)
     assert(stats.translation_microseconds == 252u);
     assert(stats.path1_color_batches == 1u);
     assert(stats.path1_textured_batches == 1u);
+    assert(stats.vu1_transform_batches == 1u);
+    assert(stats.vu1_transform_vertices == 81u);
     assert(stats.path1_vertices == 84u);
     assert(stats.path1_records == 256u);
     assert(stats.path3_color_batches == 1u);

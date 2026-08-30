@@ -33,7 +33,7 @@ struct Ps2GsVu1TransformTexcoord {
     float s;
     float t;
     float q;
-    /* PACKED XYZ2/XYZF2 W lane: fog and/or ADC bits for the final vertex. */
+    /* Raw PACKED W lane: fog in bits 4..11, ADC in bit 15. Never float math. */
     uint32_t xyz_control;
 };
 
@@ -49,20 +49,42 @@ struct Ps2GsVu1TransformLayout {
     uint32_t suffix_count;
     uint32_t input_qw;
     uint32_t output_qw;
+    uint32_t dma_chain_qw;
 };
 
 bool ps2GsVu1PlanTexturedTransform(uint32_t vertex_count,
     uint32_t prefix_count, uint32_t suffix_count,
     struct Ps2GsVu1TransformLayout *layout);
 
+bool ps2GsVu1BuildViewportMapping(
+    int32_t viewport_x, int32_t viewport_y,
+    int32_t viewport_width, int32_t viewport_height,
+    int32_t gs_offset_x, int32_t gs_offset_y,
+    float depth_near, float depth_far,
+    float scale[4], float offset[4]);
+
 /*
- * Build the TOP-relative raw input payload consumed by the future transform
+ * Build the TOP-relative raw input payload consumed by the transform
  * microprogram. Scale and offset are four-float vectors used for viewport and
  * depth mapping after perspective division. GIF tags for fixed-size state,
  * vertices and state restoration sections are embedded in the six-QW header.
  */
 bool ps2GsVu1BuildTexturedTransformPayload(
     uint32_t *destination, uint32_t capacity_qw,
+    const float scale[4], const float offset[4], uint32_t flags,
+    const struct Ps2GsPackedReg *prefix, uint32_t prefix_count,
+    const struct Ps2GsVu1TransformVertex *vertices, uint32_t vertex_count,
+    const struct Ps2GsPackedReg *suffix, uint32_t suffix_count,
+    struct Ps2GsVu1TransformLayout *layout);
+
+/*
+ * Wrap one raw payload in a three-QW VIF1 source chain. The chain unpacks to
+ * TOPS, invokes the transform microprogram at address 64 and retains the
+ * validation FLUSHA/FLUSH ordering used by the existing PATH1 diagnostic.
+ */
+bool ps2GsVu1BuildTexturedTransformStream(
+    uint32_t *destination, uint32_t capacity_qw,
+    uint32_t payload_dma_address,
     const float scale[4], const float offset[4], uint32_t flags,
     const struct Ps2GsPackedReg *prefix, uint32_t prefix_count,
     const struct Ps2GsVu1TransformVertex *vertices, uint32_t vertex_count,

@@ -25,30 +25,53 @@ Ps2GsVu1TexturedTransformCodeStart:
 	NOP                             lq            VF01,1(VI02)
 	NOP                             lq            VF02,2(VI02)
 	NOP                             ilw.x         VI05,0(VI02)
+	NOP                             ilw.w         VI06,0(VI02)
 	NOP                             iaddiu        VI03,VI02,0x0006
 	NOP                             iaddiu        VI04,VI02,0x0200
 	NOP                             iaddiu        VI10,VI04,0x0000
 
 	NOP                             lq            VF07,3(VI02)
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
 	NOP                             sqi           VF07,(VI04++)
 	NOP                             lqi           VF07,(VI03++)
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
 	NOP                             sqi           VF07,(VI04++)
 	NOP                             lqi           VF07,(VI03++)
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
 	NOP                             sqi           VF07,(VI04++)
 	NOP                             lqi           VF07,(VI03++)
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
 	NOP                             sqi           VF07,(VI04++)
 	NOP                             lqi           VF07,(VI03++)
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
 	NOP                             sqi           VF07,(VI04++)
 	NOP                             lqi           VF07,(VI03++)
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
 	NOP                             sqi           VF07,(VI04++)
 
 	NOP                             lq            VF07,4(VI02)
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
 	NOP                             sqi           VF07,(VI04++)
 
 vertexLoop:
 	NOP                             lqi           VF03,(VI03++)
 	NOP                             lqi           VF04,(VI03++)
 	NOP                             lqi           VF05,(VI03++)
+	NOP                             NOP
 	NOP                             div           Q,VF00w,VF03w
 	NOP                             NOP
 	NOP                             NOP
@@ -70,11 +93,32 @@ vertexLoop:
 	NOP                             NOP
 	mulaw.xyz     ACC,VF02,VF00w    NOP
 	madd.xyz      VF06,VF03,VF01    NOP
-	mul.w         VF06,VF04,VF00    NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	maxw.xy       VF06,VF06,VF01w   NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	miniw.xy      VF06,VF06,VF02w   NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	; MOVE preserves raw fog/ADC bits; floating arithmetic flushes these
+	; subnormal-looking bit patterns to zero on VU hardware.
+	NOP                             move.w        VF06,VF04
 	NOP                             NOP
 	NOP                             NOP
 	ftoi4.xy      VF06,VF06         NOP
+	NOP                             ibeq          VI06,VI00,depthNoFog
+	NOP                             NOP
+	; PACKED XYZF2 stores Z in bits 4..27, unlike PACKED XYZ2 bits 0..31.
+	ftoi4.z       VF06,VF06         NOP
+	NOP                             b             depthReady
+	NOP                             NOP
+depthNoFog:
 	ftoi0.z       VF06,VF06         NOP
+depthReady:
 	mulq.xyz      VF04,VF04,Q       isubiu        VI05,VI05,1
 	NOP                             NOP
 	NOP                             NOP
@@ -85,9 +129,18 @@ vertexLoop:
 	NOP                             sqi           VF06,(VI04++)
 
 	NOP                             lq            VF07,5(VI02)
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
 	NOP                             sqi           VF07,(VI04++)
 	NOP                             lqi           VF07,(VI03++)
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
 	NOP                             sqi           VF07,(VI04++)
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
 	NOP                             xgkick        VI10
 	NOP[E]                          NOP
 	NOP                             NOP

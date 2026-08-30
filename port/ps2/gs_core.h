@@ -12,6 +12,8 @@
 extern "C" {
 #endif
 
+struct Ps2GsVu1TransformVertex;
+
 /* Hardware PSM values used by the current bootstrap. Keep gsKit names/types
  * out of the public device contract so Fast3D and platform clients do not grow
  * a dependency on the temporary transport implementation. */
@@ -206,6 +208,10 @@ void ps2GsCoreDrawColorTriangles(const struct Ps2GsColorVertex *vertices,
     uint32_t vertex_count);
 void ps2GsCoreDrawTexturedTriangles(Ps2GsTextureHandle texture,
     const struct Ps2GsTexturedVertex *vertices, uint32_t vertex_count);
+void ps2GsCoreDrawTexturedTrianglesTransform(Ps2GsTextureHandle texture,
+    const struct Ps2GsTexturedVertex *fallback_vertices,
+    const struct Ps2GsVu1TransformVertex *transform_vertices,
+    uint32_t vertex_count, const float scale[4], const float offset[4]);
 
 #ifdef __cplusplus
 }

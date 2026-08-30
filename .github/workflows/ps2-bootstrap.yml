@@ -137,6 +137,12 @@ jobs:
             -o /tmp/gs_vu1_transform_test
           /tmp/gs_vu1_transform_test
 
+          g++ -std=c++20 -Wall -Wextra -Werror -shared -fPIC \
+            -Iport/ps2 port/ps2/gs_vu1_transform.cpp \
+            -o /tmp/gs_vu1_transform.so
+          python3 port/ps2/gs_vu1_microprogram_test.py \
+            /tmp/gs_vu1_transform.so
+
           g++ -std=c++20 -Wall -Wextra -Werror \
             -Iport/ps2 \
             port/ps2/ps2_renderer_stats.cpp \
@@ -256,7 +262,7 @@ jobs:
           mips64r5900el-ps2-elf-size \
             build-ps2-alpha-diag/pd-ps2-alpha-trilerp-diag.elf
 
-      - name: Build VU1 PATH1 A+D diagnostic
+      - name: Build VU1 PATH1 geometry diagnostic
         run: |
           cmake -S port/ps2 -B build-ps2-vu1-diag -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/port/ps2/ps2dev-toolchain.cmake" \
@@ -289,7 +295,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Upload VU1 PATH1 A+D diagnostic ELF
+      - name: Upload VU1 PATH1 geometry diagnostic ELF
         uses: actions/upload-artifact@v4
         with:
           name: pd-ps2-vu1-color-diag

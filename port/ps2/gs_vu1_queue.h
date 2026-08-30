@@ -6,6 +6,8 @@
 
 #include "gs_core.h"
 
+struct Ps2GsVu1TransformVertex;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -30,6 +32,12 @@ bool ps2GsVu1QueueSubmitAd(
 bool ps2GsVu1QueueSubmitColor(
     const struct Ps2GsPackedReg *prim, bool emit_prim,
     const struct Ps2GsColorVertex *vertices, uint32_t vertex_count);
+
+bool ps2GsVu1QueueSubmitTexturedTransform(
+    const float scale[4], const float offset[4], uint32_t flags,
+    const struct Ps2GsPackedReg *prefix, uint32_t prefix_count,
+    const struct Ps2GsVu1TransformVertex *vertices, uint32_t vertex_count,
+    const struct Ps2GsPackedReg *suffix, uint32_t suffix_count);
 
 #ifdef __cplusplus
 }

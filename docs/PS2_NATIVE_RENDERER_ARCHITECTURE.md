@@ -618,14 +618,18 @@ PCSX2 is useful for correctness, packet/state inspection and fast iteration. It 
   the VU1 copy loop branch-free.
   Its disjoint output bank at QW 512 or 768 has room for the corresponding
   multi-tag GIF PACKED stream, including post-draw state restoration;
-- **IN PROGRESS:** a second VU1 microprogram is assembled and uploaded at
+- **CURRENT IMPLEMENTATION, DIAGNOSTIC ONLY:** a second VU1 microprogram is assembled and uploaded at
   instruction address 64. It performs perspective division, viewport/depth
-  mapping, STQ preparation, PACKED vertex emission and XGKICK into PATH1. Draw
-  submission remains on the existing transport until its raw VIF input chain
-  is wired and validated;
+  mapping, STQ preparation, PACKED vertex emission and XGKICK into PATH1.
+  Ordinary one-pass textured Fast3D draws now submit the raw VIF input chain.
+  Fogged XYZF2 depth and fog/ADC lane packing have dedicated source-functional
+  tests. CPU fallback vertices are still prepared eagerly; transform-specific
+  submission counters distinguish this route from A+D passthrough. Physical
+  PS2 A/B and pipeline timing validation are still pending;
 - VU1 lighting/texgen candidate;
 - **IN PROGRESS:** direct GS-ready output and XGKICK. The transport diagnostic
-  executes this route, but initially passes through already packed A+D records;
+  executes this route with raw textured transforms and GS-ready A+D transport
+  for color/multipass draws;
 - **IN PROGRESS:** double-buffer VU input/output ownership. BASE/OFFSET banks
   and alternating EE slots exist, while execution remains serialized for the
   first hardware correctness test;

@@ -15,6 +15,9 @@ struct Ps2RendererStats {
     uint64_t translation_microseconds;
     uint64_t path1_color_batches;
     uint64_t path1_textured_batches;
+    /* Subset of PATH1 textured work, not an additional transport total. */
+    uint64_t vu1_transform_batches;
+    uint64_t vu1_transform_vertices;
     uint64_t path1_vertices;
     uint64_t path1_records;
     uint64_t path3_color_batches;
@@ -33,6 +36,7 @@ void ps2RendererStatsRecordPath1(
     bool textured, uint32_t vertex_count, uint32_t register_count);
 void ps2RendererStatsRecordPath3(
     bool textured, uint32_t vertex_count, uint32_t register_count);
+void ps2RendererStatsRecordVu1Transform(uint32_t vertex_count);
 void ps2RendererStatsRecordVu1Reject(uint32_t vertex_count);
 void ps2RendererStatsGet(struct Ps2RendererStats *stats);
 

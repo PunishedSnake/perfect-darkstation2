@@ -1,4 +1,5 @@
 #include <stdbool.h>
+#include <float.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
@@ -10,6 +11,7 @@
 #include "gfx_ps2_pass_graph.h"
 #include "gs_core.h"
 #include "gs_vu1_batch.h"
+#include "gs_vu1_transform.h"
 #include "ps2_renderer_stats.h"
 #include "rdp_tmem_live.h"
 #include "system.h"
@@ -246,6 +248,10 @@ static uint8_t s_draw_texture_edge_reference =
 
 static struct Ps2GsTexturedVertex s_stq_vertices[2][PS2_GFX_TRANSLATE_VERTS];
 static struct Ps2GsColorVertex s_color_vertices[PS2_GFX_TRANSLATE_VERTS];
+#if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
+static struct Ps2GsVu1TransformVertex
+    s_vu1_transform_vertices[PS2_GFX_TRANSLATE_VERTS];
+#endif
 static struct Ps2AlphaTrilerpVertex
     s_alpha_trilerp_vertices[PS2_GFX_TRANSLATE_VERTS];
 static struct Ps2Tex0FactorLerpVertex
@@ -2725,6 +2731,16 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
 
         memset(s_draw_region_clamp, 0, sizeof(s_draw_region_clamp));
         s_draw_texture_edge_reference = PS2_GFX_TEXTURE_EDGE_THRESHOLD;
+#if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
+        float transform_scale[4];
+        float transform_offset[4];
+        bool vu1_transform_eligible = ps2GsVu1BuildViewportMapping(
+            s_viewport.x, s_viewport.y,
+            s_viewport.width, s_viewport.height,
+            ps2GsCoreGetOffsetX(), ps2GsCoreGetOffsetY(),
+            s_depth_near, s_depth_far,
+            transform_scale, transform_offset);
+#endif
 
         const uint64_t translation_start = sysGetMicroseconds();
         for (size_t i = 0; i < batch_vertices; ++i) {
@@ -3046,6 +3062,29 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
                 s_stq_vertices[0][i].st =
                     ps2_pack_st(tex_u[0] * inv_w, tex_v[0] * inv_w);
                 s_stq_vertices[0][i].xyz2 = packed_position;
+#if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
+                struct Ps2GsVu1TransformVertex *vu_vertex =
+                    &s_vu1_transform_vertices[i];
+                vu_vertex->clip[0] = clip_x;
+                vu_vertex->clip[1] = clip_y;
+                vu_vertex->clip[2] = clip_z;
+                vu_vertex->clip[3] = clip_w;
+                vu_vertex->texcoord.s = tex_u[0];
+                vu_vertex->texcoord.t = tex_v[0];
+                vu_vertex->texcoord.q = 1.0f;
+                vu_vertex->texcoord.xyz_control =
+                    s_shader->features.opt_fog
+                    ? (uint32_t)ps2_fog_coefficient(fog_factor) << 4
+                    : 0u;
+                vu_vertex->rgba[0] = cr;
+                vu_vertex->rgba[1] = cg;
+                vu_vertex->rgba[2] = cb;
+                vu_vertex->rgba[3] = ca;
+                /* DIV on VU treats subnormal W as zero; keep that input on EE. */
+                if (!(clip_w >= FLT_MIN && clip_w <= FLT_MAX)) {
+                    vu1_transform_eligible = false;
+                }
+#endif
             } else {
                 s_color_vertices[i].rgbaq = ps2_pack_rgbaq(cr, cg, cb, ca, 0.0f);
                 s_color_vertices[i].xyz2 = packed_position;
@@ -3075,9 +3114,23 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
             ps2_draw_opaque_input1_tex0_lerp((uint32_t)batch_vertices);
         } else if (s_shader->plan.textured) {
             ps2_apply_texture_clamp(0);
+#if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
+            if (vu1_transform_eligible) {
+                ps2GsCoreDrawTexturedTrianglesTransform(
+                    s_selected_texture[0], s_stq_vertices[0],
+                    s_vu1_transform_vertices,
+                    (uint32_t)batch_vertices,
+                    transform_scale, transform_offset);
+            } else {
+                ps2GsCoreDrawTexturedTriangles(
+                    s_selected_texture[0], s_stq_vertices[0],
+                    (uint32_t)batch_vertices);
+            }
+#else
             ps2GsCoreDrawTexturedTriangles(
                 s_selected_texture[0], s_stq_vertices[0],
                 (uint32_t)batch_vertices);
+#endif
         } else {
             ps2GsCoreDrawColorTriangles(s_color_vertices, (uint32_t)batch_vertices);
         }
@@ -3198,6 +3251,10 @@ static void ps2_end_frame(void)
             (unsigned long long)stats.path3_records,
             (unsigned long long)stats.vu1_rejected_batches,
             (unsigned long long)stats.vu1_rejected_vertices);
+        sysLogPrintf(LOG_NOTE,
+            "GfxPS2 VU1: transform_batches=%llu transform_vertices=%llu",
+            (unsigned long long)stats.vu1_transform_batches,
+            (unsigned long long)stats.vu1_transform_vertices);
     }
 }
 
