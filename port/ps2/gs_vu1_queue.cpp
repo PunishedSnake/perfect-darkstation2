@@ -40,6 +40,13 @@ static uint32_t s_build_slot;
 static bool s_initialized;
 static bool s_pending;
 
+static_assert(sizeof(struct Ps2GsColorVertex) ==
+        2u * sizeof(struct Ps2GsPackedReg),
+    "color vertices must remain contiguous A+D records");
+static_assert(sizeof(struct Ps2GsTexturedVertex) ==
+        3u * sizeof(struct Ps2GsPackedReg),
+    "textured vertices must remain contiguous A+D records");
+
 static uint32_t ps2GsVu1QueueVifCode(
     uint32_t immediate, uint32_t num, uint32_t command)
 {
@@ -195,10 +202,10 @@ extern "C" bool ps2GsVu1QueueInit(void)
     s_pending = false;
     s_initialized = true;
     sysLogPrintf(LOG_NOTE,
-        "GS VU1 queue: PATH1 color transport ready banks=%u+%u QW max_vertices=%u",
+        "GS VU1 queue: PATH1 A+D transport ready banks=%u+%u QW max_records=%u",
         PS2_GS_VU1_BUFFER_BASE_QW,
         PS2_GS_VU1_BUFFER_OFFSET_QW,
-        PS2_GS_VU1_MAX_COLOR_VERTICES);
+        PS2_GS_VU1_MAX_AD_REGISTERS);
     sysLogPrintf(LOG_NOTE,
         "GS VU1 queue: validation ordering FLUSHA->MSCAL->FLUSH active");
     ps2LogCheckpoint();
@@ -231,18 +238,28 @@ extern "C" bool ps2GsVu1QueueWaitIdle(void)
 #endif
 }
 
-extern "C" bool ps2GsVu1QueueSubmitColor(
-    const struct Ps2GsPackedReg *prim, bool emit_prim,
-    const struct Ps2GsColorVertex *vertices, uint32_t vertex_count)
+extern "C" bool ps2GsVu1QueueSubmitAd(
+    const struct Ps2GsPackedReg *prefix, uint32_t prefix_count,
+    const struct Ps2GsPackedReg *records, uint32_t record_count,
+    const struct Ps2GsPackedReg *suffix, uint32_t suffix_count)
 {
 #if !defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
-    (void)prim;
-    (void)emit_prim;
-    (void)vertices;
-    (void)vertex_count;
+    (void)prefix;
+    (void)prefix_count;
+    (void)records;
+    (void)record_count;
+    (void)suffix;
+    (void)suffix_count;
     return false;
 #else
-    if (!s_initialized || !vertices) {
+    struct Ps2GsVu1BatchLayout layout;
+    if (!s_initialized || !records || record_count == 0u ||
+        (prefix_count != 0u && !prefix) ||
+        (suffix_count != 0u && !suffix) ||
+        prefix_count > UINT32_MAX - record_count ||
+        suffix_count > UINT32_MAX - prefix_count - record_count ||
+        !ps2GsVu1PlanAdBatch(
+            prefix_count + record_count + suffix_count, &layout)) {
         return false;
     }
 
@@ -256,13 +273,13 @@ extern "C" bool ps2GsVu1QueueSubmitColor(
     ps2GsNativeQueueBeginFrame();
 
     struct Ps2GsVu1QueueSlot *slot = &s_slots[s_build_slot];
-    struct Ps2GsVu1ColorBatchLayout layout;
     const uint32_t payload_dma_address =
         (uint32_t)(uintptr_t)slot->canonical +
         PS2_GS_VU1_DMA_CHAIN_OVERHEAD_QW * 16u;
-    if (!ps2GsVu1BuildColorBatchStream(
+    if (!ps2GsVu1BuildAdBatchStream(
             slot->ucab, PS2_GS_VU1_DMA_SLOT_QW, payload_dma_address,
-            prim, emit_prim, vertices, vertex_count, &layout)) {
+            prefix, prefix_count, records, record_count,
+            suffix, suffix_count, &layout)) {
         return false;
     }
 
@@ -274,4 +291,19 @@ extern "C" bool ps2GsVu1QueueSubmitColor(
     s_build_slot ^= 1u;
     return true;
 #endif
+}
+
+extern "C" bool ps2GsVu1QueueSubmitColor(
+    const struct Ps2GsPackedReg *prim, bool emit_prim,
+    const struct Ps2GsColorVertex *vertices, uint32_t vertex_count)
+{
+    if (!vertices || vertex_count == 0u ||
+        vertex_count > PS2_GS_VU1_MAX_COLOR_VERTICES ||
+        vertex_count % 3u != 0u) {
+        return false;
+    }
+    return ps2GsVu1QueueSubmitAd(
+        emit_prim ? prim : NULL, emit_prim ? 1u : 0u,
+        &vertices[0].rgbaq, vertex_count * 2u,
+        NULL, 0u);
 }

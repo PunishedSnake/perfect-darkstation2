@@ -242,7 +242,7 @@ jobs:
           mips64r5900el-ps2-elf-size \
             build-ps2-alpha-diag/pd-ps2-alpha-trilerp-diag.elf
 
-      - name: Build VU1 PATH1 color diagnostic
+      - name: Build VU1 PATH1 A+D diagnostic
         run: |
           cmake -S port/ps2 -B build-ps2-vu1-diag -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/port/ps2/ps2dev-toolchain.cmake" \
@@ -271,7 +271,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Upload VU1 PATH1 color diagnostic ELF
+      - name: Upload VU1 PATH1 A+D diagnostic ELF
         uses: actions/upload-artifact@v4
         with:
           name: pd-ps2-vu1-color-diag

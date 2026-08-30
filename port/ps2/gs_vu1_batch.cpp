@@ -45,17 +45,14 @@ static uint64_t ps2GsVu1DmaTag(
         ((uint64_t)(address & 0x7fffffffu) << 32);
 }
 
-extern "C" bool ps2GsVu1PlanColorBatch(uint32_t vertex_count,
-    bool emit_prim, struct Ps2GsVu1ColorBatchLayout *layout)
+extern "C" bool ps2GsVu1PlanAdBatch(uint32_t register_count,
+    struct Ps2GsVu1BatchLayout *layout)
 {
-    if (!layout || vertex_count == 0u ||
-        vertex_count > PS2_GS_VU1_MAX_COLOR_VERTICES ||
-        vertex_count % 3u != 0u) {
+    if (!layout || register_count == 0u ||
+        register_count > PS2_GS_VU1_MAX_AD_REGISTERS) {
         return false;
     }
 
-    const uint32_t register_count =
-        vertex_count * 2u + (emit_prim ? 1u : 0u);
     const uint32_t gif_packet_qw = register_count + 1u;
     if (gif_packet_qw > PS2_GS_VU1_BUFFER_QW) {
         return false;
@@ -68,15 +65,21 @@ extern "C" bool ps2GsVu1PlanColorBatch(uint32_t vertex_count,
     return true;
 }
 
-extern "C" bool ps2GsVu1BuildColorBatchStream(uint32_t *destination,
+extern "C" bool ps2GsVu1BuildAdBatchStream(uint32_t *destination,
     uint32_t capacity_qw, uint32_t payload_dma_address,
-    const struct Ps2GsPackedReg *prim, bool emit_prim,
-    const struct Ps2GsColorVertex *vertices, uint32_t vertex_count,
-    struct Ps2GsVu1ColorBatchLayout *layout)
+    const struct Ps2GsPackedReg *prefix, uint32_t prefix_count,
+    const struct Ps2GsPackedReg *records, uint32_t record_count,
+    const struct Ps2GsPackedReg *suffix, uint32_t suffix_count,
+    struct Ps2GsVu1BatchLayout *layout)
 {
-    struct Ps2GsVu1ColorBatchLayout planned;
-    if (!destination || !vertices || (emit_prim && !prim) ||
-        !ps2GsVu1PlanColorBatch(vertex_count, emit_prim, &planned) ||
+    struct Ps2GsVu1BatchLayout planned;
+    if (!destination || !records || record_count == 0u ||
+        (prefix_count != 0u && !prefix) ||
+        (suffix_count != 0u && !suffix) ||
+        prefix_count > UINT32_MAX - record_count ||
+        suffix_count > UINT32_MAX - prefix_count - record_count ||
+        !ps2GsVu1PlanAdBatch(
+            prefix_count + record_count + suffix_count, &planned) ||
         capacity_qw < planned.dma_chain_qw ||
         (payload_dma_address & 0x0fu) != 0u) {
         return false;
@@ -112,11 +115,15 @@ extern "C" bool ps2GsVu1BuildColorBatchStream(uint32_t *destination,
     memcpy(payload + sizeof(gif_tag), &gif_reg, sizeof(gif_reg));
     payload += 16u;
 
-    if (emit_prim) {
-        memcpy(payload, prim, sizeof(*prim));
-        payload += sizeof(*prim);
+    if (prefix_count != 0u) {
+        memcpy(payload, prefix, (size_t)prefix_count * sizeof(*prefix));
+        payload += (size_t)prefix_count * sizeof(*prefix);
     }
-    memcpy(payload, vertices, (size_t)vertex_count * sizeof(*vertices));
+    memcpy(payload, records, (size_t)record_count * sizeof(*records));
+    payload += (size_t)record_count * sizeof(*records);
+    if (suffix_count != 0u) {
+        memcpy(payload, suffix, (size_t)suffix_count * sizeof(*suffix));
+    }
 
     if (layout) {
         *layout = planned;

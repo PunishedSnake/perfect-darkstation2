@@ -14,7 +14,7 @@ option(PD_PS2_ALPHA_TRILERP_DIAGNOSTIC
   OFF
 )
 option(PD_PS2_VU1_COLOR_DIAGNOSTIC
-  "Route packet-ready color batches through VIF1/VU1/XGKICK for hardware A/B"
+  "Route packet-ready color/textured batches through VIF1/VU1 for hardware A/B"
   OFF
 )
 
@@ -76,7 +76,7 @@ if(PD_PS2_VU1_COLOR_DIAGNOSTIC)
       "${CMAKE_CURRENT_LIST_DIR}/gs_vu1_color_path.vsm"
       -o "${PD_PS2_VU1_PROGRAM_OBJECT}"
     DEPENDS "${CMAKE_CURRENT_LIST_DIR}/gs_vu1_color_path.vsm"
-    COMMENT "Assembling VU1 PATH1 color transport microprogram"
+    COMMENT "Assembling VU1 PATH1 A+D transport microprogram"
     VERBATIM
   )
   set_source_files_properties(

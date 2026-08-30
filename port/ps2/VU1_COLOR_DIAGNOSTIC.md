@@ -1,16 +1,16 @@
-# VU1 PATH1 color diagnostic
+# VU1 PATH1 A+D diagnostic
 
 This diagnostic is the first executable VIF1/VU1 stage of the native renderer.
 It keeps the existing Fast3D translation and final GS register representation,
-then routes untextured color-triangle batches through:
+then routes ordinary color and textured-triangle batches through:
 
 ```text
 EE batch -> DMAC VIF1 -> VIF UNPACK -> VU1 -> XGKICK -> GIF PATH1 -> GS
 ```
 
-Textured triangles, texture uploads and ordinary GS state remain on the proven
-PATH3 baseline. This makes the test sensitive to PATH1/PATH3 ordering without
-mixing transport bring-up with a new transform, clip or combiner implementation.
+Texture uploads and GS state outside each draw packet remain on the proven PATH3
+baseline. This makes the test sensitive to PATH1/PATH3 ordering without mixing
+transport bring-up with a new transform, clip or combiner implementation.
 
 ## Build
 
@@ -33,9 +33,10 @@ The ordinary `pd-ps2-bootstrap.elf` remains the PATH3 comparison artifact.
 
 - Two 256-QW VU1 banks are selected with VIF1 `BASE=0`, `OFFSET=256` and
   TOP-relative UNPACK.
-- Each bank receives one complete GIF PACKED A+D packet.
-- The current 96-vertex translation batch occupies at most 194 QW, including
-  its GIF tag and optional PRIM record.
+- Each bank receives one complete GIF PACKED A+D packet with at most 255 GS
+  register records.
+- A color batch supports 96 vertices. A textured batch supports 81 vertices
+  plus `TEXFLUSH`, `TEX1`, `TEX0`, `CLAMP` and `PRIM` draw-local state.
 - VU1 reads the active TOP address and sends the packet with XGKICK.
 - Two 259-QW UCAB EE source-chain slots alternate between submissions. Each
   holds three DMAC tags plus capacity for one 256-QW VU payload.
@@ -54,7 +55,7 @@ with VU1 work on bank A.
 The serial log must contain:
 
 ```text
-GS VU1 queue: PATH1 color transport ready banks=0+256 QW max_vertices=96
+GS VU1 queue: PATH1 A+D transport ready banks=0+256 QW max_records=255
 GS VU1 queue: validation ordering FLUSHA->MSCAL->FLUSH active
 ```
 
@@ -72,10 +73,10 @@ and controller setup. Record:
 3. loader and launch device;
 4. complete serial log through the first presented frame;
 5. lossless captures of the same diagnostic frame;
-6. whether any colored status triangle is missing, reordered or uses stale GS
-   state;
+6. whether any colored or textured geometry is missing, reordered, corrupted
+   or uses stale GS state;
 7. whether controller input and frame presentation remain responsive.
 
-The pass condition is pixel-equivalent color geometry and unchanged textured
-geometry, with no VIF error, hang or PATH3 fallback. Emulator success is useful
-for inspection but is not accepted as hardware validation or performance data.
+The pass condition is pixel-equivalent color and textured geometry, with no VIF
+error, hang or PATH3 fallback. Emulator success is useful for inspection but is
+not accepted as hardware validation or performance data.

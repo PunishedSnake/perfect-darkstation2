@@ -9,6 +9,7 @@
 #include "gfx_ps2_combiner.h"
 #include "gfx_ps2_pass_graph.h"
 #include "gs_core.h"
+#include "gs_vu1_batch.h"
 #include "rdp_tmem_live.h"
 #include "system.h"
 
@@ -72,7 +73,11 @@
  */
 
 #define PS2_GFX_MAX_SHADERS 128
+#if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
+#define PS2_GFX_TRANSLATE_VERTS PS2_GS_VU1_MAX_TEXTURED_VERTICES
+#else
 #define PS2_GFX_TRANSLATE_VERTS 96
+#endif
 #define PS2_GFX_TEXTURE_STATE_SLOTS 65
 /* Fast3D threshold is 8/256. GS alpha unity is 0x80, hence reference 4. */
 #define PS2_GFX_ALPHA_THRESHOLD 4u

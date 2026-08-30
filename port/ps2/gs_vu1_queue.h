@@ -21,6 +21,12 @@ bool ps2GsVu1QueueEnabled(void);
  */
 bool ps2GsVu1QueueWaitIdle(void);
 
+/* Submit one complete GIF PACKED A+D packet through VIF1/VU1/PATH1. */
+bool ps2GsVu1QueueSubmitAd(
+    const struct Ps2GsPackedReg *prefix, uint32_t prefix_count,
+    const struct Ps2GsPackedReg *records, uint32_t record_count,
+    const struct Ps2GsPackedReg *suffix, uint32_t suffix_count);
+
 bool ps2GsVu1QueueSubmitColor(
     const struct Ps2GsPackedReg *prim, bool emit_prim,
     const struct Ps2GsColorVertex *vertices, uint32_t vertex_count);

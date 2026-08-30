@@ -80,6 +80,7 @@ static bool s_native_present_failed;
 static bool s_logged_command_arena_spill;
 static bool s_logged_oversized_command;
 static bool s_logged_vu1_color_fallback;
+static bool s_logged_vu1_textured_fallback;
 static Ps2GsRenderTargetHandle s_active_render_target;
 static uint32_t s_loaded_clut_vram;
 static int s_loaded_clut_psm;
@@ -610,6 +611,7 @@ extern "C" bool ps2GsCoreInit(const struct Ps2GsCreateInfo *info)
     s_logged_command_arena_spill = false;
     s_logged_oversized_command = false;
     s_logged_vu1_color_fallback = false;
+    s_logged_vu1_textured_fallback = false;
     s_active_render_target = PS2_GS_RENDER_TARGET_DEFAULT;
     ps2GsCoreInvalidateClutCache();
     s_fog_r = 0;
@@ -1880,6 +1882,87 @@ static bool ps2GsCoreDrawTexturedTrianglesInternal(GSTEXTURE *tex,
         (emit_tex1 ? 1u : 0u) +
         (emit_tex0 ? 1u : 0u) +
         (emit_prim ? 1u : 0u);
+
+    if (ps2GsVu1QueueEnabled()) {
+        struct Ps2GsPackedReg prefix[5];
+        struct Ps2GsPackedReg suffix[1];
+        uint32_t prefix_count = 0u;
+        uint32_t suffix_count = 0u;
+        if (texture_flush) {
+            ps2GsCoreWriteReg(
+                &prefix[prefix_count++], 0u, GS_TEXFLUSH);
+        }
+        if (emit_tex1) {
+            ps2GsCoreWriteReg(&prefix[prefix_count++],
+                tex1, GS_TEX1_1 + s_gs->PrimContext);
+        }
+        if (emit_tex0) {
+            ps2GsCoreWriteReg(&prefix[prefix_count++],
+                tex0, GS_TEX0_1 + s_gs->PrimContext);
+        }
+        if (target_view) {
+            ps2GsCoreWriteReg(&prefix[prefix_count++],
+                GS_SETREG_CLAMP(
+                    GS_CMODE_REGION_CLAMP,
+                    GS_CMODE_REGION_CLAMP,
+                    0u,
+                    target_view->clamp_max_u,
+                    0u,
+                    target_view->clamp_max_v),
+                GS_CLAMP_1 + s_gs->PrimContext);
+        }
+        if (emit_prim) {
+            ps2GsCoreWriteReg(
+                &prefix[prefix_count++], prim, GS_PRIM);
+        }
+        if (target_view) {
+            ps2GsCoreWriteReg(&suffix[suffix_count++],
+                GS_SETREG_CLAMP(
+                    s_gs->Clamp->WMS,
+                    s_gs->Clamp->WMT,
+                    s_gs->Clamp->MINU,
+                    s_gs->Clamp->MAXU,
+                    s_gs->Clamp->MINV,
+                    s_gs->Clamp->MAXV),
+                GS_CLAMP_1 + s_gs->PrimContext);
+        }
+
+        if (vertex_count <= PS2_GS_VU1_MAX_TEXTURED_VERTICES &&
+            vertex_count % 3u == 0u &&
+            ps2GsVu1QueueSubmitAd(
+                prefix_count != 0u ? prefix : NULL, prefix_count,
+                &vertices[0].rgbaq, vertex_count * 3u,
+                suffix_count != 0u ? suffix : NULL, suffix_count)) {
+            if (emit_tex1) {
+                ps2GsStateShadowCommit(
+                    &s_state_shadow, PS2_GS_STATE_TEX1, tex1);
+            }
+            if (emit_tex0) {
+                ps2GsStateShadowCommit(
+                    &s_state_shadow, PS2_GS_STATE_TEX0, tex0);
+            }
+            if (emit_prim) {
+                ps2GsStateShadowCommit(
+                    &s_state_shadow, PS2_GS_STATE_PRIM, prim);
+            }
+            if (indexed) {
+                s_loaded_clut_vram = tex->VramClut;
+                s_loaded_clut_psm = tex->ClutPSM;
+            }
+            ps2GsCoreMarkActiveRenderTargetWritten();
+            return true;
+        }
+
+        if (!s_logged_vu1_textured_fallback) {
+            sysLogPrintf(LOG_WARNING,
+                "GS core: VU1 textured batch rejected; "
+                "preserving PATH3 fallback vertices=%u",
+                vertex_count);
+            ps2LogCheckpoint();
+            s_logged_vu1_textured_fallback = true;
+        }
+    }
+
     const uint32_t register_count = state_register_count + vertex_count * 3u +
         (texture_flush ? 1u : 0u) + (target_view ? 2u : 0u);
     struct Ps2GsPackedReg *p = ps2GsCoreReserve(register_count);
