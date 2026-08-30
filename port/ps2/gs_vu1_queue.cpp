@@ -10,6 +10,7 @@
 #include "gs_native_queue.h"
 #include "gs_vu1_batch.h"
 #include "gs_vu1_queue.h"
+#include "gs_vu1_transform.h"
 #include "log_ps2.h"
 #include "system.h"
 
@@ -34,6 +35,8 @@ struct Ps2GsVu1QueueSlot {
 
 extern "C" uint32_t Ps2GsVu1ColorPathCodeStart;
 extern "C" uint32_t Ps2GsVu1ColorPathCodeEnd;
+extern "C" uint32_t Ps2GsVu1TexturedTransformCodeStart;
+extern "C" uint32_t Ps2GsVu1TexturedTransformCodeEnd;
 
 static struct Ps2GsVu1QueueSlot s_slots[2];
 static uint32_t s_build_slot;
@@ -97,16 +100,22 @@ static bool ps2GsVu1QueueSendChainAndWait(uint32_t *ucab)
     return ps2GsVu1QueueWaitVifIdle();
 }
 
-static bool ps2GsVu1QueueUploadProgram(void)
+static bool ps2GsVu1QueueUploadProgram(uint32_t *program_start,
+    uint32_t *program_end, uint32_t program_address,
+    uint32_t program_capacity)
 {
-    const ptrdiff_t program_words =
-        &Ps2GsVu1ColorPathCodeEnd - &Ps2GsVu1ColorPathCodeStart;
+    if (!program_start || !program_end) {
+        return false;
+    }
+    const ptrdiff_t program_words = program_end - program_start;
     if (program_words <= 0 || (program_words & 1) != 0) {
         return false;
     }
 
     const uint32_t instruction_count = (uint32_t)program_words / 2u;
     if (instruction_count == 0u || instruction_count > 256u ||
+        instruction_count > program_capacity ||
+        program_address > 512u - instruction_count ||
         (instruction_count & 1u) != 0u) {
         return false;
     }
@@ -126,9 +135,9 @@ static bool ps2GsVu1QueueUploadProgram(void)
     memcpy(&ucab[0], &cnt_tag, sizeof(cnt_tag));
     ucab[2] = ps2GsVu1QueueVifCode(0u, 0u, PS2_VIF_CMD_NOP);
     ucab[3] = ps2GsVu1QueueVifCode(
-        0u, instruction_count == 256u ? 0u : instruction_count,
+        program_address, instruction_count == 256u ? 0u : instruction_count,
         PS2_VIF_CMD_MPG);
-    memcpy(&ucab[4], &Ps2GsVu1ColorPathCodeStart,
+    memcpy(&ucab[4], program_start,
         (size_t)program_words * sizeof(uint32_t));
 
     const uint32_t end_word = 4u + program_qwords * 4u;
@@ -192,7 +201,14 @@ extern "C" bool ps2GsVu1QueueInit(void)
         memset(s_slots[i].ucab, 0, slot_bytes);
     }
 
-    if (!ps2GsVu1QueueUploadProgram() ||
+    if (!ps2GsVu1QueueUploadProgram(
+            &Ps2GsVu1ColorPathCodeStart,
+            &Ps2GsVu1ColorPathCodeEnd,
+            0u, PS2_GS_VU1_TRANSFORM_PROGRAM_ADDRESS) ||
+        !ps2GsVu1QueueUploadProgram(
+            &Ps2GsVu1TexturedTransformCodeStart,
+            &Ps2GsVu1TexturedTransformCodeEnd,
+            PS2_GS_VU1_TRANSFORM_PROGRAM_ADDRESS, 256u) ||
         !ps2GsVu1QueueConfigureBuffers()) {
         ps2GsVu1QueueRelease();
         return false;

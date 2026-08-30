@@ -35,6 +35,9 @@ It does **not** prove that the full game builds, renders, fits in memory, or per
 - An opt-in VIF1/VU1 diagnostic now submits complete GS-ready color and
   textured A+D packets through VU1 XGKICK/PATH1 while preserving the PATH3
   renderer as the automatic fallback and physical-console A/B baseline.
+- The same diagnostic build now assembles and uploads a separate textured
+  geometry microprogram with fixed NOP-padded state slots and disjoint
+  double-buffered input/output banks. Runtime draw wiring is the next step.
 - DualShock 2 input implements the portable controller contract through
   ROM-resident PADMAN modules.
 - ROM data is read through a bounded file-backed source instead of retaining a

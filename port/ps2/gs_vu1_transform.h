@@ -16,7 +16,8 @@ extern "C" {
  *
  * VIF1 double-buffers raw input in QW 0..511. The matching VU1 program writes
  * complete GIF packets into QW 512..1023, keeping producer and consumer banks
- * disjoint while preserving the same 256-QW bank size on both sides.
+ * disjoint while preserving the same 256-QW bank size on both sides. Prefix
+ * and suffix slots have fixed positions; unused A+D records target GS NOP.
  */
 #define PS2_GS_VU1_TRANSFORM_OUTPUT_BASE_QW 512u
 #define PS2_GS_VU1_TRANSFORM_OUTPUT_BANK_STRIDE_QW 256u
@@ -26,6 +27,7 @@ extern "C" {
 #define PS2_GS_VU1_TRANSFORM_MAX_PREFIX_RECORDS 5u
 #define PS2_GS_VU1_TRANSFORM_MAX_SUFFIX_RECORDS 1u
 #define PS2_GS_VU1_TRANSFORM_FLAG_FOG (1u << 0)
+#define PS2_GS_VU1_TRANSFORM_PROGRAM_ADDRESS 64u
 
 struct Ps2GsVu1TransformTexcoord {
     float s;
@@ -56,8 +58,8 @@ bool ps2GsVu1PlanTexturedTransform(uint32_t vertex_count,
 /*
  * Build the TOP-relative raw input payload consumed by the future transform
  * microprogram. Scale and offset are four-float vectors used for viewport and
- * depth mapping after perspective division. GIF tags for state, vertices and
- * optional state restoration are embedded in the six-QW header.
+ * depth mapping after perspective division. GIF tags for fixed-size state,
+ * vertices and state restoration sections are embedded in the six-QW header.
  */
 bool ps2GsVu1BuildTexturedTransformPayload(
     uint32_t *destination, uint32_t capacity_qw,

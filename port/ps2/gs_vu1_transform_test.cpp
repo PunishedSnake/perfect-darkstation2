@@ -48,8 +48,8 @@ int main(void)
         payload, PS2_GS_VU1_BUFFER_QW, scale, offset,
         PS2_GS_VU1_TRANSFORM_FLAG_FOG,
         prefix, 2u, vertices, 3u, &suffix, 1u, &layout));
-    assert(layout.input_qw == 18u);
-    assert(layout.output_qw == 15u);
+    assert(layout.input_qw == 21u);
+    assert(layout.output_qw == 18u);
     assert(payload[0] == 3u);
     assert(payload[1] == 2u);
     assert(payload[2] == 1u);
@@ -61,7 +61,7 @@ int main(void)
     uint64_t registers = 0u;
     memcpy(&tag, &payload[12], sizeof(tag));
     memcpy(&registers, &payload[14], sizeof(registers));
-    assert(tag == 0x1000000000000002ull);
+    assert(tag == 0x1000000000000005ull);
     assert(registers == 0x0eull);
     memcpy(&tag, &payload[16], sizeof(tag));
     memcpy(&registers, &payload[18], sizeof(registers));
@@ -76,12 +76,19 @@ int main(void)
     memcpy(copied_prefix, &payload[24], sizeof(copied_prefix));
     assert(memcmp(copied_prefix, prefix, sizeof(prefix)) == 0);
     struct Ps2GsVu1TransformVertex copied_vertices[3] = {};
-    memcpy(copied_vertices, &payload[32], sizeof(copied_vertices));
+    memcpy(copied_vertices, &payload[44], sizeof(copied_vertices));
     assert(memcmp(copied_vertices, vertices, sizeof(vertices)) == 0);
     struct Ps2GsPackedReg copied_suffix = {};
-    memcpy(&copied_suffix, &payload[68], sizeof(copied_suffix));
+    memcpy(&copied_suffix, &payload[80], sizeof(copied_suffix));
     assert(copied_suffix.value == suffix.value);
     assert(copied_suffix.reg == suffix.reg);
+
+    struct Ps2GsPackedReg padded_prefix[3] = {};
+    memcpy(padded_prefix, &payload[32], sizeof(padded_prefix));
+    for (uint32_t i = 0u; i < 3u; ++i) {
+        assert(padded_prefix[i].value == 0u);
+        assert(padded_prefix[i].reg == 0x0fu);
+    }
 
     assert(!ps2GsVu1BuildTexturedTransformPayload(
         payload, layout.input_qw - 1u, scale, offset, 0u,
@@ -94,10 +101,31 @@ int main(void)
     assert(ps2GsVu1BuildTexturedTransformPayload(
         payload, PS2_GS_VU1_BUFFER_QW, scale, offset, 0u,
         NULL, 0u, vertices, 3u, NULL, 0u, &layout));
+    assert(layout.input_qw == 21u);
+    assert(layout.output_qw == 18u);
+    memcpy(&tag, &payload[12], sizeof(tag));
+    memcpy(&registers, &payload[14], sizeof(registers));
+    assert(tag == 0x1000000000000005ull);
+    assert(registers == 0x0eull);
     memcpy(&tag, &payload[16], sizeof(tag));
     memcpy(&registers, &payload[18], sizeof(registers));
-    assert(tag == 0x3000000000008003ull);
+    assert(tag == 0x3000000000000003ull);
     assert(registers == 0x512ull);
+    memcpy(&tag, &payload[20], sizeof(tag));
+    memcpy(&registers, &payload[22], sizeof(registers));
+    assert(tag == 0x1000000000008001ull);
+    assert(registers == 0x0eull);
+
+    struct Ps2GsPackedReg nop = {};
+    for (uint32_t i = 0u;
+         i < PS2_GS_VU1_TRANSFORM_MAX_PREFIX_RECORDS; ++i) {
+        memcpy(&nop, &payload[24u + i * 4u], sizeof(nop));
+        assert(nop.value == 0u);
+        assert(nop.reg == 0x0fu);
+    }
+    memcpy(&nop, &payload[80], sizeof(nop));
+    assert(nop.value == 0u);
+    assert(nop.reg == 0x0fu);
 
     struct Ps2GsPackedReg max_prefix[
         PS2_GS_VU1_TRANSFORM_MAX_PREFIX_RECORDS] = {};

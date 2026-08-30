@@ -60,6 +60,7 @@ find_program(PD_PS2_BIN2C NAMES bin2c
 )
 
 set(PD_PS2_VU1_PROGRAM_OBJECT "")
+set(PD_PS2_VU1_TRANSFORM_PROGRAM_OBJECT "")
 if(PD_PS2_VU1_COLOR_DIAGNOSTIC)
   find_program(PD_PS2_DVP_AS NAMES dvp-as
     HINTS "$ENV{PS2DEV}/bin" "$ENV{PS2SDK}/bin"
@@ -67,6 +68,9 @@ if(PD_PS2_VU1_COLOR_DIAGNOSTIC)
   )
   set(PD_PS2_VU1_PROGRAM_OBJECT
     "${CMAKE_CURRENT_BINARY_DIR}/generated/gs_vu1_color_path.o"
+  )
+  set(PD_PS2_VU1_TRANSFORM_PROGRAM_OBJECT
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/gs_vu1_textured_transform.o"
   )
   add_custom_command(
     OUTPUT "${PD_PS2_VU1_PROGRAM_OBJECT}"
@@ -79,8 +83,20 @@ if(PD_PS2_VU1_COLOR_DIAGNOSTIC)
     COMMENT "Assembling VU1 PATH1 A+D transport microprogram"
     VERBATIM
   )
+  add_custom_command(
+    OUTPUT "${PD_PS2_VU1_TRANSFORM_PROGRAM_OBJECT}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory
+      "${CMAKE_CURRENT_BINARY_DIR}/generated"
+    COMMAND "${PD_PS2_DVP_AS}"
+      "${CMAKE_CURRENT_LIST_DIR}/gs_vu1_textured_transform.vsm"
+      -o "${PD_PS2_VU1_TRANSFORM_PROGRAM_OBJECT}"
+    DEPENDS "${CMAKE_CURRENT_LIST_DIR}/gs_vu1_textured_transform.vsm"
+    COMMENT "Assembling VU1 textured transform microprogram"
+    VERBATIM
+  )
   set_source_files_properties(
     "${PD_PS2_VU1_PROGRAM_OBJECT}"
+    "${PD_PS2_VU1_TRANSFORM_PROGRAM_OBJECT}"
     PROPERTIES GENERATED TRUE EXTERNAL_OBJECT TRUE
   )
 endif()
@@ -258,6 +274,7 @@ add_executable(pd_ps2_bootstrap
   "${PD_ROOT}/port/fast3d/rdp_tmem_live.cpp"
   "${PD_ROOT}/port/fast3d/rdp_tmem_trace.cpp"
   ${PD_PS2_VU1_PROGRAM_OBJECT}
+  ${PD_PS2_VU1_TRANSFORM_PROGRAM_OBJECT}
 )
 
 if(PD_PS2_ALPHA_TRILERP_DIAGNOSTIC)

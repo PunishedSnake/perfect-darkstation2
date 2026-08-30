@@ -9,6 +9,7 @@
 #define PS2_GIF_REG_XYZF2 0x04u
 #define PS2_GIF_REG_XYZ2 0x05u
 #define PS2_GIF_REG_AD 0x0eu
+#define PS2_GS_REG_NOP 0x0fu
 
 struct Ps2GsVu1GifTagQw {
     uint64_t tag;
@@ -51,13 +52,18 @@ extern "C" bool ps2GsVu1PlanTexturedTransform(uint32_t vertex_count,
         return false;
     }
 
+    /*
+     * Prefix and suffix storage is deliberately fixed. The microprogram can
+     * copy one branch-free stream while unused A+D records target GS NOP.
+     */
     const uint32_t input_qw = PS2_GS_VU1_TRANSFORM_HEADER_QW +
-        prefix_count + vertex_count * PS2_GS_VU1_TRANSFORM_VERTEX_QW +
-        suffix_count;
+        PS2_GS_VU1_TRANSFORM_MAX_PREFIX_RECORDS +
+        vertex_count * PS2_GS_VU1_TRANSFORM_VERTEX_QW +
+        PS2_GS_VU1_TRANSFORM_MAX_SUFFIX_RECORDS;
     const uint32_t output_qw =
-        (prefix_count != 0u ? prefix_count + 1u : 0u) +
+        1u + PS2_GS_VU1_TRANSFORM_MAX_PREFIX_RECORDS +
         1u + vertex_count * PS2_GS_VU1_TRANSFORM_VERTEX_QW +
-        (suffix_count != 0u ? suffix_count + 1u : 0u);
+        1u + PS2_GS_VU1_TRANSFORM_MAX_SUFFIX_RECORDS;
     if (input_qw > PS2_GS_VU1_BUFFER_QW ||
         output_qw > PS2_GS_VU1_BUFFER_QW) {
         return false;
@@ -99,36 +105,45 @@ extern "C" bool ps2GsVu1BuildTexturedTransformPayload(
     memcpy(header.scale, scale, sizeof(header.scale));
     memcpy(header.offset, offset, sizeof(header.offset));
 
-    if (prefix_count != 0u) {
-        header.prefix_tag.tag = ps2GsVu1TransformGifTag(
-            prefix_count, false, 1u);
-        header.prefix_tag.registers = PS2_GIF_REG_AD;
-    }
+    header.prefix_tag.tag = ps2GsVu1TransformGifTag(
+        PS2_GS_VU1_TRANSFORM_MAX_PREFIX_RECORDS, false, 1u);
+    header.prefix_tag.registers = PS2_GIF_REG_AD;
     header.vertex_tag.tag = ps2GsVu1TransformGifTag(
-        vertex_count, suffix_count == 0u, 3u);
+        vertex_count, false, 3u);
     header.vertex_tag.registers =
         ((uint64_t)PS2_GIF_REG_ST << 0) |
         ((uint64_t)PS2_GIF_REG_RGBAQ << 4) |
         ((uint64_t)((flags & PS2_GS_VU1_TRANSFORM_FLAG_FOG) != 0u
             ? PS2_GIF_REG_XYZF2 : PS2_GIF_REG_XYZ2) << 8);
-    if (suffix_count != 0u) {
-        header.suffix_tag.tag = ps2GsVu1TransformGifTag(
-            suffix_count, true, 1u);
-        header.suffix_tag.registers = PS2_GIF_REG_AD;
-    }
+    header.suffix_tag.tag = ps2GsVu1TransformGifTag(
+        PS2_GS_VU1_TRANSFORM_MAX_SUFFIX_RECORDS, true, 1u);
+    header.suffix_tag.registers = PS2_GIF_REG_AD;
 
     uint8_t *cursor = (uint8_t *)destination;
     memcpy(cursor, &header, sizeof(header));
     cursor += sizeof(header);
-    if (prefix_count != 0u) {
-        memcpy(cursor, prefix, (size_t)prefix_count * sizeof(*prefix));
-        cursor += (size_t)prefix_count * sizeof(*prefix);
+
+    struct Ps2GsPackedReg padded_prefix[
+        PS2_GS_VU1_TRANSFORM_MAX_PREFIX_RECORDS] = {};
+    for (uint32_t i = 0u;
+         i < PS2_GS_VU1_TRANSFORM_MAX_PREFIX_RECORDS; ++i) {
+        padded_prefix[i].reg = PS2_GS_REG_NOP;
     }
+    if (prefix_count != 0u) {
+        memcpy(padded_prefix, prefix,
+            (size_t)prefix_count * sizeof(*prefix));
+    }
+    memcpy(cursor, padded_prefix, sizeof(padded_prefix));
+    cursor += sizeof(padded_prefix);
+
     memcpy(cursor, vertices, (size_t)vertex_count * sizeof(*vertices));
     cursor += (size_t)vertex_count * sizeof(*vertices);
+
+    struct Ps2GsPackedReg padded_suffix = { 0u, PS2_GS_REG_NOP };
     if (suffix_count != 0u) {
-        memcpy(cursor, suffix, (size_t)suffix_count * sizeof(*suffix));
+        padded_suffix = suffix[0];
     }
+    memcpy(cursor, &padded_suffix, sizeof(padded_suffix));
 
     if (layout) {
         *layout = planned;
