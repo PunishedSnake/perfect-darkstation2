@@ -96,6 +96,21 @@ not a VIF/GIF timing emulator or a model of all VU floating-point behavior.
 
 ## Expected boot evidence
 
+Before the VU1 program uploads, the log must pass:
+
+```text
+GS core: global allocated; configure DMA
+GS core: enter screen init D_PCR=00000004 D_STAT=...
+GS core: screen init completed
+```
+
+The fast-wait mask is deliberately GIF-only. `dmaKit_wait_fast()` checks
+completion flags through CPCOND0, not idle CHCR bits. Selecting VIF1 before
+its first submission can stall inside `gsKit_init_screen()` after the GIF
+setup transfer. VIF1 retains its separate explicit ownership waits.
+Program-upload and bank-configuration begin/end checkpoints identify later
+initialization stalls without implying that the microprogram has rendered.
+
 The serial log must contain:
 
 ```text
@@ -115,6 +130,13 @@ A+D passthrough. Counters report accepted submissions, not GPU completion.
 The log reports cumulative counters on frame 1 and every 300 frames.
 
 ## Physical PS2 A/B
+
+Hardware report for build `998c397cd366` (CI #218): black screen. ROM probing,
+bounded RZIP and PAD initialization completed; the last persisted line was
+`GS core: gsKit CRT/VRAM bootstrap`. The GIF+VIF1 CPCOND mask was an invalid
+bootstrap dependency consistent with this stop point. The GIF-only correction
+has a host regression test, but successful boot on a physical PS2 still needs
+to be confirmed. This report does not validate or invalidate VU1 geometry math.
 
 Run both the baseline and VU1 diagnostic with the same ROM, loader, video mode
 and controller setup; use runtime toggles for same-ELF comparisons too. Record:

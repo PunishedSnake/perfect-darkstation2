@@ -82,6 +82,11 @@ jobs:
       - name: Test GS command budget and VRAM allocator
         run: |
           g++ -std=c++20 -Wall -Wextra -Werror \
+            -Iport/ps2 port/ps2/gs_dma_policy_test.cpp \
+            -o /tmp/gs_dma_policy_test
+          /tmp/gs_dma_policy_test
+
+          g++ -std=c++20 -Wall -Wextra -Werror \
             -Iport/ps2 \
             port/ps2/gs_alpha_equation.cpp \
             port/ps2/gs_alpha_equation_test.cpp \

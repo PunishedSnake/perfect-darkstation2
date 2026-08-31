@@ -15,6 +15,7 @@
 #include "gs_vu1_batch.h"
 #include "gs_vu1_queue.h"
 #include "gs_vu1_transform.h"
+#include "gs_dma_policy.h"
 #include "gs_vram_allocator.h"
 #include "log_ps2.h"
 #include "ps2_renderer_stats.h"
@@ -581,12 +582,12 @@ extern "C" bool ps2GsCoreInit(const struct Ps2GsCreateInfo *info)
     gs->ZBuffering = config->z_buffering ? GS_SETTING_ON : GS_SETTING_OFF;
     gs->Dithering = config->dithering ? GS_SETTING_ON : GS_SETTING_OFF;
 
-    uint16_t dma_fastwait_channels = 1u << DMA_CHANNEL_GIF;
-#if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
-    dma_fastwait_channels |= 1u << DMA_CHANNEL_VIF1;
-#endif
+    static_assert(PS2_GS_BOOTSTRAP_FASTWAIT_CHANNELS ==
+        (1u << DMA_CHANNEL_GIF), "gsKit bootstrap must wait only for GIF");
+    sysLogPrintf(LOG_NOTE, "GS core: global allocated; configure DMA");
+    ps2LogCheckpoint();
     dmaKit_init(D_CTRL_RELE_OFF, D_CTRL_MFD_OFF, D_CTRL_STS_UNSPEC,
-        D_CTRL_STD_OFF, D_CTRL_RCYC_8, dma_fastwait_channels);
+        D_CTRL_STD_OFF, D_CTRL_RCYC_8, PS2_GS_BOOTSTRAP_FASTWAIT_CHANNELS);
     dmaKit_chan_init(DMA_CHANNEL_GIF);
 #if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
     dmaKit_chan_init(DMA_CHANNEL_VIF1);
@@ -598,8 +599,14 @@ extern "C" bool ps2GsCoreInit(const struct Ps2GsCreateInfo *info)
      * project-owned and no longer passes through gsKit's FINISH-injecting queue.
      */
     gsKit_vram_clear(gs);
+    sysLogPrintf(LOG_NOTE,
+        "GS core: enter screen init D_PCR=%08x D_STAT=%08x",
+        (unsigned int)*DMA_REG_PCR, (unsigned int)*DMA_REG_STAT);
+    ps2LogCheckpoint();
     gsKit_init_screen(gs);
     gsKit_mode_switch(gs, GS_ONESHOT);
+    sysLogPrintf(LOG_NOTE, "GS core: screen init completed");
+    ps2LogCheckpoint();
 
     s_gs = gs;
     s_frame_building = false;
@@ -642,6 +649,10 @@ extern "C" bool ps2GsCoreInit(const struct Ps2GsCreateInfo *info)
         return false;
     }
 
+#if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
+    sysLogPrintf(LOG_NOTE, "GS core: initialise VIF1/VU1 queue");
+    ps2LogCheckpoint();
+#endif
     if (!ps2GsVu1QueueInit()) {
         sysLogPrintf(LOG_WARNING,
             "GS core: VU1 PATH1 validation transport unavailable; using PATH3 fallback");

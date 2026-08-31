@@ -123,6 +123,10 @@ static bool ps2GsVu1QueueUploadProgram(uint32_t *program_start,
     }
 
     const uint32_t program_qwords = instruction_count / 2u;
+    sysLogPrintf(LOG_NOTE,
+        "GS VU1 queue: program upload begin entry=%u instructions=%u",
+        program_address, instruction_count);
+    ps2LogCheckpoint();
     const uint32_t chain_qwords = program_qwords + 2u;
     const size_t stream_bytes = (size_t)chain_qwords * 16u;
     void *canonical = memalign(64, stream_bytes);
@@ -152,11 +156,17 @@ static bool ps2GsVu1QueueUploadProgram(uint32_t *program_start,
 
     const bool submitted = ps2GsVu1QueueSendChainAndWait(ucab);
     free(canonical);
+    sysLogPrintf(LOG_NOTE,
+        "GS VU1 queue: program upload end entry=%u success=%d",
+        program_address, submitted ? 1 : 0);
+    ps2LogCheckpoint();
     return submitted;
 }
 
 static bool ps2GsVu1QueueConfigureBuffers(void)
 {
+    sysLogPrintf(LOG_NOTE, "GS VU1 queue: configure banks begin");
+    ps2LogCheckpoint();
     void *canonical = memalign(64, 64u);
     if (!canonical) {
         return false;
@@ -177,6 +187,9 @@ static bool ps2GsVu1QueueConfigureBuffers(void)
 
     const bool submitted = ps2GsVu1QueueSendChainAndWait(ucab);
     free(canonical);
+    sysLogPrintf(LOG_NOTE, "GS VU1 queue: configure banks end success=%d",
+        submitted ? 1 : 0);
+    ps2LogCheckpoint();
     return submitted;
 }
 
