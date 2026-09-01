@@ -35,6 +35,14 @@ void *sysMemZeroAlloc(const u32 size);
 void *sysMemRealloc(void *ptr, const u32 newSize);
 void sysMemFree(void *ptr);
 
+/*
+ * Return the platform-safe size for Perfect Dark's long-lived memp arena.
+ * Desktop retains the requested size. Fixed-memory targets may reduce it to
+ * preserve an explicit platform/streaming reserve, or return zero when their
+ * minimum runtime contract cannot be satisfied.
+ */
+u32 sysMemGetGameHeapSize(u32 requestedSize);
+
 // hns is specified in 100ns units
 void sysSleep(const s64 hns);
 

@@ -598,9 +598,19 @@ PCSX2 is useful for correctness, packet/state inspection and fast iteration. It 
   enough space. There is no duplicate EE audio ring;
 - keep `pd_ps2_game_bridge` as the EE ABI frontier while platform services are
   replaced. Native input, ROM streaming and audio output now cross that
-  frontier. The next promotion blocker is a measured EE heap/resident-segment
-  budget plus the remaining platform/link closure, after which the real
-  `port/src/main.c` entry point can replace the diagnostic bootstrap;
+  frontier;
+- **CURRENT IMPLEMENTATION:** the real `port/src/main.c` no longer assumes its
+  configured N64-style memory size can consume the remaining EE heap wholesale.
+  A host-tested PS2 policy measures the uncommitted `sbrk(0)..EndOfHeap()` tail
+  after persistent renderer/platform allocation, reserves 4 MiB for libc, lazy
+  ROM assets and later staging, aligns the planned `memp` arena and rejects a
+  plan below the selected 4/8 MiB game floor. Diagnostic ELFs log physical
+  memory, `_end`, current libc break, heap end, tail, reserve and the resulting
+  16 MiB request before claiming no memory. The next hardware log therefore
+  supplies the resident budget needed before promoting the game entry point;
+- the remaining promotion blocker is platform/link closure plus hardware
+  confirmation of the measured heap plan, after which `port/src/main.c` can
+  replace the diagnostic bootstrap;
 - do not promote the game ELF by ignoring unresolved symbols. Every service
   crossing the link frontier must have an explicit PS2 owner and failure
   contract.

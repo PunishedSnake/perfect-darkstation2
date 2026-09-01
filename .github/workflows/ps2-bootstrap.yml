@@ -87,6 +87,11 @@ jobs:
           /tmp/gs_dma_policy_test
 
           g++ -std=c++20 -Wall -Wextra -Werror \
+            -Iport/ps2 port/ps2/memory_budget_test.cpp \
+            -o /tmp/memory_budget_test
+          /tmp/memory_budget_test
+
+          g++ -std=c++20 -Wall -Wextra -Werror \
             -Iport/ps2 \
             port/ps2/gs_vu1_wait.cpp \
             port/ps2/gs_vu1_wait_test.cpp \

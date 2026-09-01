@@ -3279,8 +3279,10 @@ static void ps2_end_frame(void)
 
     struct Ps2RendererStats stats;
     ps2RendererStatsGet(&stats);
-    if (stats.frames == 1u || stats.frames % 300u == 0u) {
-        ps2_log_renderer_stats(stats, stats.frames == 1u);
+    const bool early_snapshot = stats.frames == 1u ||
+        stats.frames == 60u || stats.frames == 120u;
+    if (early_snapshot || stats.frames % 300u == 0u) {
+        ps2_log_renderer_stats(stats, early_snapshot);
     }
 }
 

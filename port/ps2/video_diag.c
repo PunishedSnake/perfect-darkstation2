@@ -35,6 +35,17 @@ bool ps2VideoDiagRun(int rom_status)
     sysLogPrintf(LOG_NOTE,
         "GS diagnostic: core ready width=%d height=%d mode=0x%x rom_status=%d",
         ps2GsCoreGetWidth(), ps2GsCoreGetHeight(), ps2GsCoreGetMode(), rom_status);
+
+    /*
+     * Measure the full-game memp frontier after the renderer's persistent EE
+     * allocations. The diagnostic does not claim this arena; port/src/main.c
+     * uses the same planner before its real allocation.
+     */
+    const u32 gameHeapPlan = sysMemGetGameHeapSize(16u * 1024u * 1024u);
+    if (gameHeapPlan == 0u) {
+        sysLogPrintf(LOG_WARNING,
+            "GS diagnostic: full-game EE heap budget is not currently viable");
+    }
     sysLogPrintf(LOG_NOTE,
         "GS diagnostic: handing device-independent core to Fast3D rendering baseline");
     ps2LogCheckpoint();

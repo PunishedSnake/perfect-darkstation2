@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <unistd.h>
 
 #include <kernel.h>
 #include <delaythread.h>
@@ -12,6 +13,7 @@
 
 #include <PR/ultratypes.h>
 #include "log_checkpoint_policy.h"
+#include "memory_budget.h"
 #include "system.h"
 #include "log_ps2.h"
 
@@ -19,6 +21,9 @@
 #define LOG_FNAME "pdps2.log"
 #define LOG_STAGE_BUFFER_SIZE 8192u
 #define LOG_FLUSH_THRESHOLD 6144u
+#define PS2_GAME_HEAP_RESERVE_BYTES (4u * 1024u * 1024u)
+#define PS2_GAME_HEAP_MINIMUM_BYTES (8u * 1024u * 1024u)
+#define PS2_GAME_HEAP_ALIGNMENT 64u
 
 #ifndef PD_PS2_GIT_COMMIT
 #define PD_PS2_GIT_COMMIT "unknown"
@@ -33,6 +38,8 @@ static char logStageBuffer[LOG_STAGE_BUFFER_SIZE];
 static u32 logStageUsed;
 static u64 logLastDurableUsec;
 static bool logHasDurableCheckpoint;
+
+extern char _end;
 
 static u64 timerUsec(void)
 {
@@ -393,6 +400,37 @@ void *sysMemRealloc(void *ptr, const u32 newSize)
 void sysMemFree(void *ptr)
 {
     free(ptr);
+}
+
+u32 sysMemGetGameHeapSize(u32 requestedSize)
+{
+    void *const heapCursor = sbrk(0);
+    void *const heapEnd = EndOfHeap();
+    const u32 minimum = requestedSize < PS2_GAME_HEAP_MINIMUM_BYTES
+        ? requestedSize : PS2_GAME_HEAP_MINIMUM_BYTES;
+    struct Ps2GameHeapPlan plan;
+
+    if (heapCursor == (void *)-1 ||
+        !ps2PlanGameHeap(
+            (uintptr_t)heapCursor, (uintptr_t)heapEnd,
+            requestedSize, PS2_GAME_HEAP_RESERVE_BYTES,
+            minimum, PS2_GAME_HEAP_ALIGNMENT, &plan)) {
+        sysLogPrintf(LOG_ERROR,
+            "MEM: cannot plan game heap physical=%d KiB image_end=%p "
+            "libc_break=%p heap_end=%p requested=%u KiB reserve=%u KiB",
+            GetMemorySize() / 1024, &_end, heapCursor, heapEnd,
+            requestedSize / 1024u,
+            PS2_GAME_HEAP_RESERVE_BYTES / 1024u);
+        return 0u;
+    }
+
+    sysLogPrintf(LOG_NOTE,
+        "MEM: physical=%d KiB image_end=%p libc_break=%p heap_end=%p "
+        "tail=%u KiB reserve=%u KiB game_requested=%u KiB game_planned=%u KiB",
+        GetMemorySize() / 1024, &_end, heapCursor, heapEnd,
+        plan.tail_bytes / 1024u, plan.reserve_bytes / 1024u,
+        plan.requested_bytes / 1024u, plan.planned_bytes / 1024u);
+    return plan.planned_bytes;
 }
 
 void sysSleep(const s64 hns)

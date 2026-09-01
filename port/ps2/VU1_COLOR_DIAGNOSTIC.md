@@ -195,6 +195,15 @@ which observed hardware busy. The log confirms that both startup buffers were
 primed; visual elimination of the pre-first-frame mosaic still needs an explicit
 hardware observation.
 
+Hardware report for build `f1ee42f63884` (CI #224): both black buffers were
+visually confirmed on physical hardware; the pre-first-frame VRAM mosaic no
+longer appeared. The first completed frame reported one VIF1 ownership sample,
+zero samples which observed busy hardware and two safely elided samples. This
+directly confirms both PATH3-to-PATH1 handoffs inherited the already-drained
+VIF1 state. The run ended before frame 300, so steady-state `busy` timing was
+not captured. Diagnostic builds now force additional snapshots at frames 60
+and 120 before returning to the normal 300-frame cadence.
+
 Run both the baseline and VU1 diagnostic with the same ROM, loader, video mode
 and controller setup; use runtime toggles for same-ELF comparisons too. Record:
 

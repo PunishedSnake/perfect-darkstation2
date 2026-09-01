@@ -123,7 +123,15 @@ int main(int argc, const char **argv)
 
 	g_OsMemSize = osGetMemSize();
 
-	g_MempHeapSize = g_OsMemSize;
+	g_MempHeapSize = sysMemGetGameHeapSize(g_OsMemSize);
+	if (g_MempHeapSize == 0) {
+		sysFatalError("Platform cannot satisfy the game heap budget requested=%u bytes.",
+			g_OsMemSize);
+	}
+
+	/* Keep libultra/game heuristics consistent with the arena actually owned. */
+	g_OsMemSize = g_MempHeapSize;
+	osMemSize = g_MempHeapSize;
 	g_MempHeap = sysMemZeroAlloc(g_MempHeapSize);
 	if (!g_MempHeap) {
 		sysFatalError("Could not alloc %u bytes for memp heap.", g_MempHeapSize);

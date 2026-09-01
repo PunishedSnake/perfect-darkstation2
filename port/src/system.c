@@ -298,6 +298,11 @@ void sysMemFree(void *ptr)
 	free(ptr);
 }
 
+u32 sysMemGetGameHeapSize(u32 requestedSize)
+{
+	return requestedSize;
+}
+
 void sysSleep(const s64 hns)
 {
 #ifdef PLATFORM_WIN32

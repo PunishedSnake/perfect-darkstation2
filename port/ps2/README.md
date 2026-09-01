@@ -130,9 +130,13 @@ does. A file-backed `RomSource` performs bounded reads and streaming RZIP
 decompression. Permanent segments receive exact-sized allocations; ordinary
 assets keep compact extent metadata and become resident only while used.
 
-The remaining memory gate is measurement: record the permanent segment total,
-peak lazy-asset working set, game heap, GS upload staging and safety margin
-before promoting the diagnostic bootstrap to the full game entry point.
+The game heap now has an explicit fixed-memory policy. On PS2 the platform
+measures the current libc tail after persistent subsystem startup, preserves a
+4 MiB platform/streaming reserve and bounds the requested `memp` arena instead
+of blindly asking `calloc` for the configured size. Diagnostic logs expose the
+physical/linker/libc addresses and resulting plan without reserving the arena.
+The remaining memory gate is hardware confirmation plus later peak lazy-asset
+working-set measurement during the real game loop.
 
 ## Performance rules for this port
 
