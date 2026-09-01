@@ -5,7 +5,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
-#include <unistd.h>
 
 #include <kernel.h>
 #include <delaythread.h>
@@ -40,6 +39,8 @@ static u64 logLastDurableUsec;
 static bool logHasDurableCheckpoint;
 
 extern char _end;
+/* PS2SDK's libc glue exports the allocator break through _sbrk directly. */
+extern void *_sbrk(size_t increment);
 
 static u64 timerUsec(void)
 {
@@ -404,7 +405,7 @@ void sysMemFree(void *ptr)
 
 u32 sysMemGetGameHeapSize(u32 requestedSize)
 {
-    void *const heapCursor = sbrk(0);
+    void *const heapCursor = _sbrk(0u);
     void *const heapEnd = EndOfHeap();
     const u32 minimum = requestedSize < PS2_GAME_HEAP_MINIMUM_BYTES
         ? requestedSize : PS2_GAME_HEAP_MINIMUM_BYTES;
