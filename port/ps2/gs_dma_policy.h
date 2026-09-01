@@ -1,6 +1,9 @@
 #ifndef PERFECT_DARK_PS2_GS_DMA_POLICY_H
 #define PERFECT_DARK_PS2_GS_DMA_POLICY_H
 
+#include <stdbool.h>
+#include <stdint.h>
+
 /*
  * gsKit screen initialization submits GIF (DMAC channel 2), then uses
  * dmaKit_wait_fast/CPCOND0. CPCOND0 tests D_STAT completion flags for ALL
@@ -11,5 +14,22 @@
  * global fast-wait mask. Keep this GIF-only even in the VU1 diagnostic build.
  */
 #define PS2_GS_BOOTSTRAP_FASTWAIT_CHANNELS (1u << 2)
+
+struct Ps2GsBootstrapBufferPlan {
+    uint8_t clear_buffer;
+    uint8_t display_buffer;
+    uint8_t next_draw_buffer;
+};
+
+/* gsKit clears buffer 0 during init; explicitly prime buffer 1 before scanout. */
+static inline struct Ps2GsBootstrapBufferPlan ps2GsBootstrapBufferPlan(
+    bool double_buffering)
+{
+    struct Ps2GsBootstrapBufferPlan plan;
+    plan.clear_buffer = double_buffering ? 1u : 0u;
+    plan.display_buffer = double_buffering ? 1u : 0u;
+    plan.next_draw_buffer = 0u;
+    return plan;
+}
 
 #endif

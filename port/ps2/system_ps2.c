@@ -1,4 +1,5 @@
 #include <limits.h>
+#include <stdbool.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,6 +11,7 @@
 #include <timer.h>
 
 #include <PR/ultratypes.h>
+#include "log_checkpoint_policy.h"
 #include "system.h"
 #include "log_ps2.h"
 
@@ -29,6 +31,8 @@ static char logPath[1024];
 static FILE *logFile;
 static char logStageBuffer[LOG_STAGE_BUFFER_SIZE];
 static u32 logStageUsed;
+static u64 logLastDurableUsec;
+static bool logHasDurableCheckpoint;
 
 static u64 timerUsec(void)
 {
@@ -113,7 +117,7 @@ void ps2LogFlush(void)
     fflush(stderr);
 }
 
-void ps2LogCheckpoint(void)
+static void ps2LogCheckpointInternal(bool force)
 {
     char reopenPath[sizeof(logPath)];
 
@@ -123,11 +127,19 @@ void ps2LogCheckpoint(void)
      * the underlying descriptor stays open. A bring-up checkpoint therefore
      * deliberately closes the descriptor and reopens it in append mode.
      *
-     * This is intentionally coarse-grained. Do not use it in a frame hot path.
+     * mass: implementations have also shown finite progress across dense
+     * close/reopen cycles. Throttle ordinary checkpoints while allowing an
+     * explicit runtime snapshot or fatal path to force durability.
      */
     ps2LogFlush();
 
     if (!logFile || !logPath[0]) {
+        return;
+    }
+
+    const u64 now = sysGetMicroseconds();
+    if (!ps2LogCheckpointShouldClose(
+            now, logLastDurableUsec, logHasDurableCheckpoint, force)) {
         return;
     }
 
@@ -151,6 +163,19 @@ void ps2LogCheckpoint(void)
         logStageUsed = 0;
         return;
     }
+
+    logLastDurableUsec = now;
+    logHasDurableCheckpoint = true;
+}
+
+void ps2LogCheckpoint(void)
+{
+    ps2LogCheckpointInternal(false);
+}
+
+void ps2LogCheckpointForce(void)
+{
+    ps2LogCheckpointInternal(true);
 }
 
 static void sysLogSetPath(const char *fname)
@@ -161,6 +186,8 @@ static void sysLogSetPath(const char *fname)
     snprintf(logPath, sizeof(logPath), "%s/%s", base, fname);
 
     /* Start each run with a fresh log. The first checkpoint reopens as append. */
+    logLastDurableUsec = 0;
+    logHasDurableCheckpoint = false;
     logFile = fopen(logPath, "wb");
     if (!logFile) {
         logPath[0] = '\0';
@@ -221,13 +248,16 @@ void sysInit(void)
     sysLogPrintf(LOG_NOTE, "build commit: %s", PD_PS2_GIT_COMMIT);
     sysLogPrintf(LOG_NOTE, "compiler: %s", __VERSION__);
     sysLogPrintf(LOG_NOTE, "file sink: %s", logFile ? logPath : "unavailable/disabled; console only");
+    sysLogPrintf(LOG_NOTE,
+        "file checkpoint policy: ordinary close/reopen interval=%llu us; runtime snapshots forced",
+        (unsigned long long)PS2_LOG_DURABLE_INTERVAL_USEC);
 
     for (s32 i = 0; i < sysArgc; ++i) {
         sysLogPrintf(LOG_NOTE, "argv[%d]: %s", i, sysArgv[i] ? sysArgv[i] : "(null)");
     }
 
     /* Publish the initial file length immediately on filesystem-backed runs. */
-    ps2LogCheckpoint();
+    ps2LogCheckpointForce();
 }
 
 s32 sysArgCheck(const char *arg)
@@ -302,9 +332,9 @@ void sysLogPrintf(s32 level, const char *fmt, ...)
         sysLogStageLine(line, safeLength);
     }
 
-    /* Warnings/errors are rare; persist them rather than only flushing stdio. */
+    /* Warnings/errors are rare; flush now and let explicit checkpoints close. */
     if (safeLevel >= LOG_WARNING) {
-        ps2LogCheckpoint();
+        ps2LogFlush();
     }
 }
 
@@ -318,7 +348,7 @@ void sysFatalError(const char *fmt, ...)
     va_end(ap);
 
     sysLogPrintf(LOG_ERROR, "FATAL: %s", msg);
-    ps2LogCheckpoint();
+    ps2LogCheckpointForce();
 
     if (logFile) {
         FILE *closing = logFile;
@@ -397,7 +427,7 @@ void crashInit(void)
 
 void crashShutdown(void)
 {
-    ps2LogCheckpoint();
+    ps2LogCheckpointForce();
 
     if (logFile) {
         FILE *closing = logFile;

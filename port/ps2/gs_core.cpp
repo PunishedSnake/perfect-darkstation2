@@ -553,6 +553,46 @@ static uint64_t ps2GsCoreMakeXyz2(int x, int y, uint32_t z)
     return ps2GsCoreMakeXyz2Fixed(x * 16, y * 16, z);
 }
 
+static bool ps2GsCorePrimeDisplayBuffers(GSGLOBAL *gs)
+{
+    if (!gs || gs->Width <= 0 || gs->Height <= 0) {
+        return false;
+    }
+
+    const bool double_buffering =
+        gs->DoubleBuffering == GS_SETTING_ON &&
+        gs->ScreenBuffer[0] != gs->ScreenBuffer[1];
+    const struct Ps2GsBootstrapBufferPlan plan =
+        ps2GsBootstrapBufferPlan(double_buffering);
+
+    if (double_buffering) {
+        /*
+         * gsKit_init_screen clears buffer 0, then its first sync flip selects
+         * buffer 1 without clearing it. Prime that buffer while the gsKit queue
+         * still owns bootstrap traffic, then expose only completed black VRAM.
+         */
+        gs->ActiveBuffer = plan.clear_buffer;
+        gsKit_setactive(gs);
+        gsKit_clear(gs, GS_SETREG_RGBAQ(0x00, 0x00, 0x00, 0x00, 0x00));
+        gsKit_queue_exec(gs);
+        if (dmaKit_wait(DMA_CHANNEL_GIF, 0) < 0) {
+            return false;
+        }
+        gsKit_finish();
+        gsKit_vsync_wait();
+    }
+
+    GS_SET_DISPFB2(
+        gs->ScreenBuffer[plan.display_buffer] / 8192u,
+        gs->Width / 64u,
+        gs->PSM,
+        0,
+        0);
+    gs->ActiveBuffer = plan.next_draw_buffer;
+    gsKit_setactive(gs);
+    return dmaKit_wait(DMA_CHANNEL_GIF, 0) >= 0;
+}
+
 extern "C" bool ps2GsCoreInit(const struct Ps2GsCreateInfo *info)
 {
     if (s_gs) {
@@ -605,7 +645,20 @@ extern "C" bool ps2GsCoreInit(const struct Ps2GsCreateInfo *info)
     ps2LogCheckpoint();
     gsKit_init_screen(gs);
     gsKit_mode_switch(gs, GS_ONESHOT);
-    sysLogPrintf(LOG_NOTE, "GS core: screen init completed");
+    if (!ps2GsCorePrimeDisplayBuffers(gs)) {
+        sysLogPrintf(LOG_ERROR,
+            "GS core: failed to prime black front/back display buffers");
+        ps2LogCheckpointForce();
+        return false;
+    }
+    const bool primed_double_buffer =
+        gs->DoubleBuffering == GS_SETTING_ON &&
+        gs->ScreenBuffer[0] != gs->ScreenBuffer[1];
+    sysLogPrintf(LOG_NOTE,
+        "GS core: screen init completed; black front/back buffers primed display=%u draw=%u",
+        (unsigned int)(primed_double_buffer
+            ? (gs->ActiveBuffer ^ 1u) : gs->ActiveBuffer),
+        (unsigned int)gs->ActiveBuffer);
     ps2LogCheckpoint();
 
     s_gs = gs;

@@ -20,10 +20,14 @@ void ps2LogFlush(void);
  *
  * Current PS2SDK does not implement fsync(). On filesystem-backed launchers,
  * especially mass:, file size/directory metadata may remain stale until close.
- * A checkpoint therefore flushes, closes, and reopens the log in append mode.
- * Keep these checkpoints coarse; do not call this from frame/hot paths.
+ * A checkpoint always flushes and periodically closes/reopens the file. Dense
+ * callers are throttled because repeated mass: reopen cycles can stop making
+ * progress. Keep these checkpoints out of frame/hot paths.
  */
 void ps2LogCheckpoint(void);
+
+/* Bypass checkpoint throttling for an explicit user snapshot or fatal error. */
+void ps2LogCheckpointForce(void);
 
 #ifdef __cplusplus
 }

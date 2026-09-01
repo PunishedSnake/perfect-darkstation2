@@ -52,7 +52,13 @@ Current PS2SDK does not implement `fsync()`. On filesystem-backed launchers such
 2. close the log file so the filesystem can publish file-size/directory metadata,
 3. reopen it in append mode for subsequent entries.
 
-These close/reopen checkpoints are intentionally limited to bring-up boundaries such as ROM probe transitions and GS initialisation. They must not be moved into frame or other hot paths. `--no-log` disables the file sink for timing-sensitive experiments while console output remains available.
+Every checkpoint still flushes immediately, but ordinary close/reopen cycles are
+limited to at most 10 Hz. Real-hardware `mass:` logs stopped after a deterministic
+sequence containing many dense reopen operations. Explicit
+controller-triggered renderer snapshots and fatal errors bypass the throttle so
+their final counters receive a durable close. Checkpoints must not be moved into
+frame or other hot paths. `--no-log` disables the file sink for timing-sensitive
+experiments while console output remains available.
 
 ## Real-hardware observations
 
@@ -67,7 +73,7 @@ A real PlayStation 2 produced the expected diagnostic frame with:
 
 This is direct hardware evidence that the current EE/system bootstrap, bounded ROM source, NTSC-final header validation, streamed RZIP 1173 data-segment decode, file-table sanity check, GIF path and GS diagnostic renderer all reached their expected state in one execution.
 
-The first logger implementation created `pdps2.log` but left the file at 0 bytes while the diagnostic remained in its infinite GS loop. This reproduced the known PS2SDK/filesystem issue where an ongoing file may not publish its final size while it remains open and `fsync()` is unavailable. The logger was subsequently changed to use explicit close/reopen durable checkpoints. A second real-hardware run is required to confirm that fix.
+The first logger implementation created `pdps2.log` but left the file at 0 bytes while the diagnostic remained in its infinite GS loop. This reproduced the known PS2SDK/filesystem issue where an ongoing file may not publish its final size while it remains open and `fsync()` is unavailable. Explicit close/reopen checkpoints fixed early durability, but later hardware logs repeatedly stopped after checkpointing Fast3D scene entry. The throttled policy above preserves early diagnostics while reserving reliable reopen progress for runtime measurements.
 
 Metadata not recorded for this first run and therefore intentionally not inferred:
 

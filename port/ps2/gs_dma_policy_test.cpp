@@ -30,5 +30,17 @@ int main(void)
         assert(completionCondition(boot_mask, stat) ==
             completionCondition(boot_mask, stat ^ vif1));
     }
+
+    const struct Ps2GsBootstrapBufferPlan double_buffered =
+        ps2GsBootstrapBufferPlan(true);
+    assert(double_buffered.clear_buffer == 1u);
+    assert(double_buffered.display_buffer == 1u);
+    assert(double_buffered.next_draw_buffer == 0u);
+
+    const struct Ps2GsBootstrapBufferPlan single_buffered =
+        ps2GsBootstrapBufferPlan(false);
+    assert(single_buffered.clear_buffer == 0u);
+    assert(single_buffered.display_buffer == 0u);
+    assert(single_buffered.next_draw_buffer == 0u);
     return 0;
 }

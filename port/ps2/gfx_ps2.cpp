@@ -3260,7 +3260,7 @@ static void ps2_log_renderer_stats(
         (unsigned long long)stats.vu1_wait_timeouts,
         (unsigned long long)stats.vu1_wait_errors);
     if (checkpoint) {
-        ps2LogCheckpoint();
+        ps2LogCheckpointForce();
     }
 }
 

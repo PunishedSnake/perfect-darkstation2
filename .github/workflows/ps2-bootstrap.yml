@@ -181,6 +181,12 @@ jobs:
         run: |
           gcc -std=c11 -Wall -Wextra -Werror \
             -Iport/ps2 \
+            port/ps2/log_checkpoint_policy_test.c \
+            -o /tmp/log_checkpoint_policy_test
+          /tmp/log_checkpoint_policy_test
+
+          gcc -std=c11 -Wall -Wextra -Werror \
+            -Iport/ps2 \
             port/ps2/pad_axis_ps2.c \
             port/ps2/pad_axis_ps2_test.c \
             -o /tmp/pad_axis_ps2_test

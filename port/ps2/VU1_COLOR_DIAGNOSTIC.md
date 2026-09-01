@@ -161,6 +161,22 @@ initialisation, so it contained no first-frame wait counters. Later builds
 therefore persist the live renderer counters whenever `Select` or `Triangle`
 is pressed, placing the measurement beside an observed A/B transition.
 
+Hardware report for build `7ddac1c2bcaa` (CI #221): the full raw stick range
+was monotonic on the physical controller, including both endpoints. `Triangle`
+and `Select` both changed the visible diagnostic as intended, but the mass log
+again ended at the Fast3D scene-entry checkpoint. The repeated cutoff confirms
+that the file sink, rather than the observed button events, lost later lines;
+its position is consistent with exhausting progress through dense durable
+reopen cycles. Ordinary checkpoints are now throttled while button-triggered
+statistics force durability.
+
+The same run exposed a short-lived tiled/noisy image between video-mode setup
+and the first rendered frame. gsKit clears buffer 0 during screen initialisation
+but its initial double-buffer flip can expose buffer 1 before that buffer has
+been written. Bootstrap now clears buffer 1 through the ordered GIF queue,
+waits for GS completion, selects the completed black front buffer at VBlank and
+leaves buffer 0 as the next draw target.
+
 Run both the baseline and VU1 diagnostic with the same ROM, loader, video mode
 and controller setup; use runtime toggles for same-ELF comparisons too. Record:
 
