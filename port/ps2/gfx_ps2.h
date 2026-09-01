@@ -113,6 +113,9 @@ static inline uint64_t gfxPs2TextureVariantIdentity(
 /* Set the physical upload variant before the native or RGBA32 fallback path. */
 void gfxPs2SetTextureUploadMirror(uint8_t cms, uint8_t cmt);
 
+/* Emit the current renderer/VU1 counters, optionally forcing durable storage. */
+void gfxPs2LogRendererStats(bool checkpoint);
+
 /*
  * PS2-only import seam used by the generated live-TMEM frontend. Returns true
  * only when the exact logical view was consumed in a native GS format.

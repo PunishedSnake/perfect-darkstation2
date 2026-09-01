@@ -3222,6 +3222,55 @@ static void ps2_start_frame(void)
     ps2GsCoreBeginFrame();
 }
 
+static void ps2_log_renderer_stats(
+    const struct Ps2RendererStats &stats, bool checkpoint)
+{
+    sysLogPrintf(LOG_NOTE,
+        "GfxPS2 stats: frames=%llu translate_batches=%llu "
+        "vertices=%llu ee_us=%llu",
+        (unsigned long long)stats.frames,
+        (unsigned long long)stats.translation_batches,
+        (unsigned long long)stats.translated_vertices,
+        (unsigned long long)stats.translation_microseconds);
+    sysLogPrintf(LOG_NOTE,
+        "GfxPS2 paths: path1_color=%llu path1_textured=%llu "
+        "path1_vertices=%llu path1_records=%llu "
+        "path3_color=%llu path3_textured=%llu "
+        "path3_vertices=%llu path3_records=%llu "
+        "vu1_rejects=%llu/%llu vertices",
+        (unsigned long long)stats.path1_color_batches,
+        (unsigned long long)stats.path1_textured_batches,
+        (unsigned long long)stats.path1_vertices,
+        (unsigned long long)stats.path1_records,
+        (unsigned long long)stats.path3_color_batches,
+        (unsigned long long)stats.path3_textured_batches,
+        (unsigned long long)stats.path3_vertices,
+        (unsigned long long)stats.path3_records,
+        (unsigned long long)stats.vu1_rejected_batches,
+        (unsigned long long)stats.vu1_rejected_vertices);
+    sysLogPrintf(LOG_NOTE,
+        "GfxPS2 VU1: transform_batches=%llu transform_vertices=%llu "
+        "waits=%llu/%llu us max=%llu us "
+        "wait_timeouts=%llu wait_errors=%llu",
+        (unsigned long long)stats.vu1_transform_batches,
+        (unsigned long long)stats.vu1_transform_vertices,
+        (unsigned long long)stats.vu1_wait_calls,
+        (unsigned long long)stats.vu1_wait_microseconds,
+        (unsigned long long)stats.vu1_wait_max_microseconds,
+        (unsigned long long)stats.vu1_wait_timeouts,
+        (unsigned long long)stats.vu1_wait_errors);
+    if (checkpoint) {
+        ps2LogCheckpoint();
+    }
+}
+
+extern "C" void gfxPs2LogRendererStats(bool checkpoint)
+{
+    struct Ps2RendererStats stats;
+    ps2RendererStatsGet(&stats);
+    ps2_log_renderer_stats(stats, checkpoint);
+}
+
 static void ps2_end_frame(void)
 {
     ps2GsCoreSubmit();
@@ -3229,43 +3278,7 @@ static void ps2_end_frame(void)
     struct Ps2RendererStats stats;
     ps2RendererStatsGet(&stats);
     if (stats.frames == 1u || stats.frames % 300u == 0u) {
-        sysLogPrintf(LOG_NOTE,
-            "GfxPS2 stats: frames=%llu translate_batches=%llu "
-            "vertices=%llu ee_us=%llu",
-            (unsigned long long)stats.frames,
-            (unsigned long long)stats.translation_batches,
-            (unsigned long long)stats.translated_vertices,
-            (unsigned long long)stats.translation_microseconds);
-        sysLogPrintf(LOG_NOTE,
-            "GfxPS2 paths: path1_color=%llu path1_textured=%llu "
-            "path1_vertices=%llu path1_records=%llu "
-            "path3_color=%llu path3_textured=%llu "
-            "path3_vertices=%llu path3_records=%llu "
-            "vu1_rejects=%llu/%llu vertices",
-            (unsigned long long)stats.path1_color_batches,
-            (unsigned long long)stats.path1_textured_batches,
-            (unsigned long long)stats.path1_vertices,
-            (unsigned long long)stats.path1_records,
-            (unsigned long long)stats.path3_color_batches,
-            (unsigned long long)stats.path3_textured_batches,
-            (unsigned long long)stats.path3_vertices,
-            (unsigned long long)stats.path3_records,
-            (unsigned long long)stats.vu1_rejected_batches,
-            (unsigned long long)stats.vu1_rejected_vertices);
-        sysLogPrintf(LOG_NOTE,
-            "GfxPS2 VU1: transform_batches=%llu transform_vertices=%llu "
-            "waits=%llu/%llu us max=%llu us "
-            "wait_timeouts=%llu wait_errors=%llu",
-            (unsigned long long)stats.vu1_transform_batches,
-            (unsigned long long)stats.vu1_transform_vertices,
-            (unsigned long long)stats.vu1_wait_calls,
-            (unsigned long long)stats.vu1_wait_microseconds,
-            (unsigned long long)stats.vu1_wait_max_microseconds,
-            (unsigned long long)stats.vu1_wait_timeouts,
-            (unsigned long long)stats.vu1_wait_errors);
-        if (stats.frames == 1u) {
-            ps2LogCheckpoint();
-        }
+        ps2_log_renderer_stats(stats, stats.frames == 1u);
     }
 }
 

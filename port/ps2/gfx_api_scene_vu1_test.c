@@ -5,6 +5,11 @@
 
 int main(void)
 {
+    assert(updateCameraDistance(4.6f, 1.0f) > 4.6f);
+    assert(updateCameraDistance(4.6f, -1.0f) < 4.6f);
+    assert(updateCameraDistance(6.5f, 1.0f) == 6.5f);
+    assert(updateCameraDistance(3.8f, -1.0f) == 3.8f);
+
     for (int i = 0; i < API_SCENE_DRAW_VERTEX_COUNT; ++i) {
         float *src = &sCubeVbo[i * API_SCENE_TEXTURED_STRIDE];
         for (int j = 0; j < API_SCENE_TEXTURED_STRIDE; ++j) {

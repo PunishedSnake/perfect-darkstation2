@@ -115,6 +115,12 @@ static float clampfLocal(float v, float lo, float hi)
     return v < lo ? lo : (v > hi ? hi : v);
 }
 
+static float updateCameraDistance(float cameraDistance, float moveY)
+{
+    /* Forward moves the cube deeper; pulling back brings it toward the player. */
+    return clampfLocal(cameraDistance + moveY * 0.035f, 3.8f, 6.5f);
+}
+
 static void buildCheckerTexture(void)
 {
     for (int y = 0; y < API_SCENE_TEXTURE_H; ++y) {
@@ -790,7 +796,7 @@ bool ps2GfxApiSceneRun(int romStatus)
                 sysLogPrintf(LOG_ERROR,
                     "GfxAPI VU1 A/B: switch rejected; queue unavailable or pending work failed");
             }
-            ps2LogCheckpoint();
+            gfxPs2LogRendererStats(true);
         }
 #else
         (void)rawDebugPressed;
@@ -803,7 +809,7 @@ bool ps2GfxApiSceneRun(int romStatus)
                 "GfxAPI VU1 A/B: mode=%s fog=%s",
                 ps2GsVu1QueueEnabled() ? "VU1/PATH1" : "EE/PATH3",
                 vu1FogActive ? "on" : "off");
-            ps2LogCheckpoint();
+            gfxPs2LogRendererStats(true);
         }
 #endif
 
@@ -822,8 +828,7 @@ bool ps2GfxApiSceneRun(int romStatus)
             advanceRotationDelta(&sinX, &cosX, controls->look_y * lookScale);
 
             offsetX = clampfLocal(offsetX + controls->move_x * 0.025f, -1.4f, 1.4f);
-            cameraDistance = clampfLocal(
-                cameraDistance - controls->move_y * 0.035f, 3.8f, 6.5f);
+            cameraDistance = updateCameraDistance(cameraDistance, controls->move_y);
 
             uint8_t rumble = 0;
             if (controls->held & PS2_ACTION_ALT_FIRE) {

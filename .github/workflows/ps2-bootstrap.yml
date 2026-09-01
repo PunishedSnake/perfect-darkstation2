@@ -180,6 +180,13 @@ jobs:
       - name: Test native PS2 game input mapping
         run: |
           gcc -std=c11 -Wall -Wextra -Werror \
+            -Iport/ps2 \
+            port/ps2/pad_axis_ps2.c \
+            port/ps2/pad_axis_ps2_test.c \
+            -o /tmp/pad_axis_ps2_test
+          /tmp/pad_axis_ps2_test
+
+          gcc -std=c11 -Wall -Wextra -Werror \
             -D_LANGUAGE_C=1 -DPLATFORM_PS2=1 \
             -Iport/ps2 -Iport/include -Iinclude -Iinclude/PR -Isrc/include \
             port/ps2/input_ps2_map.c \

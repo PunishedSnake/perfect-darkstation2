@@ -7,6 +7,7 @@
 #include <sifrpc.h>
 
 #include "log_ps2.h"
+#include "pad_axis_ps2.h"
 #include "pad_ps2.h"
 #include "system.h"
 
@@ -81,17 +82,6 @@ static int ps2PadEnsureModule(const char *name, const char *rom_path)
         "PAD: failed to provide IOP module %s from %s (%d)",
         name, rom_path, result);
     return result;
-}
-
-static int16_t ps2PadAxisHorizontal(uint8_t raw)
-{
-    return (int16_t)(((int)raw - 128) * 256);
-}
-
-static int16_t ps2PadAxisVertical(uint8_t raw)
-{
-    /* libpad reports 0 at the top. Public pad state uses conventional +Y up. */
-    return (int16_t)((128 - (int)raw) * 256);
 }
 
 static void ps2PadResetLiveState(struct Ps2PadPort *port, bool emit_release)
@@ -248,10 +238,10 @@ static void ps2PadUpdatePort(int player)
     port->state.held = held;
     port->state.pressed = held & ~old_held;
     port->state.released = old_held & ~held;
-    port->state.lx = ps2PadAxisHorizontal(buttons.ljoy_h);
-    port->state.ly = ps2PadAxisVertical(buttons.ljoy_v);
-    port->state.rx = ps2PadAxisHorizontal(buttons.rjoy_h);
-    port->state.ry = ps2PadAxisVertical(buttons.rjoy_v);
+    port->state.lx = ps2PadAxisHorizontalFromRaw(buttons.ljoy_h);
+    port->state.ly = ps2PadAxisVerticalFromRaw(buttons.ljoy_v);
+    port->state.rx = ps2PadAxisHorizontalFromRaw(buttons.rjoy_h);
+    port->state.ry = ps2PadAxisVerticalFromRaw(buttons.rjoy_v);
     port->read_ok = true;
     ++port->successful_reads;
 }

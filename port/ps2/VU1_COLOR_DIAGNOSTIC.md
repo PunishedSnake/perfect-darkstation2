@@ -39,9 +39,11 @@ The VU1 ELF starts on the textured cube with VU1 enabled and fog off.
 
 - `Select`: drain pending PATH1 work and toggle VU1/PATH1 versus EE/PATH3.
   The serial log names the selected mode. A failed switch is logged and does
-  not silently change mode. The green heartbeat bar means VU1 is selected,
-  not that the image has passed validation.
-- `Triangle`: toggle depth-varying fog on the same cube, exercising XYZF2.
+  not silently change mode. It also checkpoints the current PATH1/PATH3 and
+  VIF1-wait counters. The green heartbeat bar means VU1 is selected, not that
+  the image has passed validation.
+- `Triangle`: toggle depth-varying fog on the same cube, exercising XYZF2 and
+  checkpointing the same renderer counters.
 - Keep both sticks centered with a connected pad for stationary captures.
   The unattended cube rotates when no pad is connected.
 - `Cross`: reset cube position/orientation. Existing stick and rumble tests
@@ -151,6 +153,13 @@ status. A timeout or VIF error disables new VU1 submissions and persists the
 register values in the log. The next idle observation releases the pending
 slot so the existing PATH3 fallback can resume; an actually wedged/error-latched
 VIF remains unavailable rather than being reset behind the renderer's back.
+
+Hardware report for build `d6f729e1270c` (CI #220): the bounded-wait build
+again reached GS/VU1 queue readiness and the VU1 diagnostic remained visible
+and responsive. The copied mass-storage log ended at Fast3D scene
+initialisation, so it contained no first-frame wait counters. Later builds
+therefore persist the live renderer counters whenever `Select` or `Triangle`
+is pressed, placing the measurement beside an observed A/B transition.
 
 Run both the baseline and VU1 diagnostic with the same ROM, loader, video mode
 and controller setup; use runtime toggles for same-ELF comparisons too. Record:

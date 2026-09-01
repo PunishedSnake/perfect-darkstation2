@@ -267,6 +267,7 @@ add_executable(pd_ps2_bootstrap
   gfx_ps2_combiner.cpp
   gfx_ps2_pass_graph.cpp
   gfx_window_ps2.c
+  pad_axis_ps2.c
   pad_ps2.c
   controls_ps2.c
   rom_probe.c
