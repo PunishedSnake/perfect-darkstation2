@@ -635,6 +635,14 @@ PCSX2 is useful for correctness, packet/state inspection and fast iteration. It 
   durable register snapshot rather than spinning forever. Existing pending
   work remains owned until a later idle sample, after which ordinary PATH3
   fallback can resume without reusing an in-flight VU buffer;
+- **CURRENT IMPLEMENTATION, HARDWARE-MEASURED:** build `eb636d34f` completed
+  1262 PATH1 frames and 360 PATH3 frames with live fog and transport switching,
+  zero VIF failures and a 235 us maximum ownership wait. Its 5048 wait samples
+  exposed exactly four samples per PATH1 frame. A non-empty PATH3 handoff now
+  reports that it already drained VIF1, allowing the immediately following
+  PATH1 submit to elide the duplicate poll. Empty PATH3 handoffs retain the late
+  wait after alternate-slot construction, preserving EE/VU1 overlap. Telemetry
+  distinguishes waits which observed hardware busy from safely elided polls;
 - VU1 lighting/texgen candidate;
 - **IN PROGRESS:** direct GS-ready output and XGKICK. The transport diagnostic
   executes this route with raw textured transforms and GS-ready A+D transport

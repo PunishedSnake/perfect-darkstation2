@@ -129,7 +129,11 @@ After textured Fast3D draws, `GfxPS2 VU1: transform_batches=...` and
 `transform_vertices=...` must increase. These are subsets of the PATH1 totals,
 not extra vertices. An increasing `path1_textured` count alone may only prove
 A+D passthrough. Counters report accepted submissions, not GPU completion.
-The log reports cumulative counters on frame 1 and every 300 frames.
+The log reports cumulative counters on frame 1 and every 300 frames. `busy`
+counts waits which actually observed an active VIF1/DMAC state, while `elided`
+counts PATH1 handoffs where a preceding non-empty PATH3 submit had already
+drained VIF1. An empty PATH3 arena retains the late ownership wait so the EE can
+continue building the alternate VIF stream while the prior VU1 batch runs.
 
 ## Physical PS2 A/B
 
@@ -176,6 +180,20 @@ but its initial double-buffer flip can expose buffer 1 before that buffer has
 been written. Bootstrap now clears buffer 1 through the ordered GIF queue,
 waits for GS completion, selects the completed black front buffer at VBlank and
 leaves buffer 0 as the next draw target.
+
+Hardware report for build `eb636d34fae2` (CI #222): the throttled logger
+persisted a complete 27.8-second run through 1622 frames. Runtime input produced
+the sequence PATH1 with fog off/on, 360 complete PATH3 frames with fog on/off,
+then PATH1 with fog off/on/off. The final counters contained 1262 color and 1262
+textured PATH1 batches, 360 color and 360 textured PATH3 batches, 1262 raw VU1
+transforms, no rejected batch, no VIF timeout and no VIF error. VIF1 ownership
+was sampled 5048 times for 185726 us total with a 235 us maximum, exactly four
+samples per PATH1 frame. This validates stable same-ELF transport/fog switching
+and identifies one duplicate sample after the PATH3-to-PATH1 handoff. The next
+revision removes only that already-satisfied sample and separately counts waits
+which observed hardware busy. The log confirms that both startup buffers were
+primed; visual elimination of the pre-first-frame mosaic still needs an explicit
+hardware observation.
 
 Run both the baseline and VU1 diagnostic with the same ROM, loader, video mode
 and controller setup; use runtime toggles for same-ELF comparisons too. Record:

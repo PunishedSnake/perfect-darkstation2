@@ -8,6 +8,7 @@
 #include <vif_registers.h>
 
 #include "gs_native_queue.h"
+#include "gs_dma_policy.h"
 #include "gs_vu1_batch.h"
 #include "gs_vu1_queue.h"
 #include "gs_vu1_transform.h"
@@ -95,6 +96,7 @@ static bool ps2GsVu1QueueWaitVifIdle(void)
 {
     const uint64_t start_us = sysGetMicroseconds();
     uint32_t polls = 0u;
+    bool observed_busy = false;
     for (;;) {
         const uint32_t chcr = PS2_VIF1_DMAC_CHCR;
         const uint32_t status = VIF1_STAT;
@@ -103,13 +105,15 @@ static bool ps2GsVu1QueueWaitVifIdle(void)
         if (state == PS2_GS_VU1_WAIT_IDLE) {
             const uint64_t now_us = sysGetMicroseconds();
             ps2RendererStatsRecordVu1Wait(
-                now_us >= start_us ? now_us - start_us : 0u);
+                now_us >= start_us ? now_us - start_us : 0u,
+                observed_busy);
             return true;
         }
         if (state == PS2_GS_VU1_WAIT_ERROR) {
             const uint64_t now_us = sysGetMicroseconds();
             ps2RendererStatsRecordVu1Wait(
-                now_us >= start_us ? now_us - start_us : 0u);
+                now_us >= start_us ? now_us - start_us : 0u,
+                observed_busy);
             s_enabled = false;
             ps2RendererStatsRecordVu1WaitFailure(false);
             if (!s_wait_failure_logged) {
@@ -123,6 +127,8 @@ static bool ps2GsVu1QueueWaitVifIdle(void)
             return false;
         }
 
+        observed_busy = true;
+
         /* Amortise the EE timer read while retaining a bounded wait. */
         if ((polls++ & 0xffu) == 0u) {
             const uint64_t now_us = sysGetMicroseconds();
@@ -131,7 +137,8 @@ static bool ps2GsVu1QueueWaitVifIdle(void)
                 continue;
             }
             ps2RendererStatsRecordVu1Wait(
-                now_us >= start_us ? now_us - start_us : 0u);
+                now_us >= start_us ? now_us - start_us : 0u,
+                observed_busy);
             s_enabled = false;
             ps2RendererStatsRecordVu1WaitFailure(true);
             if (!s_wait_failure_logged) {
@@ -377,7 +384,8 @@ extern "C" bool ps2GsVu1QueueSubmitAd(
      * Publish every earlier PATH3 state write first. FLUSHA in the VIF stream
      * then orders PATH1 after that state without a GS FINISH token.
      */
-    if (!ps2GsNativeQueueSubmit()) {
+    bool vif_idle_after_path3 = false;
+    if (!ps2GsNativeQueueSubmitForPath1(&vif_idle_after_path3)) {
         return false;
     }
     ps2GsNativeQueueBeginFrame();
@@ -393,8 +401,12 @@ extern "C" bool ps2GsVu1QueueSubmitAd(
         return false;
     }
 
-    if (!ps2GsVu1QueueWaitVifIdle()) {
-        return false;
+    if (ps2GsPath1NeedsVifWait(vif_idle_after_path3)) {
+        if (!ps2GsVu1QueueWaitVifIdle()) {
+            return false;
+        }
+    } else {
+        ps2RendererStatsRecordVu1WaitElided();
     }
     dmaKit_send_chain_ucab(DMA_CHANNEL_VIF1, slot->ucab);
     s_pending = true;
@@ -443,7 +455,8 @@ extern "C" bool ps2GsVu1QueueSubmitTexturedTransform(
     }
 
     /* Preserve earlier PATH3 state before the validation FLUSHA transition. */
-    if (!ps2GsNativeQueueSubmit()) {
+    bool vif_idle_after_path3 = false;
+    if (!ps2GsNativeQueueSubmitForPath1(&vif_idle_after_path3)) {
         return false;
     }
     ps2GsNativeQueueBeginFrame();
@@ -460,8 +473,12 @@ extern "C" bool ps2GsVu1QueueSubmitTexturedTransform(
         return false;
     }
 
-    if (!ps2GsVu1QueueWaitVifIdle()) {
-        return false;
+    if (ps2GsPath1NeedsVifWait(vif_idle_after_path3)) {
+        if (!ps2GsVu1QueueWaitVifIdle()) {
+            return false;
+        }
+    } else {
+        ps2RendererStatsRecordVu1WaitElided();
     }
     dmaKit_send_chain_ucab(DMA_CHANNEL_VIF1, slot->ucab);
     s_pending = true;

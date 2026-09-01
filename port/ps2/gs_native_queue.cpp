@@ -482,8 +482,11 @@ extern "C" bool ps2GsNativeQueueUploadTextureMirrored(GSGLOBAL *gs,
         mirror_s, mirror_t);
 }
 
-extern "C" bool ps2GsNativeQueueSubmit(void)
+static bool ps2GsNativeQueueSubmitInternal(bool *vif_idle_after_submit)
 {
+    if (vif_idle_after_submit) {
+        *vif_idle_after_submit = false;
+    }
     if (!s_initialized) {
         return false;
     }
@@ -508,10 +511,27 @@ extern "C" bool ps2GsNativeQueueSubmit(void)
         dmaKit_wait(DMA_CHANNEL_GIF, 0) < 0) {
         return false;
     }
+    if (vif_idle_after_submit) {
+        *vif_idle_after_submit = true;
+    }
 
     dmaKit_send_ucab(DMA_CHANNEL_GIF, arena->ucab, arena->used_qw);
     s_build_arena ^= 1u;
     return true;
+}
+
+extern "C" bool ps2GsNativeQueueSubmit(void)
+{
+    return ps2GsNativeQueueSubmitInternal(NULL);
+}
+
+extern "C" bool ps2GsNativeQueueSubmitForPath1(
+    bool *vif_idle_after_submit)
+{
+    if (!vif_idle_after_submit) {
+        return false;
+    }
+    return ps2GsNativeQueueSubmitInternal(vif_idle_after_submit);
 }
 
 extern "C" bool ps2GsNativeQueueWaitGs(void)

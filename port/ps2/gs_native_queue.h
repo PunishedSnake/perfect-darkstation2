@@ -37,6 +37,14 @@ struct Ps2GsPackedReg *ps2GsNativeQueueReserveAd(uint32_t reg_count);
 bool ps2GsNativeQueueSubmit(void);
 
 /*
+ * PATH1 handoff variant. When a non-empty PATH3 arena is submitted, the
+ * function first drains pending VIF1 work and reports that the caller inherits
+ * a known-idle VIF1 channel. An empty arena reports false so the caller retains
+ * its normal late VIF1 ownership wait.
+ */
+bool ps2GsNativeQueueSubmitForPath1(bool *vif_idle_after_submit);
+
+/*
  * Submit one native GS FINISH token after all earlier PATH3 traffic and wait
  * for it. This is a full GS dependency fence, not merely GIF DMA completion.
  */

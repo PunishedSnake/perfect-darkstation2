@@ -42,5 +42,9 @@ int main(void)
     assert(single_buffered.clear_buffer == 0u);
     assert(single_buffered.display_buffer == 0u);
     assert(single_buffered.next_draw_buffer == 0u);
+
+    /* Only a real PATH3 submission proves that VIF1 was already drained. */
+    assert(!ps2GsPath1NeedsVifWait(true));
+    assert(ps2GsPath1NeedsVifWait(false));
     return 0;
 }

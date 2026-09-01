@@ -32,4 +32,17 @@ static inline struct Ps2GsBootstrapBufferPlan ps2GsBootstrapBufferPlan(
     return plan;
 }
 
+/*
+ * A non-empty PATH3 submit acquires VIF1 ownership before publishing its GIF
+ * chain. The following PATH1 submit therefore inherits a known-idle VIF1
+ * channel and must not poll it a second time. An empty PATH3 arena makes no
+ * ownership claim, so the PATH1 queue still performs its normal late wait
+ * after building the next stream.
+ */
+static inline bool ps2GsPath1NeedsVifWait(
+    bool path3_submit_drained_vif)
+{
+    return !path3_submit_drained_vif;
+}
+
 #endif
