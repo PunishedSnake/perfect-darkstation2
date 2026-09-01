@@ -12,6 +12,7 @@
 #include "gs_core.h"
 #include "gs_vu1_batch.h"
 #include "gs_vu1_transform.h"
+#include "log_ps2.h"
 #include "ps2_renderer_stats.h"
 #include "rdp_tmem_live.h"
 #include "system.h"
@@ -3252,9 +3253,19 @@ static void ps2_end_frame(void)
             (unsigned long long)stats.vu1_rejected_batches,
             (unsigned long long)stats.vu1_rejected_vertices);
         sysLogPrintf(LOG_NOTE,
-            "GfxPS2 VU1: transform_batches=%llu transform_vertices=%llu",
+            "GfxPS2 VU1: transform_batches=%llu transform_vertices=%llu "
+            "waits=%llu/%llu us max=%llu us "
+            "wait_timeouts=%llu wait_errors=%llu",
             (unsigned long long)stats.vu1_transform_batches,
-            (unsigned long long)stats.vu1_transform_vertices);
+            (unsigned long long)stats.vu1_transform_vertices,
+            (unsigned long long)stats.vu1_wait_calls,
+            (unsigned long long)stats.vu1_wait_microseconds,
+            (unsigned long long)stats.vu1_wait_max_microseconds,
+            (unsigned long long)stats.vu1_wait_timeouts,
+            (unsigned long long)stats.vu1_wait_errors);
+        if (stats.frames == 1u) {
+            ps2LogCheckpoint();
+        }
     }
 }
 

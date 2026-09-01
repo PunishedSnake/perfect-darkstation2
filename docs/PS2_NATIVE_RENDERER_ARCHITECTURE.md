@@ -618,14 +618,23 @@ PCSX2 is useful for correctness, packet/state inspection and fast iteration. It 
   the VU1 copy loop branch-free.
   Its disjoint output bank at QW 512 or 768 has room for the corresponding
   multi-tag GIF PACKED stream, including post-draw state restoration;
-- **CURRENT IMPLEMENTATION, DIAGNOSTIC ONLY:** a second VU1 microprogram is assembled and uploaded at
+- **CURRENT IMPLEMENTATION, HARDWARE-VALIDATED DIAGNOSTIC:** a second VU1 microprogram is assembled and uploaded at
   instruction address 64. It performs perspective division, viewport/depth
   mapping, STQ preparation, PACKED vertex emission and XGKICK into PATH1.
   Ordinary one-pass textured Fast3D draws now submit the raw VIF input chain.
   Fogged XYZF2 depth and fog/ADC lane packing have dedicated source-functional
   tests. CPU fallback vertices are still prepared eagerly; transform-specific
   submission counters distinguish this route from A+D passthrough. Physical
-  PS2 A/B and pipeline timing validation are still pending;
+  PS2 build `145e556d4` completed the VIF1 upload and bank setup, displayed the
+  rotating textured cube through PATH1 and showed the expected visible change
+  when the XYZF2 fog toggle was enabled. Pixel-equivalent PATH1/PATH3 captures
+  and measured pipeline timing remain pending;
+- **CURRENT IMPLEMENTATION:** every VIF1 ownership wait now samples both DMAC
+  `CHCR.STR` and the VIF1 active/error fields under a 100 ms deadline. A VIF
+  error or timeout disables new VU1 submissions, records telemetry and emits a
+  durable register snapshot rather than spinning forever. Existing pending
+  work remains owned until a later idle sample, after which ordinary PATH3
+  fallback can resume without reusing an in-flight VU buffer;
 - VU1 lighting/texgen candidate;
 - **IN PROGRESS:** direct GS-ready output and XGKICK. The transport diagnostic
   executes this route with raw textured transforms and GS-ready A+D transport
@@ -633,7 +642,7 @@ PCSX2 is useful for correctness, packet/state inspection and fast iteration. It 
 - **IN PROGRESS:** double-buffer VU input/output ownership. BASE/OFFSET banks
   and alternating EE slots exist, while execution remains serialized for the
   first hardware correctness test;
-- real-hardware A/B against CPU path.
+- lossless real-hardware PATH1/PATH3 A/B and timing against the CPU path.
 
 ### M6: IPU image jobs
 

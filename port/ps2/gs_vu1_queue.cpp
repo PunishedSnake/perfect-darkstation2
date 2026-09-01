@@ -11,7 +11,9 @@
 #include "gs_vu1_batch.h"
 #include "gs_vu1_queue.h"
 #include "gs_vu1_transform.h"
+#include "gs_vu1_wait.h"
 #include "log_ps2.h"
+#include "ps2_renderer_stats.h"
 #include "system.h"
 
 #if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
@@ -25,8 +27,7 @@
 #define PS2_DMA_TAG_CNT 0x01u
 #define PS2_DMA_TAG_END 0x07u
 
-#define PS2_VIF1_STAT_ACTIVE_MASK 0x1f00000fu
-#define PS2_VIF1_STAT_ERROR_MASK  0x00003000u
+#define PS2_VIF1_DMAC_CHCR (*(volatile uint32_t *)0x10009000u)
 
 struct Ps2GsVu1QueueSlot {
     void *canonical;
@@ -43,6 +44,7 @@ static uint32_t s_build_slot;
 static bool s_initialized;
 static bool s_enabled;
 static bool s_pending;
+static bool s_wait_failure_logged;
 
 static_assert(sizeof(struct Ps2GsColorVertex) ==
         2u * sizeof(struct Ps2GsPackedReg),
@@ -67,6 +69,17 @@ static uint64_t ps2GsVu1QueueDmaTag(uint32_t qwords, uint32_t id)
 
 static void ps2GsVu1QueueRelease(void)
 {
+    if (s_pending) {
+        /*
+         * A timed-out DMAC may still own a chain or payload. Retaining both
+         * slots is safer than freeing memory which VIF1 can still read. This
+         * is an initialization failure path, so bounded leakage is terminal
+         * for VU1 but leaves the PATH3 renderer's heap ownership intact.
+         */
+        s_initialized = false;
+        s_enabled = false;
+        return;
+    }
     for (uint32_t i = 0; i < 2u; ++i) {
         free(s_slots[i].canonical);
         s_slots[i].canonical = NULL;
@@ -75,20 +88,61 @@ static void ps2GsVu1QueueRelease(void)
     s_initialized = false;
     s_enabled = false;
     s_pending = false;
+    s_wait_failure_logged = false;
 }
 
 static bool ps2GsVu1QueueWaitVifIdle(void)
 {
-    if (dmaKit_wait(DMA_CHANNEL_VIF1, 0) < 0) {
-        return false;
-    }
+    const uint64_t start_us = sysGetMicroseconds();
+    uint32_t polls = 0u;
     for (;;) {
+        const uint32_t chcr = PS2_VIF1_DMAC_CHCR;
         const uint32_t status = VIF1_STAT;
-        if ((status & PS2_VIF1_STAT_ERROR_MASK) != 0u) {
+        const enum Ps2GsVu1WaitState state =
+            ps2GsVu1ClassifyWait(chcr, status);
+        if (state == PS2_GS_VU1_WAIT_IDLE) {
+            const uint64_t now_us = sysGetMicroseconds();
+            ps2RendererStatsRecordVu1Wait(
+                now_us >= start_us ? now_us - start_us : 0u);
+            return true;
+        }
+        if (state == PS2_GS_VU1_WAIT_ERROR) {
+            const uint64_t now_us = sysGetMicroseconds();
+            ps2RendererStatsRecordVu1Wait(
+                now_us >= start_us ? now_us - start_us : 0u);
+            s_enabled = false;
+            ps2RendererStatsRecordVu1WaitFailure(false);
+            if (!s_wait_failure_logged) {
+                sysLogPrintf(LOG_ERROR,
+                    "GS VU1 queue: VIF1 error CHCR=%08x STAT=%08x; "
+                    "disabling new VU1 submissions",
+                    chcr, status);
+                ps2LogCheckpoint();
+                s_wait_failure_logged = true;
+            }
             return false;
         }
-        if ((status & PS2_VIF1_STAT_ACTIVE_MASK) == 0u) {
-            return true;
+
+        /* Amortise the EE timer read while retaining a bounded wait. */
+        if ((polls++ & 0xffu) == 0u) {
+            const uint64_t now_us = sysGetMicroseconds();
+            if (!ps2GsVu1WaitTimedOut(start_us, now_us,
+                    PS2_GS_VU1_WAIT_TIMEOUT_US)) {
+                continue;
+            }
+            ps2RendererStatsRecordVu1Wait(
+                now_us >= start_us ? now_us - start_us : 0u);
+            s_enabled = false;
+            ps2RendererStatsRecordVu1WaitFailure(true);
+            if (!s_wait_failure_logged) {
+                sysLogPrintf(LOG_ERROR,
+                    "GS VU1 queue: wait timeout after %u us "
+                    "CHCR=%08x STAT=%08x; disabling new VU1 submissions",
+                    PS2_GS_VU1_WAIT_TIMEOUT_US, chcr, status);
+                ps2LogCheckpoint();
+                s_wait_failure_logged = true;
+            }
+            return false;
         }
     }
 }
@@ -99,7 +153,12 @@ static bool ps2GsVu1QueueSendChainAndWait(uint32_t *ucab)
         return false;
     }
     dmaKit_send_chain_ucab(DMA_CHANNEL_VIF1, ucab);
-    return ps2GsVu1QueueWaitVifIdle();
+    s_pending = true;
+    if (!ps2GsVu1QueueWaitVifIdle()) {
+        return false;
+    }
+    s_pending = false;
+    return true;
 }
 
 static bool ps2GsVu1QueueUploadProgram(uint32_t *program_start,

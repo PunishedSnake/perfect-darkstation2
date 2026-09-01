@@ -22,6 +22,11 @@ int main(void)
     ps2RendererStatsRecordPath3(false, 6u, 13u);
     ps2RendererStatsRecordPath3(true, 9u, 31u);
     ps2RendererStatsRecordVu1Reject(9u);
+    ps2RendererStatsRecordVu1Wait(7u);
+    ps2RendererStatsRecordVu1Wait(3u);
+    ps2RendererStatsRecordVu1WaitFailure(true);
+    ps2RendererStatsRecordVu1WaitFailure(false);
+    ps2RendererStatsRecordVu1WaitFailure(false);
     ps2RendererStatsGet(&stats);
 
     assert(stats.frames == 2u);
@@ -40,6 +45,11 @@ int main(void)
     assert(stats.path3_records == 44u);
     assert(stats.vu1_rejected_batches == 1u);
     assert(stats.vu1_rejected_vertices == 9u);
+    assert(stats.vu1_wait_calls == 2u);
+    assert(stats.vu1_wait_microseconds == 10u);
+    assert(stats.vu1_wait_max_microseconds == 7u);
+    assert(stats.vu1_wait_timeouts == 1u);
+    assert(stats.vu1_wait_errors == 2u);
 
     ps2RendererStatsGet(NULL);
     return 0;

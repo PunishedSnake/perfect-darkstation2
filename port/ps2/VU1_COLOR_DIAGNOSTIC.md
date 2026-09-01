@@ -135,8 +135,22 @@ Hardware report for build `998c397cd366` (CI #218): black screen. ROM probing,
 bounded RZIP and PAD initialization completed; the last persisted line was
 `GS core: gsKit CRT/VRAM bootstrap`. The GIF+VIF1 CPCOND mask was an invalid
 bootstrap dependency consistent with this stop point. The GIF-only correction
-has a host regression test, but successful boot on a physical PS2 still needs
-to be confirmed. This report does not validate or invalidate VU1 geometry math.
+had a host regression test; its hardware confirmation is recorded below. The
+failed build itself did not validate or invalidate VU1 geometry math.
+
+Hardware report for build `145e556d409b` (CI #219): the corrected GIF-only
+bootstrap mask reached `GS core: screen init completed`, uploaded both VU1
+programs and configured the two TOPS banks. The rotating textured cube was
+visible on a physical PS2, and `Triangle` produced a visible fog change. This
+confirms live clip/STQ/RGBA input, VU1 perspective/viewport mapping, XYZ2/XYZF2
+emission and XGKICK transport for the diagnostic. It does not by itself prove
+pixel equivalence with PATH3 or frame-time improvement.
+
+VIF1 waits are now bounded to 100 ms and inspect both DMAC `CHCR.STR` and VIF1
+status. A timeout or VIF error disables new VU1 submissions and persists the
+register values in the log. The next idle observation releases the pending
+slot so the existing PATH3 fallback can resume; an actually wedged/error-latched
+VIF remains unavailable rather than being reset behind the renderer's back.
 
 Run both the baseline and VU1 diagnostic with the same ROM, loader, video mode
 and controller setup; use runtime toggles for same-ELF comparisons too. Record:

@@ -26,6 +26,11 @@ struct Ps2RendererStats {
     uint64_t path3_records;
     uint64_t vu1_rejected_batches;
     uint64_t vu1_rejected_vertices;
+    uint64_t vu1_wait_calls;
+    uint64_t vu1_wait_microseconds;
+    uint64_t vu1_wait_max_microseconds;
+    uint64_t vu1_wait_timeouts;
+    uint64_t vu1_wait_errors;
 };
 
 void ps2RendererStatsReset(void);
@@ -38,6 +43,8 @@ void ps2RendererStatsRecordPath3(
     bool textured, uint32_t vertex_count, uint32_t register_count);
 void ps2RendererStatsRecordVu1Transform(uint32_t vertex_count);
 void ps2RendererStatsRecordVu1Reject(uint32_t vertex_count);
+void ps2RendererStatsRecordVu1Wait(uint64_t microseconds);
+void ps2RendererStatsRecordVu1WaitFailure(bool timeout);
 void ps2RendererStatsGet(struct Ps2RendererStats *stats);
 
 #ifdef __cplusplus

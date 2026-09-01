@@ -58,6 +58,24 @@ extern "C" void ps2RendererStatsRecordVu1Reject(uint32_t vertex_count)
     s_stats.vu1_rejected_vertices += vertex_count;
 }
 
+extern "C" void ps2RendererStatsRecordVu1Wait(uint64_t microseconds)
+{
+    ++s_stats.vu1_wait_calls;
+    s_stats.vu1_wait_microseconds += microseconds;
+    if (microseconds > s_stats.vu1_wait_max_microseconds) {
+        s_stats.vu1_wait_max_microseconds = microseconds;
+    }
+}
+
+extern "C" void ps2RendererStatsRecordVu1WaitFailure(bool timeout)
+{
+    if (timeout) {
+        ++s_stats.vu1_wait_timeouts;
+    } else {
+        ++s_stats.vu1_wait_errors;
+    }
+}
+
 extern "C" void ps2RendererStatsGet(struct Ps2RendererStats *stats)
 {
     if (stats) {

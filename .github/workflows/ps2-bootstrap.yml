@@ -88,6 +88,13 @@ jobs:
 
           g++ -std=c++20 -Wall -Wextra -Werror \
             -Iport/ps2 \
+            port/ps2/gs_vu1_wait.cpp \
+            port/ps2/gs_vu1_wait_test.cpp \
+            -o /tmp/gs_vu1_wait_test
+          /tmp/gs_vu1_wait_test
+
+          g++ -std=c++20 -Wall -Wextra -Werror \
+            -Iport/ps2 \
             port/ps2/gs_alpha_equation.cpp \
             port/ps2/gs_alpha_equation_test.cpp \
             -o /tmp/gs_alpha_equation_test
