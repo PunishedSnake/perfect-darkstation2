@@ -226,6 +226,12 @@ jobs:
       - name: Test bounded ROM source and RZIP streaming
         run: |
           gcc -std=c11 -Wall -Wextra -Werror \
+            -Iport/include \
+            port/ps2/romdata_policy_test.c \
+            -o /tmp/romdata_policy_test
+          /tmp/romdata_policy_test
+
+          gcc -std=c11 -Wall -Wextra -Werror \
             -D_LANGUAGE_C=1 \
             -Iport/include -Iinclude -Iinclude/PR \
             port/src/romsource.c \

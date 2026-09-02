@@ -10,6 +10,7 @@
 #include "system.h"
 #include "preprocess.h"
 #include "platform.h"
+#include "romdata_policy.h"
 #ifdef PLATFORM_PS2
 #include "log_ps2.h"
 #include "romsource.h"
@@ -74,6 +75,7 @@ static const char *romName = ROMDATA_ROM_NAME;
 #ifdef PLATFORM_PS2
 static struct romsource romSource;
 static u8 *romNameTable;
+static u8 romEmptyFile;
 #endif
 
 enum loadsource {
@@ -590,6 +592,7 @@ static inline void romdataInitFiles(void)
 	const u32 *offsets = (const u32 *)(romDataSeg + ROMDATA_FILES_OFS);
 	u32 nameTableOffset = 0;
 	u32 fileCount = 0;
+	u32 emptyFileCount = 0;
 
 	for (u32 i = 1; i + 1 < tableEntries && i < ROMDATA_MAX_FILES; ++i) {
 		const u32 offset = PD_BE32(offsets[i]);
@@ -605,8 +608,12 @@ static inline void romdataInitFiles(void)
 			break;
 		}
 
-		if (offset >= nextOffset || nextOffset > g_RomFileSize) {
+		if (!romdataFileExtentValid(offset, nextOffset, g_RomFileSize)) {
 			sysFatalError("ROM file %u has invalid extent %08x..%08x.", i, offset, nextOffset);
+		}
+
+		if (offset == nextOffset) {
+			emptyFileCount++;
 		}
 
 		fileSlots[i].romoffset = offset;
@@ -623,8 +630,9 @@ static inline void romdataInitFiles(void)
 	}
 
 	const u32 nameTableSize = romdataInitFileNames(nameTableOffset, fileCount);
-	sysLogPrintf(LOG_NOTE, "ROM file table: %u file extents, %u-byte resident filename table",
-		fileCount, nameTableSize);
+	sysLogPrintf(LOG_NOTE,
+		"ROM file table: %u file extents (%u empty), %u-byte resident filename table",
+		fileCount, emptyFileCount, nameTableSize);
 #else
 	if (!g_RomFile) {
 		// no ROM; try to load the file name list from disk
@@ -783,7 +791,7 @@ s32 romdataFileGetSize(s32 fileNum)
 		}
 	}
 
-	if (fileSlots[fileNum].romoffset && fileSlots[fileNum].romsize) {
+	if (fileSlots[fileNum].romoffset) {
 		return fileSlots[fileNum].romsize;
 	}
 #else
@@ -835,25 +843,38 @@ u8 *romdataFileLoad(s32 fileNum, u32 *outSize)
 #ifdef PLATFORM_PS2
 			struct romfile *file = &fileSlots[fileNum];
 
-			if (file->romoffset && file->romsize &&
-				file->romoffset <= g_RomFileSize && file->romsize <= g_RomFileSize - file->romoffset) {
-				out = sysMemAlloc(file->romsize);
-				if (out && !romSourceReadAt(&romSource, file->romoffset, out, file->romsize)) {
-					sysMemFree(out);
-					out = NULL;
-				}
-			}
-
-			if (out) {
-				file->data = out;
-				file->size = file->romsize;
+			if (file->romoffset && file->romsize == 0) {
+				/* Desktop builds expose a non-null pointer into the resident ROM
+				 * for empty files. Preserve that contract without retaining 32 MB. */
+				file->data = &romEmptyFile;
+				file->size = 0;
 				file->source = SRC_ROM;
-				file->owned = 1;
-				sysLogPrintf(LOG_NOTE, "file %d (%s) loaded from ROM offset %08x (%u bytes)",
-					fileNum, file->name, file->romoffset, file->romsize);
-			} else {
-				sysLogPrintf(LOG_ERROR, "file %d (%s) could not be read from the ROM source",
+				file->owned = 0;
+				out = file->data;
+				sysLogPrintf(LOG_NOTE, "file %d (%s) is an empty ROM extent",
 					fileNum, file->name ? file->name : "unnamed");
+			} else {
+				if (file->romoffset && file->romsize &&
+					file->romoffset <= g_RomFileSize &&
+					file->romsize <= g_RomFileSize - file->romoffset) {
+					out = sysMemAlloc(file->romsize);
+					if (out && !romSourceReadAt(&romSource, file->romoffset, out, file->romsize)) {
+						sysMemFree(out);
+						out = NULL;
+					}
+				}
+
+				if (out) {
+					file->data = out;
+					file->size = file->romsize;
+					file->source = SRC_ROM;
+					file->owned = 1;
+					sysLogPrintf(LOG_NOTE, "file %d (%s) loaded from ROM offset %08x (%u bytes)",
+						fileNum, file->name, file->romoffset, file->romsize);
+				} else {
+					sysLogPrintf(LOG_ERROR, "file %d (%s) could not be read from the ROM source",
+						fileNum, file->name ? file->name : "unnamed");
+				}
 			}
 #else
 			// Rebuild the resident-ROM view after a prior external override.
@@ -915,9 +936,7 @@ void romdataFileFree(s32 fileNum)
 		fileSlots[fileNum].owned = 0;
 	}
 
-	if (fileSlots[fileNum].romsize) {
-		fileSlots[fileNum].size = fileSlots[fileNum].romsize;
-	}
+	fileSlots[fileNum].size = fileSlots[fileNum].romsize;
 
 	fileSlots[fileNum].source = SRC_UNLOADED;
 }
