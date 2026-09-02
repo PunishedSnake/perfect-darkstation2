@@ -105,7 +105,9 @@ struct romfile {
 	u32 romoffset;
 	u32 romsize;
 	s32 owned;
+#ifdef PLATFORM_PS2
 	s32 streamed;
+#endif
 };
 
 /* patches for individual files; applied on file load, before preprocFuncs, but */
@@ -363,7 +365,8 @@ static inline void romdataUpdateSegStartEnd(struct romfile* seg)
 	}
 
 	if (seg->segend) {
-		*seg->segend = seg->data + seg->size;
+		/* Streamed segments are pointer-shaped addresses, not C objects. */
+		*seg->segend = (u8 *)((uintptr_t)seg->data + seg->size);
 	}
 }
 
@@ -506,19 +509,27 @@ s32 romdataDmaRead(void *dst, uintptr_t address, u32 length)
 		u32 segmentOffset;
 
 		if (!seg->streamed || seg->source != SRC_ROM || seg->owned ||
-			!romdataStreamRangeOffset(address, length,
+			!romdataStreamStartOffset(address, length,
 				(uintptr_t)seg->data, seg->size, &segmentOffset)) {
 			continue;
 		}
 
-		if (romSourceReadAt(&romSource, seg->romoffset + segmentOffset,
-				dst, length)) {
+		if (segmentOffset > UINT32_MAX - seg->romoffset) {
+			break;
+		}
+
+		const u32 romOffset = seg->romoffset + segmentOffset;
+		if (romOffset > g_RomFileSize || length > g_RomFileSize - romOffset) {
+			break;
+		}
+
+		if (romSourceReadAt(&romSource, romOffset, dst, length)) {
 			return ROMDATA_DMA_OK;
 		}
 
 		sysLogPrintf(LOG_ERROR,
 			"ROM DMA read failed: segment=%s romoffset=%08x length=%u",
-			seg->name, seg->romoffset + segmentOffset, length);
+			seg->name, romOffset, length);
 		return ROMDATA_DMA_ERROR;
 	}
 
@@ -746,8 +757,10 @@ static inline struct romfile *romdataGetSeg(const char *name)
 s32 romdataInit(void)
 {
 	const char *altRomName = sysArgGetString("--rom-file");
+#ifdef PLATFORM_PS2
 	u32 streamedSegmentCount = 0;
 	u32 streamedBytes = 0;
+#endif
 	if (altRomName) {
 		romName = altRomName;
 	}
@@ -769,22 +782,24 @@ s32 romdataInit(void)
 			seg->name, seg->romoffset, seg->size);
 		ROMDATA_CHECKPOINT();
 		romdataInitSegment(seg);
+#ifdef PLATFORM_PS2
 		if (seg->streamed && seg->source == SRC_ROM && !seg->owned) {
 			streamedSegmentCount++;
 			streamedBytes += seg->size;
 		}
+#endif
 		sysLogPrintf(LOG_NOTE,
 			"ROM segment ready: %s size=%u source=%d owned=%d",
 			seg->name, seg->size, seg->source, seg->owned);
 		ROMDATA_CHECKPOINT();
 	}
 
-	#ifdef PLATFORM_PS2
+#ifdef PLATFORM_PS2
 	sysLogPrintf(LOG_NOTE,
 		"ROM streaming: %u file-backed segments, %u bytes kept out of EE RAM",
 		streamedSegmentCount, streamedBytes);
 	ROMDATA_CHECKPOINT();
-	#endif
+#endif
 
 	// load file table from the files segment
 	sysLogPrintf(LOG_NOTE, "ROM file table initialisation begin");

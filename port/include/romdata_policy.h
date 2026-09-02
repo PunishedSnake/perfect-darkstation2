@@ -55,4 +55,31 @@ static inline bool romdataStreamRangeOffset(
 	return true;
 }
 
+/*
+ * DMA clients may align a transfer past the logical end of a segment. The
+ * resident N64 ROM contract permits that as long as the transfer starts in
+ * the segment and remains inside the complete ROM image.
+ */
+static inline bool romdataStreamStartOffset(
+		uintptr_t address, uint32_t length, uintptr_t segmentAddress,
+		uint32_t segmentSize, uint32_t *outOffset)
+{
+	if (!outOffset || address < segmentAddress) {
+		return false;
+	}
+
+	const uintptr_t deltaWide = address - segmentAddress;
+	if (deltaWide > segmentSize) {
+		return false;
+	}
+
+	const uint32_t delta = (uint32_t)deltaWide;
+	if (length != 0u && delta == segmentSize) {
+		return false;
+	}
+
+	*outOffset = delta;
+	return true;
+}
+
 #endif

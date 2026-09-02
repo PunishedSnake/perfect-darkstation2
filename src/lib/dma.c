@@ -79,7 +79,7 @@ void dmaStart(void *memaddr, romptr_t romaddr, u32 len, bool priority)
 		osPiStartDma(&g_DmaIoMsgs[i], priority, 0, romaddr, memaddr, remainder, &g_DmaMesgQueue);
 	}
 #else // PLATFORM_N64
-	#ifdef PLATFORM_PS2
+#ifdef PLATFORM_PS2
 	const s32 result = romdataDmaRead(memaddr, (uintptr_t)romaddr, len);
 
 	if (result == ROMDATA_DMA_OK) {
@@ -91,7 +91,7 @@ void dmaStart(void *memaddr, romptr_t romaddr, u32 len, bool priority)
 			(void *)(uintptr_t)romaddr, len);
 		return;
 	}
-	#endif
+#endif
 	bcopy((const void *)romaddr, memaddr, len);
 #endif // PLATFORM_N64
 }

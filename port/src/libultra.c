@@ -12,6 +12,9 @@
 #include "video.h"
 #include "audio.h"
 #include "fs.h"
+#ifdef PLATFORM_PS2
+#include "romdata.h"
+#endif
 
 #define EEPROM_SIZE (EEP16K_MAXBLOCKS * 8)
 #define EEPROM_FNAME "eeprom.bin"
@@ -442,6 +445,25 @@ void osInvalDCache(void *a, s32 b)
 
 s32 osPiStartDma(OSIoMesg *mb, s32 priority, s32 direction, uintptr_t devAddr, void *vAddr, u32 nbytes, OSMesgQueue *mq)
 {
+#ifdef PLATFORM_PS2
+	/*
+	 * The audio DMA cache calls the libultra PI API directly instead of going
+	 * through dmaStart. File-backed ROM segments therefore need the same
+	 * virtual-address resolution here; otherwise the EE attempts to memcpy
+	 * from the deliberately unmapped 0x60xxxxxx window.
+	 */
+	const s32 result = romdataDmaRead(vAddr, devAddr, nbytes);
+
+	if (result == ROMDATA_DMA_OK) {
+		return 0;
+	}
+
+	if (result == ROMDATA_DMA_ERROR) {
+		sysFatalError("PI ROM DMA read failed address=%p length=%u.",
+			(void *)devAddr, nbytes);
+	}
+#endif
+
 	memcpy(vAddr, (const void *)devAddr, nbytes);
 	return 0;
 }

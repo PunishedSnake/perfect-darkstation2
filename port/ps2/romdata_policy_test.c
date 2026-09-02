@@ -38,5 +38,16 @@ int main(void)
 	assert(!romdataStreamRangeOffset(segment, 1u,
 		segment, 0x100u, NULL));
 
+	assert(romdataStreamStartOffset(segment + 0xf8u, 16u,
+		segment, 0x100u, &offset));
+	assert(offset == 0xf8u);
+	assert(!romdataStreamStartOffset(segment + 0x100u, 1u,
+		segment, 0x100u, &offset));
+	assert(romdataStreamStartOffset(segment + 0x100u, 0u,
+		segment, 0x100u, &offset));
+	assert(offset == 0x100u);
+	assert(!romdataStreamStartOffset(segment - 1u, 1u,
+		segment, 0x100u, &offset));
+
 	return 0;
 }
