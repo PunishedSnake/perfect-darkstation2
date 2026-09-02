@@ -30,10 +30,16 @@ static u32 s_submit_error_count;
 static int ps2AudioEnsureRomModule(const char *name, const char *path)
 {
     int result = SifSearchModuleByName(name);
-    if (result >= 0) {
+    if (result > 0) {
         sysLogPrintf(LOG_NOTE,
             "AUDIO: reuse resident IOP module %s id=%d", name, result);
         return result;
+    }
+
+    if (result == 0) {
+        sysLogPrintf(LOG_WARNING,
+            "AUDIO: LOADFILE returned ambiguous module id=0 for %s; trying %s",
+            name, path);
     }
 
     result = SifLoadModule(path, 0, NULL);
@@ -46,7 +52,7 @@ static int ps2AudioEnsureRomModule(const char *name, const char *path)
 
     /* A loader may report a duplicate module as an error. */
     const int resident = SifSearchModuleByName(name);
-    if (resident >= 0) {
+    if (resident > 0) {
         sysLogPrintf(LOG_WARNING,
             "AUDIO: %s load returned %d but resident module id=%d is usable",
             path, result, resident);
@@ -59,10 +65,15 @@ static int ps2AudioEnsureRomModule(const char *name, const char *path)
 static int ps2AudioEnsureServer(void)
 {
     int result = SifSearchModuleByName("audsrv");
-    if (result >= 0) {
+    if (result > 0) {
         sysLogPrintf(LOG_NOTE,
             "AUDIO: reuse resident IOP module audsrv id=%d", result);
         return result;
+    }
+
+    if (result == 0) {
+        sysLogPrintf(LOG_WARNING,
+            "AUDIO: LOADFILE returned ambiguous module id=0 for audsrv; executing embedded IRX");
     }
 
     /* Permit LOADFILE to execute the project-owned in-memory IRX image. */
@@ -79,7 +90,14 @@ static int ps2AudioEnsureServer(void)
     }
 
     const int resident = SifSearchModuleByName("audsrv");
-    return resident >= 0 ? resident : result;
+    if (resident > 0) {
+        sysLogPrintf(LOG_WARNING,
+            "AUDIO: embedded audsrv load returned %d but resident module id=%d is usable",
+            result, resident);
+        return resident;
+    }
+
+    return result;
 }
 
 static bool ps2AudioWaitForRpcServer(void)
@@ -138,17 +156,19 @@ s32 audioInit(void)
     const int libsd_module = ps2AudioEnsureRomModule("libsd", "rom0:LIBSD");
     ps2LogCheckpointForce();
     if (libsd_module < 0) {
-        sysLogPrintf(LOG_ERROR,
-            "AUDIO: failed to provide ROM LIBSD module (%d)", libsd_module);
-        return -1;
+        /* The endpoint probe below is authoritative; old ROM LOADFILE
+         * implementations can report duplicate/unknown modules poorly. */
+        sysLogPrintf(LOG_WARNING,
+            "AUDIO: LIBSD load result=%d; continuing to audsrv endpoint probe",
+            libsd_module);
     }
 
     const int audsrv_module = ps2AudioEnsureServer();
     ps2LogCheckpointForce();
     if (audsrv_module < 0) {
-        sysLogPrintf(LOG_ERROR,
-            "AUDIO: failed to execute embedded audsrv.irx (%d)", audsrv_module);
-        return -1;
+        sysLogPrintf(LOG_WARNING,
+            "AUDIO: embedded audsrv load result=%d; checking whether an endpoint is already resident",
+            audsrv_module);
     }
 
     /*

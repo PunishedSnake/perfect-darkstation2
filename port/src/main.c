@@ -137,6 +137,20 @@ int main(int argc, const char **argv)
 	sysLogPrintf(audio_result >= 0 ? LOG_NOTE : LOG_WARNING,
 		"runtime: audio initialisation end result=%d", audio_result);
 	GAME_STARTUP_CHECKPOINT();
+	sysLogPrintf(LOG_NOTE, "runtime: input and audio ready");
+	GAME_STARTUP_CHECKPOINT();
+
+	/*
+	 * The bootstrap has hardware-validated bounded ROM streaming before GS
+	 * startup. Keep all mass:/SIF-backed bootstrap reads on that known ordering
+	 * and expose every permanent segment through durable checkpoints.
+	 */
+	sysLogPrintf(LOG_NOTE, "runtime: ROM data initialisation begin");
+	GAME_STARTUP_CHECKPOINT();
+	romdataInit();
+	sysLogPrintf(LOG_NOTE, "runtime: ROM data ready");
+	GAME_STARTUP_CHECKPOINT();
+	g_ValidGbcRomFound = romdataCheckGbcRom();
 #endif
 
 	videoInit();
@@ -146,8 +160,6 @@ int main(int argc, const char **argv)
 #if !PLATFORM_PS2
 	inputInit();
 	audioInit();
-#endif
-
 	sysLogPrintf(LOG_NOTE, "runtime: input and audio ready");
 	GAME_STARTUP_CHECKPOINT();
 	romdataInit();
@@ -155,6 +167,7 @@ int main(int argc, const char **argv)
 	GAME_STARTUP_CHECKPOINT();
 
 	g_ValidGbcRomFound = romdataCheckGbcRom();
+#endif
 
 	gameInit();
 

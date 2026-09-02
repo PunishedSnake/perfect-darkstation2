@@ -11,7 +11,11 @@
 #include "preprocess.h"
 #include "platform.h"
 #ifdef PLATFORM_PS2
+#include "log_ps2.h"
 #include "romsource.h"
+#define ROMDATA_CHECKPOINT() ps2LogCheckpointForce()
+#else
+#define ROMDATA_CHECKPOINT() ((void)0)
 #endif
 
 /**
@@ -212,6 +216,7 @@ static inline void romdataWrongRomError(const char *fmt, ...)
 static inline void romdataLoadRom(void)
 {
 	sysLogPrintf(LOG_NOTE, "ROM file: %s", romName);
+	ROMDATA_CHECKPOINT();
 
 #ifdef PLATFORM_PS2
 	u8 header[64];
@@ -223,11 +228,15 @@ static inline void romdataLoadRom(void)
 	g_RomFile = NULL;
 	romSourceClose(&romSource);
 
+	sysLogPrintf(LOG_NOTE, "ROM source: opening %s", path);
+	ROMDATA_CHECKPOINT();
 	if (!romSourceOpenFile(&romSource, path)) {
 		sysFatalError("Could not open ROM file %s.\nEnsure that it is in the %s directory.", romName, fsFullPath(""));
 	}
 
 	g_RomFileSize = romSourceGetSize(&romSource);
+	sysLogPrintf(LOG_NOTE, "ROM source: opened size=%u", g_RomFileSize);
+	ROMDATA_CHECKPOINT();
 
 	if (!romSourceReadAt(&romSource, 0, header, sizeof(header))) {
 		romdataWrongRomError("Could not read the ROM header.");
@@ -246,6 +255,8 @@ static inline void romdataLoadRom(void)
 		memcmp(header + 0x20, ROMDATA_ROM_TITLE, sizeof(ROMDATA_ROM_TITLE) - 1)) {
 		romdataWrongRomError("ROM header does not match.");
 	}
+	sysLogPrintf(LOG_NOTE, "ROM source: NTSC-final header validated");
+	ROMDATA_CHECKPOINT();
 
 	if (!romSourceGetRzip1173Size(&romSource, ROMDATA_DATA_OFS, &dataSegLen)) {
 		romdataWrongRomError("Data segment is not 1173-compressed.");
@@ -254,12 +265,20 @@ static inline void romdataLoadRom(void)
 	if (dataSegLen < ROMDATA_FILES_OFS + 12 || dataSegLen > ROMDATA_MAX_DATA_SEG_SIZE) {
 		romdataWrongRomError("Data segment size is invalid (%u).", dataSegLen);
 	}
+	sysLogPrintf(LOG_NOTE,
+		"ROM source: RZIP data segment output=%u input_chunk=%u",
+		dataSegLen, (u32)sizeof(inputScratch));
+	ROMDATA_CHECKPOINT();
 
 	romDataSeg = sysMemAlloc(dataSegLen);
 	if (!romDataSeg) {
 		sysFatalError("Could not allocate %u bytes for data segment.", dataSegLen);
 	}
 
+	sysLogPrintf(LOG_NOTE,
+		"ROM source: inflate begin offset=%08x output=%u",
+		ROMDATA_DATA_OFS, dataSegLen);
+	ROMDATA_CHECKPOINT();
 	if (!romSourceInflate1173(&romSource, ROMDATA_DATA_OFS, romDataSeg,
 		dataSegLen, inputScratch, sizeof(inputScratch), &compressedSize)) {
 		sysMemFree(romDataSeg);
@@ -270,6 +289,7 @@ static inline void romdataLoadRom(void)
 	romDataSegSize = dataSegLen;
 	sysLogPrintf(LOG_NOTE, "ROM source is file-backed; data segment %u bytes from %u compressed bytes",
 		dataSegLen, compressedSize);
+	ROMDATA_CHECKPOINT();
 #else
 	g_RomFile = fsFileLoad(romName, &g_RomFileSize);
 
@@ -636,14 +656,26 @@ s32 romdataInit(void)
 	}
 
 	romdataLoadRom();
+	ROMDATA_CHECKPOINT();
 
 	// set segments to point to the rom or load them externally
 	for (struct romfile *seg = romSegs; seg->name; ++seg) {
+		sysLogPrintf(LOG_NOTE,
+			"ROM segment begin: %s offset=%08x declared=%u",
+			seg->name, seg->romoffset, seg->size);
+		ROMDATA_CHECKPOINT();
 		romdataInitSegment(seg);
+		sysLogPrintf(LOG_NOTE,
+			"ROM segment ready: %s size=%u source=%d owned=%d",
+			seg->name, seg->size, seg->source, seg->owned);
+		ROMDATA_CHECKPOINT();
 	}
 
 	// load file table from the files segment
+	sysLogPrintf(LOG_NOTE, "ROM file table initialisation begin");
+	ROMDATA_CHECKPOINT();
 	romdataInitFiles();
+	ROMDATA_CHECKPOINT();
 
 #ifdef PLATFORM_PS2
 	// The decompressed data segment is only a bootstrap producer for the file
