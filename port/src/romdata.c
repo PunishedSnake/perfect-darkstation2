@@ -386,10 +386,26 @@ static inline void romdataInitSegment(struct romfile *seg)
 	if (!newData) {
 		// no external data, use the ROM source
 #ifdef PLATFORM_PS2
+		sysLogPrintf(LOG_NOTE,
+			"ROM segment allocate: %s size=%u", seg->name, seg->size);
+		ROMDATA_CHECKPOINT();
 		newData = sysMemAlloc(seg->size);
-		if (newData && !romSourceReadAt(&romSource, seg->romoffset, newData, seg->size)) {
+		if (!newData) {
+			sysFatalError("Could not allocate %u bytes for ROM segment %s.",
+				seg->size, seg->name);
+		}
+
+		sysLogPrintf(LOG_NOTE,
+			"ROM segment read begin: %s offset=%08x size=%u pointer=%p",
+			seg->name, seg->romoffset, seg->size, newData);
+		ROMDATA_CHECKPOINT();
+		if (!romSourceReadAt(&romSource, seg->romoffset, newData, seg->size)) {
 			sysMemFree(newData);
 			newData = NULL;
+		} else {
+			sysLogPrintf(LOG_NOTE,
+				"ROM segment read end: %s pointer=%p", seg->name, newData);
+			ROMDATA_CHECKPOINT();
 		}
 
 		if (newData) {
@@ -421,7 +437,15 @@ static inline void romdataInitSegment(struct romfile *seg)
 
 	// call the post load function if any
 	if (seg->preprocess && !seg->preprocessed) {
+		sysLogPrintf(LOG_NOTE,
+			"ROM segment preprocess begin: %s input=%u pointer=%p",
+			seg->name, seg->size, seg->data);
+		ROMDATA_CHECKPOINT();
 		newData = seg->preprocess(seg->data, seg->size, &seg->size);
+		sysLogPrintf(LOG_NOTE,
+			"ROM segment preprocess end: %s output=%u replacement=%p",
+			seg->name, seg->size, newData);
+		ROMDATA_CHECKPOINT();
 
 		if (newData) {
 			if (seg->owned) {

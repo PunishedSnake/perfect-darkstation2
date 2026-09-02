@@ -68,10 +68,24 @@ struct n64_bankfile {
 	u32 bankArray[1]; // ptr to struct n64_bank
 };
 
+/*
+ * The desktop port historically packed converted objects back-to-back. x86
+ * accepts the resulting unaligned pointer fields, but the R5900 raises an
+ * address exception. ALKeyMap is six bytes, so the first wavetable following
+ * one was the earliest reliable crash during PS2 ROM bootstrap.
+ *
+ * Keep every offset suitable for the destination type before publishing it.
+ * ADPCM books have an additional ABI requirement from libaudio: eight-byte
+ * alignment even though their C type only advertises four-byte alignment.
+ */
+#define AL_ALIGN_DST(alignment) \
+	dstpos = PD_ALIGN(dstpos, (alignment))
+
 // only proceeds to convert the next item if it's not already converted
-#define AL_NEXT_ITEM(field, func) { \
+#define AL_NEXT_ITEM(field, func, alignment) { \
 	struct ptrmarker *marker = ptrFind(srcpos); \
 	if (marker == NULL) { \
+		AL_ALIGN_DST(alignment); \
 		field = (void *)(uintptr_t)(dstpos); \
 		ptrAdd(srcpos, (uintptr_t)(field)); \
 		dstpos = func(dst, dstpos, src, srcpos); \
@@ -176,21 +190,24 @@ static u32 convertAudioWaveTable(u8 *dst, u32 dstpos, u8 *src, u32 srcpos)
 	if (host_wavetable->type == AL_ADPCM_WAVE) {
 		if (n64_wavetable->waveInfo.adpcmWave.loop) {
 			srcpos = PD_BE32(n64_wavetable->waveInfo.adpcmWave.loop);
-			AL_NEXT_ITEM(host_wavetable->waveInfo.adpcmWave.loop, convertAudioAdpcmLoop);
+			AL_NEXT_ITEM(host_wavetable->waveInfo.adpcmWave.loop,
+				convertAudioAdpcmLoop, _Alignof(ALADPCMloop));
 		} else {
 			host_wavetable->waveInfo.adpcmWave.loop = NULL;
 		}
 
 		if (n64_wavetable->waveInfo.adpcmWave.book) {
 			srcpos = PD_BE32(n64_wavetable->waveInfo.adpcmWave.book);
-			AL_NEXT_ITEM(host_wavetable->waveInfo.adpcmWave.book, convertAudioAdpcmBook);
+			AL_NEXT_ITEM(host_wavetable->waveInfo.adpcmWave.book,
+				convertAudioAdpcmBook, 8u);
 		} else {
 			host_wavetable->waveInfo.adpcmWave.book = NULL;
 		}
 	} else if (host_wavetable->type == AL_RAW16_WAVE) {
 		if (n64_wavetable->waveInfo.rawWave.loop) {
 			srcpos = PD_BE32(n64_wavetable->waveInfo.rawWave.loop);
-			AL_NEXT_ITEM(host_wavetable->waveInfo.rawWave.loop, convertAudioRawLoop);
+			AL_NEXT_ITEM(host_wavetable->waveInfo.rawWave.loop,
+				convertAudioRawLoop, _Alignof(ALRawLoop));
 		} else {
 			host_wavetable->waveInfo.rawWave.loop = NULL;
 		}
@@ -208,21 +225,24 @@ static u32 convertAudioSound(u8 *dst, u32 dstpos, u8 *src, u32 srcpos)
 
 	if (n64_sound->envelope) {
 		srcpos = PD_BE32(n64_sound->envelope);
-		AL_NEXT_ITEM(host_sound->envelope, convertAudioEnvelope);
+		AL_NEXT_ITEM(host_sound->envelope, convertAudioEnvelope,
+			_Alignof(ALEnvelope));
 	} else {
 		host_sound->envelope = NULL;
 	}
 
 	if (n64_sound->keyMap) {
 		srcpos = PD_BE32(n64_sound->keyMap);
-		AL_NEXT_ITEM(host_sound->keyMap, convertAudioKeyMap);
+		AL_NEXT_ITEM(host_sound->keyMap, convertAudioKeyMap,
+			_Alignof(ALKeyMap));
 	} else {
 		host_sound->keyMap = NULL;
 	}
 
 	if (n64_sound->wavetable) {
 		srcpos = PD_BE32(n64_sound->wavetable);
-		AL_NEXT_ITEM(host_sound->wavetable, convertAudioWaveTable);
+		AL_NEXT_ITEM(host_sound->wavetable, convertAudioWaveTable,
+			_Alignof(ALWaveTable));
 	} else {
 		host_sound->wavetable = NULL;
 	}
@@ -259,7 +279,8 @@ static u32 convertAudioInstrument(u8 *dst, u32 dstpos, u8 *src, u32 srcpos)
 
 	for (int i = 0; i < soundCount; i++) {
 		srcpos = PD_BE32(n64_instrument->soundArray[i]);
-		AL_NEXT_ITEM(host_instrument->soundArray[i], convertAudioSound);
+		AL_NEXT_ITEM(host_instrument->soundArray[i], convertAudioSound,
+			_Alignof(ALSound));
 	}
 
 	return dstpos;
@@ -280,14 +301,16 @@ static u32 convertAudioBank(u8 *dst, u32 dstpos, u8 *src, u32 srcpos)
 
 	if (n64_bank->percussion) {
 		srcpos = PD_BE32(n64_bank->percussion);
-		AL_NEXT_ITEM(host_bank->percussion, convertAudioInstrument);
+		AL_NEXT_ITEM(host_bank->percussion, convertAudioInstrument,
+			_Alignof(ALInstrument));
 	} else {
 		host_bank->percussion = 0;
 	}
 
 	for (int i = 0; i < instCount; i++) {
 		srcpos = PD_BE32(n64_bank->instArray[i]);
-		AL_NEXT_ITEM(host_bank->instArray[i], convertAudioInstrument);
+		AL_NEXT_ITEM(host_bank->instArray[i], convertAudioInstrument,
+			_Alignof(ALInstrument));
 	}
 
 	return dstpos;
@@ -305,6 +328,7 @@ static u32 convertAudioBankFile(u8 *dst, u8 *src)
 	u32 dstpos = sizeof(ALBankFile) + sizeof(uintptr_t) * (bankCount - 1);
 
 	for (int i = 0; i < bankCount; i++) {
+		AL_ALIGN_DST(_Alignof(ALBank));
 		host_bankfile->bankArray[i] = (void *)(uintptr_t)(dstpos);
 		u32 srcpos = PD_BE32(n64_bankfile->bankArray[i]);
 		dstpos = convertAudioBank(dst, dstpos, src, srcpos);
@@ -319,6 +343,9 @@ u8 *preprocessALBankFile(u8 *src, u32 size, u32 *outSize)
 
 	const u32 dstlen = size * 3; // this should overshoot any possible bank size, but * 2 also works for vanilla banks
 	u8 *dst = sysMemZeroAlloc(dstlen);
+	if (!dst) {
+		sysFatalError("could not allocate %u bytes to preprocess an ALBankFile", dstlen);
+	}
 
 	u32 reallen = convertAudioBankFile(dst, src);
 	if (reallen > dstlen || ALIGN16(reallen) > dstlen) {
@@ -328,7 +355,10 @@ u8 *preprocessALBankFile(u8 *src, u32 size, u32 *outSize)
 	reallen = ALIGN16(reallen);
 
 	if (reallen < dstlen) {
-		dst = sysMemRealloc(dst, reallen);
+		u8 *resized = sysMemRealloc(dst, reallen);
+		if (resized) {
+			dst = resized;
+		}
 	}
 
 	*outSize = reallen;
