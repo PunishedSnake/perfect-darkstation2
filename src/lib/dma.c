@@ -5,6 +5,10 @@
 #include "lib/dma.h"
 #include "data.h"
 #include "types.h"
+#ifdef PLATFORM_PS2
+#include "romdata.h"
+#include "system.h"
+#endif
 
 volatile u32 g_DmaNumSlotsBusy;
 u32 var80094ae4;
@@ -75,6 +79,19 @@ void dmaStart(void *memaddr, romptr_t romaddr, u32 len, bool priority)
 		osPiStartDma(&g_DmaIoMsgs[i], priority, 0, romaddr, memaddr, remainder, &g_DmaMesgQueue);
 	}
 #else // PLATFORM_N64
+	#ifdef PLATFORM_PS2
+	const s32 result = romdataDmaRead(memaddr, (uintptr_t)romaddr, len);
+
+	if (result == ROMDATA_DMA_OK) {
+		return;
+	}
+
+	if (result == ROMDATA_DMA_ERROR) {
+		sysFatalError("ROM DMA read failed address=%p length=%u.",
+			(void *)(uintptr_t)romaddr, len);
+		return;
+	}
+	#endif
 	bcopy((const void *)romaddr, memaddr, len);
 #endif // PLATFORM_N64
 }

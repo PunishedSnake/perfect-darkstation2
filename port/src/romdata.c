@@ -105,6 +105,7 @@ struct romfile {
 	u32 romoffset;
 	u32 romsize;
 	s32 owned;
+	s32 streamed;
 };
 
 /* patches for individual files; applied on file load, before preprocFuncs, but */
@@ -188,6 +189,21 @@ static struct romfile romSegs[] = {
 	ROMSEG_LIST()
 	{ 0 },
 };
+
+#ifdef PLATFORM_PS2
+/*
+ * These payloads are consumed through dmaExec and do not need a permanent
+ * EE-side view. Keep the list deliberately explicit: a segment with a CPU
+ * preprocess step must remain resident until that step has completed.
+ */
+static bool romdataSegmentShouldStream(const struct romfile *seg)
+{
+	return seg && seg->preprocess == NULL &&
+		(!strcmp(seg->name, "sfxtbl") ||
+		 !strcmp(seg->name, "seqtbl") ||
+		 !strcmp(seg->name, "texturesdata"));
+}
+#endif
 
 /* the game sets g_LoadType to the type of file it expects,              */
 /* so we can hijack that in fileLoad and automatically byteswap the file */
@@ -388,6 +404,23 @@ static inline void romdataInitSegment(struct romfile *seg)
 	if (!newData) {
 		// no external data, use the ROM source
 #ifdef PLATFORM_PS2
+		if (seg->streamed) {
+			/*
+			 * Preserve pointer arithmetic performed by the original game while
+			 * making accidental CPU dereferences fail in a recognisable address
+			 * window. dmaStart resolves this address back to the ROM file.
+			 */
+			newData = (u8 *)romdataStreamVirtualAddress(seg->romoffset);
+			seg->source = SRC_ROM;
+			seg->owned = 0;
+			seg->data = newData;
+			romdataUpdateSegStartEnd(seg);
+			sysLogPrintf(LOG_NOTE,
+				"ROM segment mapped file-backed: %s offset=%08x size=%u virtual=%p",
+				seg->name, seg->romoffset, seg->size, newData);
+			return;
+		}
+
 		sysLogPrintf(LOG_NOTE,
 			"ROM segment allocate: %s size=%u", seg->name, seg->size);
 		ROMDATA_CHECKPOINT();
@@ -461,6 +494,40 @@ static inline void romdataInitSegment(struct romfile *seg)
 		seg->preprocessed = 1;
 	}
 }
+
+#ifdef PLATFORM_PS2
+s32 romdataDmaRead(void *dst, uintptr_t address, u32 length)
+{
+	if (!romdataStreamWindowContains(address)) {
+		return ROMDATA_DMA_UNMAPPED;
+	}
+
+	for (struct romfile *seg = romSegs; seg->name; ++seg) {
+		u32 segmentOffset;
+
+		if (!seg->streamed || seg->source != SRC_ROM || seg->owned ||
+			!romdataStreamRangeOffset(address, length,
+				(uintptr_t)seg->data, seg->size, &segmentOffset)) {
+			continue;
+		}
+
+		if (romSourceReadAt(&romSource, seg->romoffset + segmentOffset,
+				dst, length)) {
+			return ROMDATA_DMA_OK;
+		}
+
+		sysLogPrintf(LOG_ERROR,
+			"ROM DMA read failed: segment=%s romoffset=%08x length=%u",
+			seg->name, seg->romoffset + segmentOffset, length);
+		return ROMDATA_DMA_ERROR;
+	}
+
+	sysLogPrintf(LOG_ERROR,
+		"ROM DMA address is not mapped: address=%p length=%u",
+		(void *)address, length);
+	return ROMDATA_DMA_ERROR;
+}
+#endif
 
 static inline s32 romdataLoadExternalFileList(void)
 {
@@ -679,12 +746,17 @@ static inline struct romfile *romdataGetSeg(const char *name)
 s32 romdataInit(void)
 {
 	const char *altRomName = sysArgGetString("--rom-file");
+	u32 streamedSegmentCount = 0;
+	u32 streamedBytes = 0;
 	if (altRomName) {
 		romName = altRomName;
 	}
 
 	for (struct romfile *seg = romSegs; seg->name; ++seg) {
 		seg->romoffset = (u32)(uintptr_t)seg->data;
+#ifdef PLATFORM_PS2
+		seg->streamed = romdataSegmentShouldStream(seg);
+#endif
 	}
 
 	romdataLoadRom();
@@ -697,11 +769,22 @@ s32 romdataInit(void)
 			seg->name, seg->romoffset, seg->size);
 		ROMDATA_CHECKPOINT();
 		romdataInitSegment(seg);
+		if (seg->streamed && seg->source == SRC_ROM && !seg->owned) {
+			streamedSegmentCount++;
+			streamedBytes += seg->size;
+		}
 		sysLogPrintf(LOG_NOTE,
 			"ROM segment ready: %s size=%u source=%d owned=%d",
 			seg->name, seg->size, seg->source, seg->owned);
 		ROMDATA_CHECKPOINT();
 	}
+
+	#ifdef PLATFORM_PS2
+	sysLogPrintf(LOG_NOTE,
+		"ROM streaming: %u file-backed segments, %u bytes kept out of EE RAM",
+		streamedSegmentCount, streamedBytes);
+	ROMDATA_CHECKPOINT();
+	#endif
 
 	// load file table from the files segment
 	sysLogPrintf(LOG_NOTE, "ROM file table initialisation begin");
