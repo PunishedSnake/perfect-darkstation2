@@ -8,6 +8,9 @@ on:
       - "port/fast3d/**"
       - "port/src/**"
       - "port/include/**"
+      - "src/game/**"
+      - "src/lib/**"
+      - "src/textureconfig.c"
       - "src/assets/**"
       - "src/include/**"
       - "include/**"
@@ -20,6 +23,9 @@ on:
       - "port/fast3d/**"
       - "port/src/**"
       - "port/include/**"
+      - "src/game/**"
+      - "src/lib/**"
+      - "src/textureconfig.c"
       - "src/assets/**"
       - "src/include/**"
       - "include/**"
@@ -198,6 +204,12 @@ jobs:
           /tmp/pad_axis_ps2_test
 
           gcc -std=c11 -Wall -Wextra -Werror \
+            -Iport/ps2 \
+            port/ps2/path_ps2_test.c \
+            -o /tmp/path_ps2_test
+          /tmp/path_ps2_test
+
+          gcc -std=c11 -Wall -Wextra -Werror \
             -D_LANGUAGE_C=1 -DPLATFORM_PS2=1 \
             -Iport/ps2 -Iport/include -Iinclude -Iinclude/PR -Isrc/include \
             port/ps2/input_ps2_map.c \
@@ -293,6 +305,9 @@ jobs:
       - name: Build PS2 bootstrap
         run: cmake --build build-ps2 -j2 --verbose
 
+      - name: Build full Perfect Dark PS2 runtime
+        run: cmake --build build-ps2 --target pd_ps2_game -j2 --verbose
+
       - name: Inspect EE ELF
         run: |
           test -f build-ps2/pd-ps2-bootstrap.elf
@@ -301,6 +316,15 @@ jobs:
           mips64r5900el-ps2-elf-nm build-ps2/pd-ps2-bootstrap.elf | \
             grep -E ' audioInit$| audsrv_irx$| size_audsrv_irx$'
           mips64r5900el-ps2-elf-nm -n build-ps2/pd-ps2-bootstrap.elf | tail -n 20
+
+      - name: Inspect full game EE ELF
+        run: |
+          test -f build-ps2/pd-ps2-game.elf
+          mips64r5900el-ps2-elf-size build-ps2/pd-ps2-game.elf
+          mips64r5900el-ps2-elf-readelf -h build-ps2/pd-ps2-game.elf
+          mips64r5900el-ps2-elf-nm build-ps2/pd-ps2-game.elf | \
+            grep -E ' main$| mainProc$| videoInit$| gfx_run$| Ps2GsVu1TexturedTransformCode(Start|End)$'
+          test -z "$(mips64r5900el-ps2-elf-nm -u build-ps2/pd-ps2-game.elf)"
 
       - name: Build alpha-trilerp hardware diagnostic
         run: |
@@ -334,6 +358,14 @@ jobs:
         with:
           name: pd-ps2-bootstrap
           path: build-ps2/pd-ps2-bootstrap.elf
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload full game ELF
+        uses: actions/upload-artifact@v4
+        with:
+          name: pd-ps2-game
+          path: build-ps2/pd-ps2-game.elf
           if-no-files-found: error
           retention-days: 14
 

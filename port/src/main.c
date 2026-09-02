@@ -18,6 +18,13 @@
 #include "system.h"
 #include "utils.h"
 
+#ifdef PLATFORM_PS2
+#include "log_ps2.h"
+#define GAME_STARTUP_CHECKPOINT() ps2LogCheckpointForce()
+#else
+#define GAME_STARTUP_CHECKPOINT() ((void)0)
+#endif
+
 u32 g_OsMemSize = 0;
 s32 g_OsMemSizeMb = 16;
 u8 g_Is4Mb = 0;
@@ -102,12 +109,22 @@ int main(int argc, const char **argv)
 	}
 
 	sysInit();
+	sysLogPrintf(LOG_NOTE, "runtime: system ready");
+	GAME_STARTUP_CHECKPOINT();
 	fsInit();
 	configInit();
+	sysLogPrintf(LOG_NOTE, "runtime: filesystem and configuration ready");
+	GAME_STARTUP_CHECKPOINT();
 	videoInit();
+	sysLogPrintf(LOG_NOTE, "runtime: video ready");
+	GAME_STARTUP_CHECKPOINT();
 	inputInit();
 	audioInit();
+	sysLogPrintf(LOG_NOTE, "runtime: input and audio ready");
+	GAME_STARTUP_CHECKPOINT();
 	romdataInit();
+	sysLogPrintf(LOG_NOTE, "runtime: ROM data ready");
+	GAME_STARTUP_CHECKPOINT();
 
 	g_ValidGbcRomFound = romdataCheckGbcRom();
 
@@ -143,6 +160,7 @@ int main(int argc, const char **argv)
 	} else {
 		sysLogPrintf(LOG_NOTE, "rom  file-backed source, size %u", g_RomFileSize);
 	}
+	GAME_STARTUP_CHECKPOINT();
 
 	g_SndDisabled = sysArgCheck("--no-sound");
 
@@ -165,6 +183,8 @@ int main(int argc, const char **argv)
 		sysLogPrintf(LOG_NOTE, "player profile set to %d", g_FileAutoSelect);
 	}
 
+	sysLogPrintf(LOG_NOTE, "runtime: entering Perfect Dark main loop stage=0x%02x", g_StageNum);
+	GAME_STARTUP_CHECKPOINT();
 	mainProc();
 
 	return 0;

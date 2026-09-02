@@ -62,45 +62,49 @@ find_program(PD_PS2_BIN2C NAMES bin2c
   REQUIRED
 )
 
-set(PD_PS2_VU1_PROGRAM_OBJECT "")
-set(PD_PS2_VU1_TRANSFORM_PROGRAM_OBJECT "")
+find_program(PD_PS2_DVP_AS NAMES dvp-as
+  HINTS "$ENV{PS2DEV}/bin" "$ENV{PS2SDK}/bin"
+  REQUIRED
+)
+set(PD_PS2_VU1_PROGRAM_OBJECT
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/gs_vu1_color_path.o"
+)
+set(PD_PS2_VU1_TRANSFORM_PROGRAM_OBJECT
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/gs_vu1_textured_transform.o"
+)
+add_custom_command(
+  OUTPUT "${PD_PS2_VU1_PROGRAM_OBJECT}"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  COMMAND "${PD_PS2_DVP_AS}"
+    "${CMAKE_CURRENT_LIST_DIR}/gs_vu1_color_path.vsm"
+    -o "${PD_PS2_VU1_PROGRAM_OBJECT}"
+  DEPENDS "${CMAKE_CURRENT_LIST_DIR}/gs_vu1_color_path.vsm"
+  COMMENT "Assembling VU1 PATH1 A+D transport microprogram"
+  VERBATIM
+)
+add_custom_command(
+  OUTPUT "${PD_PS2_VU1_TRANSFORM_PROGRAM_OBJECT}"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  COMMAND "${PD_PS2_DVP_AS}"
+    "${CMAKE_CURRENT_LIST_DIR}/gs_vu1_textured_transform.vsm"
+    -o "${PD_PS2_VU1_TRANSFORM_PROGRAM_OBJECT}"
+  DEPENDS "${CMAKE_CURRENT_LIST_DIR}/gs_vu1_textured_transform.vsm"
+  COMMENT "Assembling VU1 textured transform microprogram"
+  VERBATIM
+)
+set_source_files_properties(
+  "${PD_PS2_VU1_PROGRAM_OBJECT}"
+  "${PD_PS2_VU1_TRANSFORM_PROGRAM_OBJECT}"
+  PROPERTIES GENERATED TRUE EXTERNAL_OBJECT TRUE
+)
+
+set(PD_PS2_BOOTSTRAP_VU1_OBJECTS "")
 if(PD_PS2_VU1_COLOR_DIAGNOSTIC)
-  find_program(PD_PS2_DVP_AS NAMES dvp-as
-    HINTS "$ENV{PS2DEV}/bin" "$ENV{PS2SDK}/bin"
-    REQUIRED
-  )
-  set(PD_PS2_VU1_PROGRAM_OBJECT
-    "${CMAKE_CURRENT_BINARY_DIR}/generated/gs_vu1_color_path.o"
-  )
-  set(PD_PS2_VU1_TRANSFORM_PROGRAM_OBJECT
-    "${CMAKE_CURRENT_BINARY_DIR}/generated/gs_vu1_textured_transform.o"
-  )
-  add_custom_command(
-    OUTPUT "${PD_PS2_VU1_PROGRAM_OBJECT}"
-    COMMAND "${CMAKE_COMMAND}" -E make_directory
-      "${CMAKE_CURRENT_BINARY_DIR}/generated"
-    COMMAND "${PD_PS2_DVP_AS}"
-      "${CMAKE_CURRENT_LIST_DIR}/gs_vu1_color_path.vsm"
-      -o "${PD_PS2_VU1_PROGRAM_OBJECT}"
-    DEPENDS "${CMAKE_CURRENT_LIST_DIR}/gs_vu1_color_path.vsm"
-    COMMENT "Assembling VU1 PATH1 A+D transport microprogram"
-    VERBATIM
-  )
-  add_custom_command(
-    OUTPUT "${PD_PS2_VU1_TRANSFORM_PROGRAM_OBJECT}"
-    COMMAND "${CMAKE_COMMAND}" -E make_directory
-      "${CMAKE_CURRENT_BINARY_DIR}/generated"
-    COMMAND "${PD_PS2_DVP_AS}"
-      "${CMAKE_CURRENT_LIST_DIR}/gs_vu1_textured_transform.vsm"
-      -o "${PD_PS2_VU1_TRANSFORM_PROGRAM_OBJECT}"
-    DEPENDS "${CMAKE_CURRENT_LIST_DIR}/gs_vu1_textured_transform.vsm"
-    COMMENT "Assembling VU1 textured transform microprogram"
-    VERBATIM
-  )
-  set_source_files_properties(
+  list(APPEND PD_PS2_BOOTSTRAP_VU1_OBJECTS
     "${PD_PS2_VU1_PROGRAM_OBJECT}"
     "${PD_PS2_VU1_TRANSFORM_PROGRAM_OBJECT}"
-    PROPERTIES GENERATED TRUE EXTERNAL_OBJECT TRUE
   )
 endif()
 
@@ -145,6 +149,8 @@ set(PD_PS2_COMMON_INCLUDE_DIRS
 set(PD_PS2_CORRECTNESS_FLAGS
   -Og
   -G0
+  -ffunction-sections
+  -fdata-sections
   -fno-strict-aliasing
   -funsigned-char
   -fwrapv
@@ -278,8 +284,7 @@ add_executable(pd_ps2_bootstrap
   "${PD_ROOT}/port/fast3d/rdp_tmem_runtime.cpp"
   "${PD_ROOT}/port/fast3d/rdp_tmem_live.cpp"
   "${PD_ROOT}/port/fast3d/rdp_tmem_trace.cpp"
-  ${PD_PS2_VU1_PROGRAM_OBJECT}
-  ${PD_PS2_VU1_TRANSFORM_PROGRAM_OBJECT}
+  ${PD_PS2_BOOTSTRAP_VU1_OBJECTS}
 )
 
 if(PD_PS2_ALPHA_TRILERP_DIAGNOSTIC)
@@ -478,6 +483,108 @@ target_compile_definitions(pd_ps2_core_compile_all PRIVATE
   PD_PS2_GIT_COMMIT="${PD_PS2_GIT_COMMIT}"
 )
 
+# Real game runtime link frontier.
+#
+# The broad OBJECT targets above prove that all decompiled game and portable
+# libultra sources accept the EE ABI. This executable closes the next boundary:
+# it links those objects to PS2-owned system, storage, input, audio and video
+# services plus the same Fast3D -> VU1/GIF/GS renderer validated by the hardware
+# diagnostic. It is excluded from the default target so the two diagnostic
+# configurations do not rebuild the full game; CI requests it explicitly from
+# the normal build directory.
+file(GLOB PD_PS2_PREPROCESS_SOURCES CONFIGURE_DEPENDS
+  "${PD_ROOT}/port/src/preprocess/*.c"
+)
+
+set(PD_PS2_GAME_RUNTIME_SOURCES
+  "${PD_ROOT}/port/src/config.c"
+  "${PD_ROOT}/port/src/fs.c"
+  "${PD_ROOT}/port/src/libultra.c"
+  "${PD_ROOT}/port/src/main.c"
+  "${PD_ROOT}/port/src/mixer.c"
+  "${PD_ROOT}/port/src/mod.c"
+  "${PD_ROOT}/port/src/mpsetups.c"
+  "${PD_ROOT}/port/src/optionsmenu.c"
+  "${PD_ROOT}/port/src/pdmain.c"
+  "${PD_ROOT}/port/src/pdsched.c"
+  "${PD_ROOT}/port/src/romdata.c"
+  "${PD_ROOT}/port/src/romsource.c"
+  "${PD_ROOT}/port/src/utils.c"
+  ${PD_PS2_PREPROCESS_SOURCES}
+  system_ps2.c
+  audio_ps2.c
+  audio_ps2_queue.c
+  "${PD_PS2_AUDSRV_IRX_C}"
+  video_ps2.c
+  input_ps2.c
+  input_ps2_map.c
+  pad_axis_ps2.c
+  pad_ps2.c
+)
+
+set(PD_PS2_GAME_RENDERER_SOURCES
+  gs_alpha_equation.cpp
+  gs_frame_mask.cpp
+  gs_command_budget.cpp
+  gs_core.cpp
+  gs_native_queue.cpp
+  gs_render_target_layout.cpp
+  gs_state_shadow.cpp
+  gs_texture_convert.cpp
+  gs_vu1_batch.cpp
+  gs_vu1_queue.cpp
+  gs_vu1_transform.cpp
+  gs_vu1_wait.cpp
+  gs_vram_allocator.cpp
+  ps2_renderer_stats.cpp
+  gfx_frame_ps2.c
+  gfx_run_tmem_ps2.cpp
+  gfx_ps2.cpp
+  gfx_ps2_combiner.cpp
+  gfx_ps2_pass_graph.cpp
+  gfx_window_ps2.c
+  "${PD_ROOT}/port/fast3d/gfx_cc.cpp"
+  "${PD_PS2_FAST3D_LIVE_CPP}"
+  "${PD_ROOT}/port/fast3d/rdp_tmem.cpp"
+  "${PD_ROOT}/port/fast3d/rdp_tmem_runtime.cpp"
+  "${PD_ROOT}/port/fast3d/rdp_tmem_live.cpp"
+  "${PD_ROOT}/port/fast3d/rdp_tmem_trace.cpp"
+  "${PD_PS2_VU1_PROGRAM_OBJECT}"
+  "${PD_PS2_VU1_TRANSFORM_PROGRAM_OBJECT}"
+)
+
+add_executable(pd_ps2_game EXCLUDE_FROM_ALL
+  ${PD_PS2_GAME_RUNTIME_SOURCES}
+  ${PD_PS2_GAME_RENDERER_SOURCES}
+  $<TARGET_OBJECTS:pd_ps2_game_compile_all>
+  $<TARGET_OBJECTS:pd_ps2_core_compile_all>
+)
+add_dependencies(pd_ps2_game pd_ps2_asset_headers)
+
+target_include_directories(pd_ps2_game PRIVATE
+  ${PD_PS2_COMMON_INCLUDE_DIRS}
+  "${PD_PS2_GENERATED_DIR}"
+  "${GSKIT}/include"
+)
+target_compile_options(pd_ps2_game PRIVATE
+  ${PD_PS2_CORRECTNESS_FLAGS}
+  $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>
+  $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>
+)
+target_compile_definitions(pd_ps2_game PRIVATE
+  ${PD_PS2_GAME_DEFINITIONS}
+  PD_PS2_GIT_COMMIT="${PD_PS2_GIT_COMMIT}"
+  PERFECT_DARK_PS2_VU1_COLOR_BATCH=1
+)
+target_link_directories(pd_ps2_game PRIVATE "${GSKIT}/lib")
+target_link_options(pd_ps2_game PRIVATE -Wl,--gc-sections)
+target_link_libraries(pd_ps2_game PRIVATE
+  gskit dmakit padx z audsrv patches kernel m)
+set_target_properties(pd_ps2_game PROPERTIES
+  OUTPUT_NAME "pd-ps2-game"
+  SUFFIX ".elf"
+)
+
 # The real Fast3D translator remains linked as the compatibility frontend.
 # gfx_api_scene.c is the current lower-level correctness baseline while GS
 # ownership is moved below gfx_ps2 into gs_core. DualShock 2 input is a separate
@@ -485,9 +592,9 @@ target_compile_definitions(pd_ps2_core_compile_all PRIVATE
 # project-owned PATH3 transport layer and is compiled before taking over the
 # active renderer so packet correctness can be gated independently.
 #
-# pd_ps2_game_bridge is the migration seam toward the actual Perfect Dark main
-# loop. Once both broad compile gates are green, stop growing compile-only
-# coverage and move to a real link probe with explicit PS2 platform services.
+# pd_ps2_game_bridge remains a narrow fast compile gate. pd_ps2_game is now the
+# authoritative link/runtime frontier and must never resolve missing services by
+# silently discarding or weakening their contracts.
 
 message(STATUS "Perfect Dark PS2 bootstrap root: ${PD_ROOT}")
 message(STATUS "Perfect Dark PS2 bootstrap gsKit: ${GSKIT}")

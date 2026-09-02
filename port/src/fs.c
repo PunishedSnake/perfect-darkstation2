@@ -11,6 +11,9 @@
 #include "platform.h"
 #include "utils.h"
 #include "fs.h"
+#ifdef PLATFORM_PS2
+#include "path_ps2.h"
+#endif
 #ifdef PLATFORM_WIN32
 #include <direct.h>
 #endif
@@ -43,7 +46,20 @@ static s32 fsPathIsWritable(const char *path)
 
 s32 fsPathIsAbsolute(const char *path)
 {
- return (path[0] == '/' || (isalpha(path[0]) && path[1] == ':'));
+	if (!path || !path[0]) {
+		return false;
+	}
+
+	if (path[0] == '/' || (isalpha((unsigned char)path[0]) && path[1] == ':')) {
+		return true;
+	}
+
+#ifdef PLATFORM_PS2
+	/* mass:, mc0:, host:, pfs0: and other IOP devices are absolute roots. */
+	return ps2PathHasDevicePrefix(path);
+#else
+	return false;
+#endif
 }
 
 s32 fsPathIsCwdRelative(const char *path)
@@ -109,6 +125,10 @@ s32 fsInit(void)
 	// get path to base dir and expand it if needed
 	const char *path = sysArgGetString("--basedir");
 	if (!path) {
+#ifdef PLATFORM_PS2
+		/* PS2 launchers do not promise a useful current working directory. */
+		path = "$E";
+#else
 		// check if there's a `data` directory in working directory or homeDir, otherwise default to exe directory
 		path = "$E/" DEFAULT_BASEDIR_NAME;
 		if (!portable) {
@@ -118,6 +138,7 @@ s32 fsInit(void)
 				path = "$H/" DEFAULT_BASEDIR_NAME;
 			}
 		}
+#endif
 	}
 	strncpy(baseDir, fsFullPath(path), FS_MAXPATH);
 
@@ -149,6 +170,10 @@ s32 fsInit(void)
 	// get path to save dir and expand it if needed
 	path = sysArgGetString("--savedir");
 	if (!path) {
+#ifdef PLATFORM_PS2
+		/* Store config and saves on the same mounted device as the executable. */
+		path = "$E";
+#else
 		if (portable) {
 			path = "$E";
 		} else {
@@ -169,6 +194,7 @@ s32 fsInit(void)
 			}
 #endif
 		}
+#endif
 	}
 
 	strncpy(saveDir, fsFullPath(path), FS_MAXPATH);
