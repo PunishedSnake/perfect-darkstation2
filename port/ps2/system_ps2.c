@@ -459,9 +459,31 @@ void sysCpuRelax(void)
     __asm__ volatile("nop");
 }
 
+bool g_CrashEnabled = false;
+
 void crashInit(void)
 {
-    /* bootstrap 0: no platform crash handler yet */
+    /* Fatal paths remain log-owned until an EE exception handler is installed. */
+    g_CrashEnabled = false;
+}
+
+void crashCreateThread(void)
+{
+    /* The portable crash monitor is a desktop service, not an EE thread. */
+}
+
+void crashSetMessage(char *string)
+{
+    (void)string;
+}
+
+void crashReset(void)
+{
+}
+
+void crashAppendChar(char c)
+{
+    (void)c;
 }
 
 void crashShutdown(void)
