@@ -184,12 +184,29 @@ s32 osAiSetNextBuffer(void *bufPtr, u32 size)
 
 s32 osContInit(OSMesgQueue *mesgq, u8 *bitpattern, OSContStatus *data)
 {
+	/*
+	 * PADMAN configuration is asynchronous. On PS2, inputInit runs before the
+	 * long ROM bootstrap and its first poll commonly observes FINDPAD rather
+	 * than a connected controller. Refresh here, immediately before Perfect
+	 * Dark takes its one-shot initial controller snapshot.
+	 */
+#ifdef PLATFORM_PS2
+	inputUpdate();
+#endif
+
+	const u8 connected = (u8)inputControllerMask();
+
 	if (bitpattern) {
-		*bitpattern = inputControllerMask();
+		*bitpattern = connected;
 	}
 	if (data) {
 		osContGetQuery(data);
 	}
+
+#ifdef PLATFORM_PS2
+	sysLogPrintf(LOG_NOTE,
+		"CONT: initial libultra scan mask=0x%02x", connected);
+#endif
 	return 0;
 }
 
@@ -218,6 +235,16 @@ void osContGetReadData(OSContPad *pad)
 
 s32 osContStartQuery(OSMesgQueue *mq)
 {
+	/*
+	 * Match the asynchronous libultra contract used by joy00013e84: refresh
+	 * the physical state, then complete the request through the supplied
+	 * queue. This also keeps controller re-scans correct if the portable
+	 * message-queue stubs are replaced with a blocking implementation.
+	 */
+#ifdef PLATFORM_PS2
+	inputUpdate();
+#endif
+	osSendMesg(mq, (OSMesg)0, OS_MESG_NOBLOCK);
 	return 0;
 }
 
@@ -227,7 +254,7 @@ void osContGetQuery(OSContStatus *status)
 	for (s32 i = 0; i < MAXCONTROLLERS; ++i, ++status) {
 		if (inputControllerConnected(i)) {
 			status->errnum = 0;
-			status->type = CONT_ABSOLUTE;
+			status->type = CONT_TYPE_NORMAL;
 			status->status = CONT_CARD_ON;
 		} else {
 			status->errnum = CONT_NO_RESPONSE_ERROR;
