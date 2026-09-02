@@ -1,17 +1,22 @@
 #include <stdbool.h>
 #include <stdint.h>
+#include <string.h>
 
 #include <audsrv.h>
+#include <delaythread.h>
 #include <loadfile.h>
 #include <sbv_patches.h>
 #include <sifrpc.h>
 
 #include "audio.h"
 #include "audio_ps2_queue.h"
+#include "log_ps2.h"
 #include "system.h"
 
 #define PS2_AUDIO_FREQUENCY 22050
 #define PS2_AUDIO_QUEUE_LIMIT_SAMPLES 4096u
+#define PS2_AUDIO_RPC_BIND_TIMEOUT_USEC 500000u
+#define PS2_AUDIO_RPC_BIND_RETRY_USEC 1000u
 
 extern unsigned char audsrv_irx[] __attribute__((aligned(16)));
 extern unsigned int size_audsrv_irx;
@@ -26,23 +31,37 @@ static int ps2AudioEnsureRomModule(const char *name, const char *path)
 {
     int result = SifSearchModuleByName(name);
     if (result >= 0) {
+        sysLogPrintf(LOG_NOTE,
+            "AUDIO: reuse resident IOP module %s id=%d", name, result);
         return result;
     }
 
     result = SifLoadModule(path, 0, NULL);
     if (result >= 0) {
+        sysLogPrintf(LOG_NOTE,
+            "AUDIO: loaded IOP module %s from %s id=%d",
+            name, path, result);
         return result;
     }
 
     /* A loader may report a duplicate module as an error. */
     const int resident = SifSearchModuleByName(name);
-    return resident >= 0 ? resident : result;
+    if (resident >= 0) {
+        sysLogPrintf(LOG_WARNING,
+            "AUDIO: %s load returned %d but resident module id=%d is usable",
+            path, result, resident);
+        return resident;
+    }
+
+    return result;
 }
 
 static int ps2AudioEnsureServer(void)
 {
     int result = SifSearchModuleByName("audsrv");
     if (result >= 0) {
+        sysLogPrintf(LOG_NOTE,
+            "AUDIO: reuse resident IOP module audsrv id=%d", result);
         return result;
     }
 
@@ -53,6 +72,9 @@ static int ps2AudioEnsureServer(void)
     result = SifExecModuleBuffer(
         audsrv_irx, size_audsrv_irx, 0, NULL, &module_result);
     if (result >= 0) {
+        sysLogPrintf(LOG_NOTE,
+            "AUDIO: executed embedded audsrv.irx id=%d start_result=%d bytes=%u",
+            result, module_result, size_audsrv_irx);
         return result;
     }
 
@@ -60,11 +82,51 @@ static int ps2AudioEnsureServer(void)
     return resident >= 0 ? resident : result;
 }
 
+static bool ps2AudioWaitForRpcServer(void)
+{
+    SifRpcClientData_t probe;
+    memset(&probe, 0, sizeof(probe));
+
+    const uint64_t start = sysGetMicroseconds();
+    uint32_t attempts = 0u;
+
+    do {
+        const int result = sceSifBindRpc(&probe, AUDSRV_IRX, 0);
+        ++attempts;
+
+        if (result < 0) {
+            sysLogPrintf(LOG_ERROR,
+                "AUDIO: audsrv RPC probe failed result=%d attempts=%u",
+                result, attempts);
+            return false;
+        }
+
+        if (probe.server != NULL) {
+            sysLogPrintf(LOG_NOTE,
+                "AUDIO: audsrv RPC endpoint ready attempts=%u elapsed=%llu us",
+                attempts,
+                (unsigned long long)(sysGetMicroseconds() - start));
+            return true;
+        }
+
+        DelayThread(PS2_AUDIO_RPC_BIND_RETRY_USEC);
+    } while (sysGetMicroseconds() - start <
+        PS2_AUDIO_RPC_BIND_TIMEOUT_USEC);
+
+    sysLogPrintf(LOG_ERROR,
+        "AUDIO: audsrv RPC endpoint timeout attempts=%u limit=%u us; audio disabled",
+        attempts, PS2_AUDIO_RPC_BIND_TIMEOUT_USEC);
+    return false;
+}
+
 s32 audioInit(void)
 {
     if (s_audio_ready) {
         return 0;
     }
+
+    sysLogPrintf(LOG_NOTE, "AUDIO: native SPU2 initialisation begin");
+    ps2LogCheckpointForce();
 
     s_pending_buffer = NULL;
     s_pending_bytes = 0;
@@ -74,6 +136,7 @@ s32 audioInit(void)
     sceSifInitRpc(0);
 
     const int libsd_module = ps2AudioEnsureRomModule("libsd", "rom0:LIBSD");
+    ps2LogCheckpointForce();
     if (libsd_module < 0) {
         sysLogPrintf(LOG_ERROR,
             "AUDIO: failed to provide ROM LIBSD module (%d)", libsd_module);
@@ -81,11 +144,23 @@ s32 audioInit(void)
     }
 
     const int audsrv_module = ps2AudioEnsureServer();
+    ps2LogCheckpointForce();
     if (audsrv_module < 0) {
         sysLogPrintf(LOG_ERROR,
             "AUDIO: failed to execute embedded audsrv.irx (%d)", audsrv_module);
         return -1;
     }
+
+    /*
+     * Current PS2SDK's audsrv_init waits forever for its RPC endpoint. Probe
+     * the same public service ID with a bounded startup policy first so a bad
+     * or incompatible IRX can disable audio without pinning the whole game.
+     */
+    if (!ps2AudioWaitForRpcServer()) {
+        ps2LogCheckpointForce();
+        return -1;
+    }
+    ps2LogCheckpointForce();
 
     int result = audsrv_init();
     if (result != AUDSRV_ERR_NOERROR) {

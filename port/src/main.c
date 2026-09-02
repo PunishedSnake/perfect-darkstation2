@@ -115,11 +115,39 @@ int main(int argc, const char **argv)
 	configInit();
 	sysLogPrintf(LOG_NOTE, "runtime: filesystem and configuration ready");
 	GAME_STARTUP_CHECKPOINT();
+
+#if PLATFORM_PS2
+	/*
+	 * Initialise SIF/RPC-backed services before dmaKit takes ownership of the
+	 * graphics channels. This is also the ordering already proven by the PS2
+	 * hardware diagnostic. Neither PAD nor audio is allowed to keep the game
+	 * behind one shared checkpoint: a missing optional service must remain
+	 * visible and the runtime must still advance to video/ROM startup.
+	 */
+	sysLogPrintf(LOG_NOTE, "runtime: input initialisation begin");
+	GAME_STARTUP_CHECKPOINT();
+	const s32 input_result = inputInit();
+	sysLogPrintf(input_result >= 0 ? LOG_NOTE : LOG_WARNING,
+		"runtime: input initialisation end result=%d", input_result);
+	GAME_STARTUP_CHECKPOINT();
+
+	sysLogPrintf(LOG_NOTE, "runtime: audio initialisation begin");
+	GAME_STARTUP_CHECKPOINT();
+	const s32 audio_result = audioInit();
+	sysLogPrintf(audio_result >= 0 ? LOG_NOTE : LOG_WARNING,
+		"runtime: audio initialisation end result=%d", audio_result);
+	GAME_STARTUP_CHECKPOINT();
+#endif
+
 	videoInit();
 	sysLogPrintf(LOG_NOTE, "runtime: video ready");
 	GAME_STARTUP_CHECKPOINT();
+
+#if !PLATFORM_PS2
 	inputInit();
 	audioInit();
+#endif
+
 	sysLogPrintf(LOG_NOTE, "runtime: input and audio ready");
 	GAME_STARTUP_CHECKPOINT();
 	romdataInit();
