@@ -608,9 +608,30 @@ PCSX2 is useful for correctness, packet/state inspection and fast iteration. It 
   memory, `_end`, current libc break, heap end, tail, reserve and the resulting
   16 MiB request before claiming no memory. The next hardware log therefore
   supplies the resident budget needed before promoting the game entry point;
-- the remaining promotion blocker is platform/link closure plus hardware
-  confirmation of the measured heap plan, after which `port/src/main.c` can
-  replace the diagnostic bootstrap;
+- **HARDWARE-VALIDATED:** build `aa007d1b72cc` measured a 27,864 KiB free libc
+  tail after the persistent GS/VU1 renderer, preserved the 4 MiB platform and
+  streaming reserve, and accepted the complete requested 16 MiB `memp` arena;
+- **CURRENT IMPLEMENTATION:** `pd_ps2_game` is the authoritative full-runtime
+  link target. It combines every decompiled game object and portable libultra
+  object with PS2-owned system, device-path filesystem, bounded ROM, PAD,
+  SPU2, Fast3D, VIF1/VU1 and GIF/GS services. Function/data sections plus
+  linker garbage collection keep code which cannot be reached from the real
+  `main` out of the resident ELF without weakening unresolved-symbol checks;
+- **LINK-CLOSED:** CI run 33643145244 at commit `6195b2a0facc` produced the
+  first `pd-ps2-game.elf` with zero undefined symbols. Its linked text, data and
+  BSS total 3,528,478 bytes, leaving the hardware-measured game arena and
+  platform reserve as runtime concerns instead of static-image guesses;
+- PS2 device roots such as `mass:`, `mc0:`, `host:` and `pfs0:` are treated as
+  absolute paths. The default ROM, configuration and save directory is the ELF
+  directory, avoiding launcher-dependent current-working-directory behaviour;
+- the obsolete direct-gsKit cube and pre-adapter Fast3D bring-up sources were
+  removed after repository-wide reference and build-graph checks found no
+  consumer. The maintained diagnostic is `gfx_api_scene.c` through the same
+  backend used by the game;
+- the remaining promotion work starts at the now-explicit full-game ELF:
+  hardware startup checkpoints identify the first runtime boundary which does
+  not survive, then missing renderer effects are enabled from actual game
+  demand rather than from isolated scene guesses;
 - do not promote the game ELF by ignoring unresolved symbols. Every service
   crossing the link frontier must have an explicit PS2 owner and failure
   contract.
@@ -653,6 +674,12 @@ PCSX2 is useful for correctness, packet/state inspection and fast iteration. It 
   PATH1 submit to elide the duplicate poll. Empty PATH3 handoffs retain the late
   wait after alternate-slot construction, preserving EE/VU1 overlap. Telemetry
   distinguishes waits which observed hardware busy from safely elided polls;
+- **HARDWARE-MEASURED:** build `aa007d1b72cc` reached 1178 continuous PATH1
+  frames, 42,408 VU1-transformed vertices, zero rejected batches, zero VIF1
+  timeout/errors and a 152 us maximum wait. Of 2356 real wait samples, 1172
+  observed busy hardware while another 2356 known-idle handoff polls were
+  elided, confirming that the reduced synchronization keeps required ownership
+  waits while removing redundant MMIO traffic;
 - VU1 lighting/texgen candidate;
 - **IN PROGRESS:** direct GS-ready output and XGKICK. The transport diagnostic
   executes this route with raw textured transforms and GS-ready A+D transport

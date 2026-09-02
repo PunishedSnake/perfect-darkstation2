@@ -135,8 +135,18 @@ measures the current libc tail after persistent subsystem startup, preserves a
 4 MiB platform/streaming reserve and bounds the requested `memp` arena instead
 of blindly asking `calloc` for the configured size. Diagnostic logs expose the
 physical/linker/libc addresses and resulting plan without reserving the arena.
-The remaining memory gate is hardware confirmation plus later peak lazy-asset
-working-set measurement during the real game loop.
+Real hardware at build `aa007d1b72cc` reported a 27,864 KiB free libc tail after
+renderer startup and accepted the requested 16 MiB game arena while preserving
+the 4 MiB reserve. The remaining memory work is peak lazy-asset measurement in
+the real game loop.
+
+`pd_ps2_game` is the full-runtime link frontier. It links the real game entry
+point and complete game/core object sets against the PS2 filesystem, ROM,
+controller, SPU2 and native renderer services. Its default data and save root is
+the ELF directory, and PS2 device prefixes are absolute paths. The two retired
+bring-up scenes which bypassed this maintained path have been removed. CI run
+33643145244 linked the first `pd-ps2-game.elf` with zero undefined symbols and
+3,528,478 bytes of text, data and BSS.
 
 ## Performance rules for this port
 

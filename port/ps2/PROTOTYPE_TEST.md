@@ -106,8 +106,10 @@ PCSX2 is useful for correctness and inspection, but timing, cache, DMA, FIFO and
 The real `romdata` path uses the same bounded `RomSource` contract as this
 probe: PS2 keeps the ROM file-backed, inflates through a caller-owned 8 KiB
 window, materializes permanent segments at exact size and loads ordinary files
-on demand. Native audio, input and video now have PS2 owners. The next log also
-records the bounded game-heap plan after persistent renderer allocation; the
-remaining full-runtime boundary is link closure and hardware confirmation of
-that resident budget before the diagnostic entry point is replaced by
-`port/src/main.c`.
+on demand. Native audio, input and video now have PS2 owners. Build
+`aa007d1b72cc` confirmed the complete 16 MiB game arena with the 4 MiB reserve
+intact. `pd_ps2_game` now links `port/src/main.c`, all game/core objects and the
+same hardware-tested VU1/GS backend. Its forced startup checkpoints make the
+first full-runtime hardware attempt diagnosable even if it stops before the
+first rendered game frame. CI run 33643145244 linked that ELF with zero
+undefined symbols; its text, data and BSS total 3,528,478 bytes.
