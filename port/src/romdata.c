@@ -506,7 +506,7 @@ s32 romdataDmaRead(void *dst, uintptr_t address, u32 length)
 	}
 
 	for (struct romfile *seg = romSegs; seg->name; ++seg) {
-		u32 segmentOffset;
+		uint32_t segmentOffset;
 
 		if (!seg->streamed || seg->source != SRC_ROM || seg->owned ||
 			!romdataStreamStartOffset(address, length,
@@ -518,7 +518,7 @@ s32 romdataDmaRead(void *dst, uintptr_t address, u32 length)
 			break;
 		}
 
-		const u32 romOffset = seg->romoffset + segmentOffset;
+		const u32 romOffset = seg->romoffset + (u32)segmentOffset;
 		if (romOffset > g_RomFileSize || length > g_RomFileSize - romOffset) {
 			break;
 		}
