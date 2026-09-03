@@ -74,8 +74,22 @@
 #include "types.h"
 #include "system.h"
 
+#ifdef PLATFORM_PS2
+#include "log_ps2.h"
+#endif
+
 extern u8 *g_MempHeap;
 extern u32 g_MempHeapSize;
+
+static void mainRuntimeCheckpoint(const char *phase)
+{
+#ifdef PLATFORM_PS2
+	sysLogPrintf(LOG_NOTE, "runtime: %s", phase);
+	ps2LogCheckpoint();
+#else
+	(void)phase;
+#endif
+}
 
 void rngSetSeed(u32 seed);
 
@@ -275,9 +289,13 @@ void mainInit(void)
 
 void mainProc(void)
 {
+	mainRuntimeCheckpoint("mainInit begin");
 	mainInit();
+	mainRuntimeCheckpoint("mainInit complete; rdpInit begin");
 	rdpInit();
+	mainRuntimeCheckpoint("rdpInit complete; sndInit begin");
 	sndInit();
+	mainRuntimeCheckpoint("sndInit complete; mainLoop begin");
 
 	while (true) {
 		mainLoop();
@@ -497,6 +515,7 @@ void mainLoop(void)
 		viReset(g_StageNum);
 		frametimeCalculate();
 		profileReset();
+		mainRuntimeCheckpoint("stage reset complete; frame loop begin");
 
 		while (g_MainChangeToStageNum < 0) {
 			const s32 cycles = osGetCount() - g_Vars.thisframestartt;

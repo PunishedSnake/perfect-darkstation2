@@ -112,7 +112,31 @@ int main(int argc, const char **argv)
 	sysLogPrintf(LOG_NOTE, "runtime: system ready");
 	GAME_STARTUP_CHECKPOINT();
 	fsInit();
+
+#if PLATFORM_PS2
+	const s32 initial_config_size = fsFileSize(CONFIG_PATH);
+#endif
+
 	configInit();
+
+#if PLATFORM_PS2
+	/*
+	 * The game normally saves configuration only from the atexit cleanup path.
+	 * Console builds spend their lifetime in mainProc(), and an interrupted
+	 * bring-up run therefore never created pd.ini. Publish the registered
+	 * defaults once at startup so settings such as Game.SkipIntro remain
+	 * available without requiring a clean process exit.
+	 */
+	if (initial_config_size <= 0) {
+		const s32 saved = configSave(CONFIG_PATH);
+		sysLogPrintf(saved ? LOG_NOTE : LOG_WARNING,
+			"runtime: default configuration %s at %s (previous size=%d)",
+			saved ? "created" : "could not be created", CONFIG_PATH,
+			initial_config_size);
+		GAME_STARTUP_CHECKPOINT();
+	}
+#endif
+
 	sysLogPrintf(LOG_NOTE, "runtime: filesystem and configuration ready");
 	GAME_STARTUP_CHECKPOINT();
 
