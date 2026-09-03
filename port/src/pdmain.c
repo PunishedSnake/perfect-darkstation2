@@ -441,7 +441,12 @@ void mainLoop(void)
 			g_MainMemaHeapSize = strtol(argFindByPrefix(1, "-ma"), NULL, 0) * 1024;
 		}
 
-		memaReset(mempAlloc(g_MainMemaHeapSize, MEMPOOL_STAGE), g_MainMemaHeapSize);
+		void *memaheap = mempAlloc(g_MainMemaHeapSize, MEMPOOL_STAGE);
+		if (!memaheap) {
+			sysFatalError("Could not allocate %u bytes for the stage mema heap (stage 0x%02x).",
+				g_MainMemaHeapSize, g_StageNum);
+		}
+		memaReset(memaheap, g_MainMemaHeapSize);
 		langReset(g_StageNum);
 		playermgrReset();
 

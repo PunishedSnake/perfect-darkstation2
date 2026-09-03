@@ -12,6 +12,9 @@
 #include "data.h"
 #include "types.h"
 #include "platform.h"
+#ifndef PLATFORM_N64
+#include "system.h"
+#endif
 
 /**
  * This file handles memory usage for graphics related tasks.
@@ -113,11 +116,23 @@ void gfxReset(void)
 
 	// %d Players : Allocating %d bytes for master dl's\n
 	g_GfxBuffers[0] = mempAlloc(g_GfxSizesByPlayerCount[PLAYERCOUNT() - 1] * NUM_GFXTASKS, MEMPOOL_STAGE);
+#ifndef PLATFORM_N64
+	if (!g_GfxBuffers[0]) {
+		sysFatalError("Could not allocate the stage display-list buffers (%u bytes each).",
+			g_GfxSizesByPlayerCount[PLAYERCOUNT() - 1]);
+	}
+#endif
 	g_GfxBuffers[1] = g_GfxBuffers[0] + g_GfxSizesByPlayerCount[PLAYERCOUNT() - 1];
 	g_GfxBuffers[2] = g_GfxBuffers[1] + g_GfxSizesByPlayerCount[PLAYERCOUNT() - 1];
 
 	// Allocating %d bytes for mtxvtx space\n
 	g_VtxBuffers[0] = mempAlloc(g_VtxSizesByPlayerCount[PLAYERCOUNT() - 1] * NUM_GFXTASKS, MEMPOOL_STAGE);
+#ifndef PLATFORM_N64
+	if (!g_VtxBuffers[0]) {
+		sysFatalError("Could not allocate the stage vertex buffers (%u bytes each).",
+			g_VtxSizesByPlayerCount[PLAYERCOUNT() - 1]);
+	}
+#endif
 	g_VtxBuffers[1] = g_VtxBuffers[0] + g_VtxSizesByPlayerCount[PLAYERCOUNT() - 1];
 	g_VtxBuffers[2] = g_VtxBuffers[1] + g_VtxSizesByPlayerCount[PLAYERCOUNT() - 1];
 

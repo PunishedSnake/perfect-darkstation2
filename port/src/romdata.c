@@ -4,6 +4,8 @@
 #include <string.h>
 #include <ctype.h>
 #include <PR/ultratypes.h>
+#include "data.h"
+#include "types.h"
 #include "lib/rzip.h"
 #include "romdata.h"
 #include "fs.h"
@@ -348,8 +350,9 @@ static inline void romdataLoadRom(void)
 	}
 
 	u8 scratch[5 * 1024];
-	if (rzipInflate(zipped, dataSeg, scratch) < 0) {
-		free(dataSeg);
+	if (rzipInflateSized(zipped, g_RomFileSize - ROMDATA_DATA_OFS,
+		dataSeg, dataSegLen, scratch) <= 0) {
+		sysMemFree(dataSeg);
 		sysFatalError("Could not inflate data segment.");
 	}
 
@@ -747,11 +750,15 @@ static inline void romdataInitFiles(void)
 
 static inline struct romfile *romdataGetSeg(const char *name)
 {
+	if (!name || !name[0]) {
+		return NULL;
+	}
+
 	struct romfile *seg = romSegs;
 	while (seg->name && strcmp(name, seg->name)) {
 		++seg;
 	}
-	return seg;
+	return seg->name ? seg : NULL;
 }
 
 s32 romdataInit(void)
@@ -910,6 +917,10 @@ u8 *romdataFileGetData(s32 fileNum)
 
 u8 *romdataFileLoad(s32 fileNum, u32 *outSize)
 {
+	if (outSize) {
+		*outSize = 0;
+	}
+
 	if (fileNum < 1 || fileNum >= ROMDATA_MAX_FILES) {
 		sysLogPrintf(LOG_ERROR, "romdataFileLoad: invalid file num %d", fileNum);
 		return NULL;
@@ -1009,6 +1020,12 @@ void romdataFilePreprocess(s32 fileNum, s32 loadType, u8 *data, u32 size, u32 *o
 			// apply patches
 			for (u32 i = 0; i < fileSlots[fileNum].numpatches; ++i) {
 				const struct romfilepatch *p = &fileSlots[fileNum].patches[i];
+				if (p->ofs > size || p->len > size - p->ofs) {
+					sysFatalError(
+						"file %d (%s) patch range is outside asset: offset=0x%x length=%u size=%u",
+						fileNum, fileSlots[fileNum].name ? fileSlots[fileNum].name : "unnamed",
+						p->ofs, p->len, size);
+				}
 				if (!memcmp(data + p->ofs, p->src, p->len)) {
 					memcpy(data + p->ofs, p->dst, p->len);
 					sysLogPrintf(LOG_NOTE, "file %d (%s) patched at offset 0x%x", fileNum, fileSlots[fileNum].name, p->ofs);
@@ -1024,7 +1041,7 @@ void romdataFilePreprocess(s32 fileNum, s32 loadType, u8 *data, u32 size, u32 *o
 void romdataFileFree(s32 fileNum)
 {
 	if (fileNum < 1 || fileNum >= ROMDATA_MAX_FILES) {
-		sysLogPrintf(LOG_ERROR, "fsFileFree: invalid file num %d", fileNum);
+		sysLogPrintf(LOG_ERROR, "romdataFileFree: invalid file num %d", fileNum);
 		return;
 	}
 
@@ -1064,18 +1081,35 @@ s32 romdataFileGetNumForName(const char *name)
 
 u8 *romdataSegGetData(const char *segName)
 {
-	return romdataGetSeg(segName)->data;
+	struct romfile *seg = romdataGetSeg(segName);
+	if (!seg) {
+		sysLogPrintf(LOG_ERROR, "romdataSegGetData: unknown segment %s",
+			segName ? segName : "(null)");
+		return NULL;
+	}
+	return seg->data;
 }
 
 u8 *romdataSegGetDataEnd(const char *segName)
 {
 	struct romfile *seg = romdataGetSeg(segName);
+	if (!seg) {
+		sysLogPrintf(LOG_ERROR, "romdataSegGetDataEnd: unknown segment %s",
+			segName ? segName : "(null)");
+		return NULL;
+	}
 	return seg->data + seg->size;
 }
 
 u32 romdataSegGetSize(const char *segName)
 {
-	return romdataGetSeg(segName)->size;
+	struct romfile *seg = romdataGetSeg(segName);
+	if (!seg) {
+		sysLogPrintf(LOG_ERROR, "romdataSegGetSize: unknown segment %s",
+			segName ? segName : "(null)");
+		return 0;
+	}
+	return seg->size;
 }
 
 u32 romdataFileGetEstimatedSize(const u32 size, const u32 loadtype)

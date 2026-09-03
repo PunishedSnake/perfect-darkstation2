@@ -179,12 +179,13 @@ void *mempAllocFromBank(struct memorypool *pool, u32 size, u8 poolnum)
 	}
 
 	if (pool->leftpos > pool->rightpos) {
-		sysLogPrintf(LOG_NOTE, "#warning: memory pool %x is full. Req: %d\n", pool, size);
+		sysLogPrintf(LOG_ERROR, "memory pool %p has invalid bounds. Req: %u", pool, size);
 		return 0;
 	}
 
-	if (pool->leftpos + size > pool->rightpos) {
-		sysLogPrintf(LOG_NOTE, "#warning: memory pool %x is full. Req: %d\n", pool, size);
+	if (size > (u32)(pool->rightpos - pool->leftpos)) {
+		sysLogPrintf(LOG_ERROR, "memory pool %p is full. Req: %u free: %u",
+			pool, size, (u32)(pool->rightpos - pool->leftpos));
 		return 0;
 	}
 
@@ -198,6 +199,11 @@ void *mempAllocFromBank(struct memorypool *pool, u32 size, u8 poolnum)
 
 void *mempAlloc(u32 len, u8 pool)
 {
+	if (pool >= ARRAYCOUNT(g_MempOnboardPools)) {
+		sysLogPrintf(LOG_ERROR, "mempAlloc: invalid pool %u", pool);
+		return NULL;
+	}
+
 	void *allocation = mempAllocFromBank(g_MempOnboardPools, len, pool);
 
 	if (allocation) {
@@ -243,11 +249,18 @@ void *mempAlloc(u32 len, u8 pool)
  *
  * The allocation must be the most recent allocation.
  *
- * @dangerous: This function does not check the limits of the memory pool.
- * If it allocates past the rightpos of the pool it could lead to memory corruption.
+ * Portable builds also reject invalid pools, malformed bounds and growth past
+ * rightpos so a failed resize cannot corrupt an adjacent arena.
  */
 s32 mempRealloc(void *allocation, s32 newsize, u8 poolnum)
 {
+	if (!allocation || newsize < 0 || poolnum >= ARRAYCOUNT(g_MempOnboardPools)) {
+		sysLogPrintf(LOG_ERROR,
+			"mempRealloc: invalid request allocation=%p size=%d pool=%u",
+			allocation, newsize, poolnum);
+		return 0;
+	}
+
 	struct memorypool *pool = &g_MempOnboardPools[poolnum];
 	s32 origsize;
 	s32 growsize;
@@ -260,6 +273,14 @@ s32 mempRealloc(void *allocation, s32 newsize, u8 poolnum)
 		}
 	}
 
+	if (!pool->leftpos || !pool->rightpos || pool->leftpos < pool->prevallocation ||
+		pool->leftpos > pool->rightpos) {
+		sysLogPrintf(LOG_ERROR,
+			"mempRealloc: pool %u has invalid bounds for allocation %p",
+			poolnum, allocation);
+		return 0;
+	}
+
 	origsize = pool->leftpos - pool->prevallocation;
 	growsize = newsize - origsize;
 
@@ -267,6 +288,14 @@ s32 mempRealloc(void *allocation, s32 newsize, u8 poolnum)
 		pool->leftpos += growsize;
 		pool->leftpos = (u8 *)ALIGN16((uintptr_t) pool->leftpos);
 		return 1;
+	}
+
+	if ((u32)growsize > (u32)(pool->rightpos - pool->leftpos)) {
+		sysLogPrintf(LOG_ERROR,
+			"mempRealloc: pool %u cannot grow allocation %p by %d bytes (free=%u)",
+			poolnum, allocation, growsize,
+			(u32)(pool->rightpos - pool->leftpos));
+		return 0;
 	}
 
 	pool->leftpos += growsize;

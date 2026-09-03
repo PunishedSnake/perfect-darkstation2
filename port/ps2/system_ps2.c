@@ -348,7 +348,16 @@ void sysLogPrintf(s32 level, const char *fmt, ...)
 
 void sysFatalError(const char *fmt, ...)
 {
+    static bool fatalActive;
     char msg[1536];
+
+    if (fatalActive) {
+        for (;;) {
+            DelayThread(1000000);
+        }
+    }
+
+    fatalActive = true;
 
     va_list ap;
     va_start(ap, fmt);
@@ -364,7 +373,16 @@ void sysFatalError(const char *fmt, ...)
         fclose(closing);
     }
 
-    exit(1);
+    /*
+     * Returning from the ELF drops back to the browser/OSD and used to make a
+     * controlled fatal error look like a console reset. Keep the EE alive so
+     * the last displayed frame and the durable log survive until manual reset.
+     */
+    fprintf(stderr, "Perfect DarkStation 2 stopped after a fatal error.\n");
+    fflush(stderr);
+    for (;;) {
+        DelayThread(1000000);
+    }
 }
 
 void sysGetExecutablePath(char *outPath, const u32 outLen)

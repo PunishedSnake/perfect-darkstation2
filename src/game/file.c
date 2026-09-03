@@ -4157,11 +4157,27 @@ u32 file0f166ea8(uintptr_t *filetableaddr)
 void fileLoad(u8 *dst, u32 allocationlen, romptr_t *romaddrptr, struct fileinfo *info)
 {
 #ifndef PLATFORM_N64
+	const u32 loadtype = g_LoadType;
+	g_LoadType = LOADTYPE_NONE;
+
+	if (!dst || !romaddrptr || !info) {
+		sysLogPrintf(LOG_ERROR, "fileLoad: invalid destination or metadata");
+		return;
+	}
+
+	info->loadedsize = 0;
+
 	// load the file first
 	const s32 filenum = (uintptr_t *)romaddrptr - g_FileTable;
+	if (filenum < 1 || filenum >= NUM_FILES) {
+		sysLogPrintf(LOG_ERROR, "fileLoad: invalid file num %d", filenum);
+		return;
+	}
+
 	u32 romsize = 0;
 	u8 *filedata = romdataFileLoad(filenum, &romsize);
-	if (!filedata) {
+	if (!filedata || romsize == 0) {
+		sysLogPrintf(LOG_ERROR, "fileLoad: no data for file %d", filenum);
 		return;
 	}
 	romaddrptr = (romptr_t *)&filedata;
@@ -4174,9 +4190,13 @@ void fileLoad(u8 *dst, u32 allocationlen, romptr_t *romaddrptr, struct fileinfo 
 	if (allocationlen == 0) {
 		// DMA with no inflate
 		dmaExec(dst, *romaddrptr, romsize);
+#ifndef PLATFORM_N64
+		info->loadedsize = romsize;
+#endif
 	} else {
+#ifdef PLATFORM_N64
 		// DMA the compressed data to scratch space then inflate
-		u8 *scratch = (dst + allocationlen) - ((romsize + 7) & (uintptr_t)~7);
+		u8 *scratch = (dst + allocationlen) - ALIGN8(romsize);
 
 		if ((uintptr_t)scratch - (uintptr_t)dst < 8) {
 			info->loadedsize = 0;
@@ -4204,13 +4224,32 @@ void fileLoad(u8 *dst, u32 allocationlen, romptr_t *romaddrptr, struct fileinfo 
 
 			info->loadedsize = result;
 		}
+#else
+		/*
+		 * romdataFileLoad owns a separate compressed-input allocation on PS2.
+		 * Inflate straight from that allocation so output can use the complete
+		 * caller-provided capacity and can never overwrite unread input bytes.
+		 */
+		const s32 result = rzipInflateSized(filedata, romsize, dst,
+			allocationlen, buffer);
+		const u32 alignedresult = result > 0 ? ALIGN16((u32)result) : 0;
+
+		if (result <= 0 || alignedresult > allocationlen) {
+			info->loadedsize = 0;
+			sysLogPrintf(LOG_ERROR,
+				"fileLoad: file %d decompression failed input=%u capacity=%u result=%d",
+				filenum, romsize, allocationlen, result);
+			return;
+		}
+
+		info->loadedsize = alignedresult;
+#endif
 	}
 
 #ifndef PLATFORM_N64
 	// byteswap/preprocess file according to g_LoadType right after inflating it
-	const u32 dstsize = allocationlen ? info->loadedsize : romsize; 
-	romdataFilePreprocess(filenum, g_LoadType, dst, dstsize, &info->loadedsize);
-	g_LoadType = LOADTYPE_NONE;
+	const u32 dstsize = allocationlen ? info->loadedsize : romsize;
+	romdataFilePreprocess(filenum, loadtype, dst, dstsize, &info->loadedsize);
 #endif
 }
 
@@ -4241,13 +4280,31 @@ void fileLoadPartToAddr(u16 filenum, void *memaddr, s32 offset, u32 len)
 {
 	u32 stack[2];
 
-	if (fileGetRomSizeByTableAddress((uintptr_t*)&g_FileTable[filenum])) {
+#ifndef PLATFORM_N64
+	if (filenum < 1 || filenum >= NUM_FILES) {
+		sysLogPrintf(LOG_ERROR, "fileLoadPartToAddr: invalid file num %u", filenum);
+		return;
+	}
+#endif
+
+	const u32 filesize = fileGetRomSizeByTableAddress((uintptr_t*)&g_FileTable[filenum]);
+
+	if (filesize) {
 #ifdef PLATFORM_N64
 		dmaExec(memaddr, (romptr_t) g_FileTable[filenum] + offset, len);
 #else
+		if (!memaddr || offset < 0 || (u32)offset > filesize || len > filesize - (u32)offset) {
+			sysLogPrintf(LOG_ERROR,
+				"fileLoadPartToAddr: invalid range file=%u offset=%d length=%u size=%u",
+				filenum, offset, len, filesize);
+			return;
+		}
+
 		const u8 *src = romdataFileGetData(filenum);
 		if (src) {
 			dmaExec(memaddr, (uintptr_t) src + offset, len);
+		} else {
+			sysLogPrintf(LOG_ERROR, "fileLoadPartToAddr: no data for file %u", filenum);
 		}
 		// this intentionally does not execute romdataFilePreprocess,
 		// because bg files are loaded and inflated in parts
@@ -4257,6 +4314,13 @@ void fileLoadPartToAddr(u16 filenum, void *memaddr, s32 offset, u32 len)
 
 u32 fileGetInflatedSize(s32 filenum, u32 loadtype)
 {
+#ifndef PLATFORM_N64
+	if (filenum < 1 || filenum >= NUM_FILES) {
+		sysLogPrintf(LOG_ERROR, "fileGetInflatedSize: invalid file num %d", filenum);
+		return 0;
+	}
+#endif
+
 	u8 *ptr;
 	u8 buffer[0x50];
 	uintptr_t *romaddrptr;
@@ -4272,6 +4336,13 @@ u32 fileGetInflatedSize(s32 filenum, u32 loadtype)
 #ifdef PLATFORM_N64
 	romaddr = *romaddrptr;
 #else
+	const s32 romsize = romdataFileGetSize(filenum);
+	if (romsize < 5) {
+		sysLogPrintf(LOG_ERROR,
+			"fileGetInflatedSize: file %d is too small for an RZIP header (%d)",
+			filenum, romsize);
+		return 0;
+	}
 	romaddr = (uintptr_t)romdataFileGetData(filenum);
 #endif
 	ptr = (u8 *) ((uintptr_t) &buffer[0x10] & ~0xf);
@@ -4279,7 +4350,11 @@ u32 fileGetInflatedSize(s32 filenum, u32 loadtype)
 	if (romaddr == 0) {
 		stub0f175f58(file0f166ea8(&g_FileTable[filenum]), ptr, 16);
 	} else {
+#ifdef PLATFORM_N64
 		dmaExec(ptr, romaddr, 0x40);
+#else
+		dmaExec(ptr, romaddr, 5);
+#endif
 	}
 
 	if (rzipIs1173(ptr)) {
@@ -4302,28 +4377,73 @@ u32 fileGetInflatedSize(s32 filenum, u32 loadtype)
 
 void *fileLoadToNew(s32 filenum, u32 method, u32 loadtype)
 {
+#ifndef PLATFORM_N64
+	if (filenum < 1 || filenum >= NUM_FILES) {
+		sysLogPrintf(LOG_ERROR, "fileLoadToNew: invalid file num %d", filenum);
+		return NULL;
+	}
+#endif
+
 	struct fileinfo *info = &g_FileInfo[filenum];
 	u32 stack;
-	void *ptr;
+	void *ptr = NULL;
 
 	if (method == FILELOADMETHOD_EXTRAMEM || method == FILELOADMETHOD_DEFAULT) {
 		if (info->loadedsize == 0) {
-			info->loadedsize = (fileGetInflatedSize(filenum, loadtype) + 0x20) & 0xfffffff0;
+			const u32 inflatedsize = fileGetInflatedSize(filenum, loadtype);
+			if (inflatedsize == 0 || inflatedsize > 0xffffffdfu) {
+#ifndef PLATFORM_N64
+				sysLogPrintf(LOG_ERROR,
+					"fileLoadToNew: invalid inflated size %u for file %d",
+					inflatedsize, filenum);
+#endif
+				return NULL;
+			}
+
+			info->loadedsize = (inflatedsize + 0x20) & 0xfffffff0;
 
 			if (method == FILELOADMETHOD_EXTRAMEM) {
+				if (info->loadedsize > 0xffff7fffu) {
+					info->loadedsize = 0;
+					return NULL;
+				}
 				info->loadedsize += 0x8000;
 			}
 		}
 
 		ptr = mempAlloc(info->loadedsize, MEMPOOL_STAGE);
+		if (!ptr) {
+#ifndef PLATFORM_N64
+			sysLogPrintf(LOG_ERROR,
+				"fileLoadToNew: allocation failed file=%d size=%u",
+				filenum, info->loadedsize);
+#endif
+			info->loadedsize = 0;
+			info->allocsize = 0;
+			return NULL;
+		}
+
 		info->allocsize = info->loadedsize;
 		fileLoad(ptr, info->loadedsize, (uintptr_t*)&g_FileTable[filenum], info);
+
+#ifndef PLATFORM_N64
+		if (info->loadedsize == 0) {
+			mempRealloc(ptr, 0, MEMPOOL_STAGE);
+			info->allocsize = 0;
+			return NULL;
+		}
+#endif
 
 		if (method != FILELOADMETHOD_EXTRAMEM) {
 			mempRealloc(ptr, info->loadedsize, MEMPOOL_STAGE);
 		}
 	} else {
+#ifdef PLATFORM_N64
 		while (1);
+#else
+		sysLogPrintf(LOG_ERROR, "fileLoadToNew: unsupported method %u", method);
+		return NULL;
+#endif
 	}
 
 	return ptr;
@@ -4331,6 +4451,13 @@ void *fileLoadToNew(s32 filenum, u32 method, u32 loadtype)
 
 void fileRemove(s32 filenum)
 {
+#ifndef PLATFORM_N64
+	if (filenum < 1 || filenum >= NUM_FILES) {
+		sysLogPrintf(LOG_ERROR, "fileRemove: invalid file num %d", filenum);
+		return;
+	}
+#endif
+
 	g_FileTable[filenum] = 0;
 #ifndef PLATFORM_N64
 	romdataFileFree(filenum);
@@ -4339,13 +4466,33 @@ void fileRemove(s32 filenum)
 
 void *fileLoadToAddr(s32 filenum, s32 method, u8 *ptr, u32 size)
 {
+#ifndef PLATFORM_N64
+	if (filenum < 1 || filenum >= NUM_FILES || !ptr || size == 0) {
+		sysLogPrintf(LOG_ERROR,
+			"fileLoadToAddr: invalid request file=%d destination=%p size=%u",
+			filenum, ptr, size);
+		return NULL;
+	}
+#endif
+
 	struct fileinfo *info = &g_FileInfo[filenum];
 
 	if (method == FILELOADMETHOD_EXTRAMEM || method == FILELOADMETHOD_DEFAULT) {
 		info->allocsize = size;
 		fileLoad(ptr, size, (uintptr_t*)&g_FileTable[filenum], info);
+#ifndef PLATFORM_N64
+		if (info->loadedsize == 0) {
+			info->allocsize = 0;
+			return NULL;
+		}
+#endif
 	} else {
+#ifdef PLATFORM_N64
 		while (1);
+#else
+		sysLogPrintf(LOG_ERROR, "fileLoadToAddr: unsupported method %d", method);
+		return NULL;
+#endif
 	}
 
 	return ptr;
@@ -4353,16 +4500,35 @@ void *fileLoadToAddr(s32 filenum, s32 method, u8 *ptr, u32 size)
 
 u32 fileGetLoadedSize(s32 filenum)
 {
+#ifndef PLATFORM_N64
+	if (filenum < 1 || filenum >= NUM_FILES) {
+		sysLogPrintf(LOG_ERROR, "fileGetLoadedSize: invalid file num %d", filenum);
+		return 0;
+	}
+#endif
 	return g_FileInfo[filenum].loadedsize;
 }
 
 u32 fileGetAllocationSize(s32 filenum)
 {
+#ifndef PLATFORM_N64
+	if (filenum < 1 || filenum >= NUM_FILES) {
+		sysLogPrintf(LOG_ERROR, "fileGetAllocationSize: invalid file num %d", filenum);
+		return 0;
+	}
+#endif
 	return g_FileInfo[filenum].allocsize;
 }
 
 void fileSetSize(s32 filenum, void *ptr, u32 size, bool reallocate)
 {
+#ifndef PLATFORM_N64
+	if (filenum < 1 || filenum >= NUM_FILES) {
+		sysLogPrintf(LOG_ERROR, "fileSetSize: invalid file num %d", filenum);
+		return;
+	}
+#endif
+
 	g_FileInfo[filenum].loadedsize = size;
 	g_FileInfo[filenum].allocsize = size;
 

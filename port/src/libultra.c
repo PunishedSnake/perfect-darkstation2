@@ -297,13 +297,13 @@ static inline void osEepromSetPath(void)
 	const char *extPath = sysArgGetString("--eeprom-file");
 	if (extPath && extPath[0]) {
 		if (extPath[0] == '$' || fsPathIsAbsolute(extPath) || fsPathIsCwdRelative(extPath)) {
-			strncpy(eepromPath, extPath, FS_MAXPATH);
+			snprintf(eepromPath, sizeof(eepromPath), "%s", extPath);
 		} else {
 			// just a filename, look for it in the save dir
-			snprintf(eepromPath, FS_MAXPATH, "$S/%s", extPath);
+			snprintf(eepromPath, sizeof(eepromPath), "$S/%s", extPath);
 		}
 	} else {
-		strncpy(eepromPath, EEPROM_PATH, FS_MAXPATH);
+		snprintf(eepromPath, sizeof(eepromPath), "%s", EEPROM_PATH);
 	}
 }
 
@@ -313,8 +313,14 @@ static inline void osEeepromLoad(const char *fname)
 		eepromLoaded = 1;
 		FILE *fp = fsFileOpenRead(fname);
 		if (fp) {
-			fread(eeprom, 1, EEPROM_SIZE, fp);
-			fsFileFree(fp);
+			const size_t readSize = fread(eeprom, 1, EEPROM_SIZE, fp);
+			const s32 readOk = !ferror(fp);
+			const s32 closeOk = fclose(fp) == 0;
+			if (readSize != EEPROM_SIZE || !readOk || !closeOk) {
+				sysLogPrintf(LOG_WARNING,
+					"EEPROM read was incomplete (%u/%u bytes) from `%s`",
+					(u32)readSize, (u32)EEPROM_SIZE, fsFullPath(fname));
+			}
 		} else {
 			sysLogPrintf(LOG_NOTE, "could not read EEPROM from `%s`: %s", fsFullPath(fname), strerror(errno));
 		}
@@ -325,8 +331,14 @@ static inline void osEeepromSave(const char *fname)
 {
 	FILE* fp = fsFileOpenWrite(fname);
 	if (fp) {
-		fwrite(eeprom, 1, EEPROM_SIZE, fp);
-		fsFileFree(fp);
+		const size_t writeSize = fwrite(eeprom, 1, EEPROM_SIZE, fp);
+		const s32 writeOk = !ferror(fp) && fflush(fp) == 0;
+		const s32 closeOk = fclose(fp) == 0;
+		if (writeSize != EEPROM_SIZE || !writeOk || !closeOk) {
+			sysLogPrintf(LOG_ERROR,
+				"could not completely save EEPROM (%u/%u bytes) to `%s`",
+				(u32)writeSize, (u32)EEPROM_SIZE, fsFullPath(fname));
+		}
 	} else {
 		sysLogPrintf(LOG_ERROR, "could not save EEPROM to `%s`: %s", fsFullPath(fname), strerror(errno));
 	}
@@ -339,6 +351,13 @@ s32 osEepromProbe(OSMesgQueue *mq)
 
 s32 osEepromLongRead(OSMesgQueue *mq, u8 address, u8 *buffer, int nbytes)
 {
+	if (!buffer || nbytes < 0 || (u32)address * 8u > EEPROM_SIZE ||
+		(u32)nbytes > EEPROM_SIZE - (u32)address * 8u) {
+		sysLogPrintf(LOG_ERROR,
+			"invalid EEPROM read address=%u length=%d", address, nbytes);
+		return -1;
+	}
+
 	if (!eepromPath[0]) {
 		osEepromSetPath();
 	}
@@ -352,6 +371,13 @@ s32 osEepromLongRead(OSMesgQueue *mq, u8 address, u8 *buffer, int nbytes)
 
 s32 osEepromLongWrite(OSMesgQueue *mq, u8 address, u8 *buffer, int nbytes)
 {
+	if (!buffer || nbytes < 0 || (u32)address * 8u > EEPROM_SIZE ||
+		(u32)nbytes > EEPROM_SIZE - (u32)address * 8u) {
+		sysLogPrintf(LOG_ERROR,
+			"invalid EEPROM write address=%u length=%d", address, nbytes);
+		return -1;
+	}
+
 	if (!eepromPath[0]) {
 		osEepromSetPath();
 	}

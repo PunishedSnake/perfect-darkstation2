@@ -64,6 +64,10 @@ s32 fsPathIsAbsolute(const char *path)
 
 s32 fsPathIsCwdRelative(const char *path)
 {
+	if (!path) {
+		return false;
+	}
+
 	// ., .., ./, ../
 	return (path[0] == '.' && (path[1] == '.' || path[1] == '/' || path[1] == '\\' || path[1] == '\0'));
 }
@@ -71,6 +75,10 @@ s32 fsPathIsCwdRelative(const char *path)
 const char *fsFullPath(const char *relPath)
 {
 	static char pathBuf[FS_MAXPATH + 1];
+
+	if (!relPath) {
+		return "";
+	}
 
 	if (relPath[0] == '$') {
 		// expandable placeholder $X; will be replaced with the corresponding path, if any
@@ -84,10 +92,8 @@ const char *fsFullPath(const char *relPath)
 			default: break;
 		}
 		if (expStr) {
-			const u32 len = strlen(expStr);
-			if (len > 0) {
-				memcpy(pathBuf, expStr, len);
-				strncpy(pathBuf + len, relPath + 2, FS_MAXPATH - len);
+			if (expStr[0]) {
+				snprintf(pathBuf, sizeof(pathBuf), "%s%s", expStr, relPath + 2);
 				return pathBuf;
 			}
 		}
@@ -100,13 +106,13 @@ const char *fsFullPath(const char *relPath)
 
 	// path relative to mod or base dir; this will be a read request, so check where the file actually is
 	if (modDir[0]) {
-		snprintf(pathBuf, FS_MAXPATH, "%s/%s", modDir, relPath);
+		snprintf(pathBuf, sizeof(pathBuf), "%s/%s", modDir, relPath);
 		if (fsFileSize(pathBuf) >= 0) {
 			return pathBuf;
 		}
 	}
 	// fall back to basedir
-	snprintf(pathBuf, FS_MAXPATH, "%s/%s", baseDir, relPath);
+	snprintf(pathBuf, sizeof(pathBuf), "%s/%s", baseDir, relPath);
 	return pathBuf;
 }
 
@@ -140,7 +146,7 @@ s32 fsInit(void)
 		}
 #endif
 	}
-	strncpy(baseDir, fsFullPath(path), FS_MAXPATH);
+	snprintf(baseDir, sizeof(baseDir), "%s", fsFullPath(path));
 
 	// get path to mod dir and expand it if needed
 	// mod directory is overlaid on top of base directory
@@ -149,7 +155,7 @@ s32 fsInit(void)
 		if (fsPathIsAbsolute(path) || fsPathIsCwdRelative(path) || path[0] == '$') {
 			// path is explicit; check as-is
 			if (fsFileSize(path) >= 0) {
-				strncpy(modDir, fsFullPath(path), FS_MAXPATH);
+				snprintf(modDir, sizeof(modDir), "%s", fsFullPath(path));
 			}
 		} else {
 			// path is relative to workdir; try to find it
@@ -157,7 +163,7 @@ s32 fsInit(void)
 			for (s32 i = 0; i < 2 + (portable != 0); ++i) {
 				char *tmp = strFmt("%s/%s", priority[i], path);
 				if (fsFileSize(tmp) >= 0) {
-					strncpy(modDir, fsFullPath(tmp), FS_MAXPATH);
+					snprintf(modDir, sizeof(modDir), "%s", fsFullPath(tmp));
 					break;
 				}
 			}
@@ -197,7 +203,7 @@ s32 fsInit(void)
 #endif
 	}
 
-	strncpy(saveDir, fsFullPath(path), FS_MAXPATH);
+	snprintf(saveDir, sizeof(saveDir), "%s", fsFullPath(path));
 
 	if (modDir[0]) {
 		sysLogPrintf(LOG_NOTE, " mod dir: %s", modDir);
@@ -215,6 +221,10 @@ const char *fsGetModDir(void)
 
 s32 fsFileLoadTo(const char *name, void *dst, u32 dstSize)
 {
+	if (!name || !dst) {
+		return -1;
+	}
+
 	const char *fullName = fsFullPath(name);
 
 	FILE *f = fopen(fullName, "rb");
@@ -222,9 +232,19 @@ s32 fsFileLoadTo(const char *name, void *dst, u32 dstSize)
 		return -1;
 	}
 
-	fseek(f, 0, SEEK_END);
-	const s32 size = ftell(f);
-	fseek(f, 0, SEEK_SET);
+	if (fseek(f, 0, SEEK_END) != 0) {
+		sysLogPrintf(LOG_ERROR, "fsFileLoadTo: could not seek to end: %s", fullName);
+		fclose(f);
+		return -1;
+	}
+
+	const long fileSize = ftell(f);
+	if (fileSize < 0 || fileSize > INT_MAX || fseek(f, 0, SEEK_SET) != 0) {
+		sysLogPrintf(LOG_ERROR, "fsFileLoadTo: invalid file size or rewind: %s", fullName);
+		fclose(f);
+		return -1;
+	}
+	const s32 size = (s32)fileSize;
 
 	if (size < 0) {
 		sysLogPrintf(LOG_ERROR, "fsFileLoadTo: empty file or invalid size (%d): %s", size, fullName);
@@ -238,14 +258,29 @@ s32 fsFileLoadTo(const char *name, void *dst, u32 dstSize)
 		return -1;
 	}
 
-	fread(dst, 1, size, f);
-	fclose(f);
+	const size_t readSize = fread(dst, 1, (size_t)size, f);
+	const s32 closeResult = fclose(f);
+
+	if (readSize != (size_t)size || closeResult != 0) {
+		sysLogPrintf(LOG_ERROR,
+			"fsFileLoadTo: incomplete read (%u/%u) or close failure: %s",
+			(u32)readSize, (u32)size, fullName);
+		return -1;
+	}
 
 	return size;
 }
 
 void *fsFileLoad(const char *name, u32 *outSize)
 {
+	if (outSize) {
+		*outSize = 0;
+	}
+
+	if (!name) {
+		return NULL;
+	}
+
 	const char *fullName = fsFullPath(name);
 
 	FILE *f = fopen(fullName, "rb");
@@ -254,15 +289,19 @@ void *fsFileLoad(const char *name, u32 *outSize)
 		return NULL;
 	}
 
-	fseek(f, 0, SEEK_END);
-	const s32 size = ftell(f);
-	fseek(f, 0, SEEK_SET);
-
-	if (size < 0) {
-		sysLogPrintf(LOG_ERROR, "fsFileLoad: empty file or invalid size (%d): %s", size, fullName);
+	if (fseek(f, 0, SEEK_END) != 0) {
+		sysLogPrintf(LOG_ERROR, "fsFileLoad: could not seek to end: %s", fullName);
 		fclose(f);
 		return NULL;
 	}
+
+	const long fileSize = ftell(f);
+	if (fileSize < 0 || fileSize > INT_MAX || fseek(f, 0, SEEK_SET) != 0) {
+		sysLogPrintf(LOG_ERROR, "fsFileLoad: invalid file size or rewind: %s", fullName);
+		fclose(f);
+		return NULL;
+	}
+	const s32 size = (s32)fileSize;
 
 	void *buf = NULL;
 	if (size) {
@@ -272,10 +311,23 @@ void *fsFileLoad(const char *name, u32 *outSize)
 			fclose(f);
 			return NULL;
 		}
-		fread(buf, 1, size, f);
+
+		const size_t readSize = fread(buf, 1, (size_t)size, f);
+		if (readSize != (size_t)size) {
+			sysLogPrintf(LOG_ERROR,
+				"fsFileLoad: incomplete read (%u/%u): %s",
+				(u32)readSize, (u32)size, fullName);
+			sysMemFree(buf);
+			fclose(f);
+			return NULL;
+		}
 	}
 
-	fclose(f);
+	if (fclose(f) != 0) {
+		sysLogPrintf(LOG_ERROR, "fsFileLoad: close failed: %s", fullName);
+		sysMemFree(buf);
+		return NULL;
+	}
 
 	if (outSize) {
 		*outSize = size;
@@ -286,32 +338,45 @@ void *fsFileLoad(const char *name, u32 *outSize)
 
 s32 fsFileSize(const char *name)
 {
+	if (!name) {
+		return -1;
+	}
+
 	const char *fullName = fsFullPath(name);
 	struct stat st;
 	if (stat(fullName, &st) < 0) {
 		return -1;
+	} else if (st.st_size < 0 || st.st_size > INT_MAX) {
+		sysLogPrintf(LOG_ERROR, "fsFileSize: unsupported size for %s", fullName);
+		return -1;
 	} else {
-		return st.st_size;
+		return (s32)st.st_size;
 	}
 }
 
 FILE *fsFileOpenWrite(const char *name)
 {
-	return fopen(fsFullPath(name), "wb");
+	return name ? fopen(fsFullPath(name), "wb") : NULL;
 }
 
 FILE *fsFileOpenRead(const char *name)
 {
-	return fopen(fsFullPath(name), "rb");
+	return name ? fopen(fsFullPath(name), "rb") : NULL;
 }
 
 void fsFileFree(FILE *f)
 {
-	fclose(f);
+	if (f) {
+		fclose(f);
+	}
 }
 
 s32 fsCreateDir(const char *path)
 {
+	if (!path) {
+		return -1;
+	}
+
 #ifdef PLATFORM_WIN32
 	return _mkdir(fsFullPath(path));
 #else

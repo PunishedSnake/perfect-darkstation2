@@ -260,6 +260,14 @@ list(APPEND LIBS "${EXTRA_LIBRARIES}")
 file(GLOB_RECURSE SRC_PORT "${CMAKE_SOURCE_DIR}/port/*.c")
 file(GLOB_RECURSE SRC_PORT_CXX "${CMAKE_SOURCE_DIR}/port/*.cpp")
 
+# Platform ports and standalone test programs own their own build graphs.  A
+# recursive desktop glob must not pull in PS2SDK-only sources or test main()
+# functions as those directories grow.
+list(FILTER SRC_PORT EXCLUDE REGEX "/port/ps2/")
+list(FILTER SRC_PORT_CXX EXCLUDE REGEX "/port/ps2/")
+list(FILTER SRC_PORT EXCLUDE REGEX "/port/fast3d/tests/")
+list(FILTER SRC_PORT_CXX EXCLUDE REGEX "/port/fast3d/tests/")
+
 file(GLOB_RECURSE SRC_GAME "${CMAKE_SOURCE_DIR}/src/game/*.c")
 
 file(GLOB SRC_LIB_MP3 "${CMAKE_SOURCE_DIR}/src/lib/mp3/*.c")

@@ -26,3 +26,15 @@ tools/mkrom/mkrom
 CppProperties.json
 .idea
 cmake-build-debug
+
+# Local PS2 bring-up outputs and runtime state
+/artifacts/
+/build-*/
+/pd-ps2*.elf
+/pdps2*.log
+/pd.ini
+/eeprom.bin
+
+# Interrupted asset-generator/editor atomic writes. Canonical inputs end in
+# exactly .json; suffix-bearing dotfiles are not source assets.
+/src/assets/*/*/.*.json.*

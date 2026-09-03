@@ -2,6 +2,11 @@
 
 Status: active design record for the `ps2` branch.
 
+Current bring-up status, build instructions and known limitations are tracked
+in [the PS2 README](../port/ps2/README.md). For end-to-end control flow and the
+file/dead-code review, see [the startup chain](PS2_STARTUP_CHAIN.md) and
+[the code/file audit](PS2_CODE_AND_FILE_AUDIT.md).
+
 This document records the intended PS2 renderer/dataflow architecture so that implementation decisions survive individual development sessions. It is deliberately stricter than a wishlist: every substantial optimization should be tied to an observed bottleneck, a documented hardware/API contract, or a real-hardware experiment.
 
 ## 1. Source-of-truth policy

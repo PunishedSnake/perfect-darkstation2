@@ -1,167 +1,178 @@
-# Perfect DarkStation 2: PS2 bootstrap
+# Perfect DarkStation 2
 
-This directory contains the PlayStation 2 bring-up path for the `ps2` branch.
+This directory owns the PlayStation 2 port on the `ps2` branch. The target is a
+retail PS2 using the current PS2DEV/PS2SDK toolchain. No ROM or extracted game
+asset is included in source control or CI artifacts.
 
-Upstream baseline at bootstrap 0:
+## Current status
 
-- repository lineage: `perfect-dark-pc-port/perfect_dark`
-- upstream branch: `port`
-- baseline commit: `32a1cb9f268dd3ac73016801025c6bbbfa20130f`
-- target: retail PlayStation 2 using current PS2DEV/PS2SDK
+`pd_ps2_game` is a complete EE link frontier, not a renderer-only demo. It
+contains the portable Perfect Dark runtime, ROM-backed assets, DualShock 2
+input, SPU2 output, Fast3D command translation, the native GS backend and VU1
+microprograms.
 
-## Status
+Real hardware has confirmed:
 
-Bootstrap 0 is intentionally small. It proves only the platform/toolchain entry point and the existing `system.h` contract.
+- system, filesystem and logger startup;
+- bounded loading of the NTSC-final ROM data segment;
+- GS presentation and the diagnostic renderer;
+- DualShock 2 discovery and corrected stick extrema;
+- the Perfect Dark legal/product-identification screen, including the
+  "N64 Expansion Pak detected" status;
+- EEPROM creation through the portable libultra interface.
 
-It does **not** prove that the full game builds, renders, fits in memory, or performs acceptably on PS2.
+The first normal 3D title frame after that legal screen has not yet been
+confirmed. The current audit hardened the title-model load path and added
+checkpoints around the Rare-logo model, but those changes still require a real
+hardware run. This is not a playable release.
 
-### Confirmed from current source
+## Required files
 
-- Current PS2SDK provides an EE CMake toolchain at `samples/ps2dev.cmake`.
-- That toolchain selects the `mips64r5900el-ps2-elf` C/C++ compilers and defines `PLATFORM_PS2`.
-- Current PS2SDK exposes `GetTimerSystemTime()` and `TimerBusClock2USec()` for EE timing.
-- The current Perfect Dark port exposes platform memory, timing, logging, sleep and path services through `port/include/system.h`.
+Put the following in one writable directory on the launch device:
 
-### Current implementation in this bootstrap
+```text
+pd-ps2-game.elf
+pd.ntsc-final.z64
+```
 
-- `malloc/calloc/realloc/free` are used only to satisfy the existing platform contract during bring-up.
-- The PS2 ELF/device directory is used as the temporary home/config fallback.
-- `DelayThread()` implements the sleep contract.
-- `sysCpuRelax()` remains a spin hint instead of silently changing scheduling semantics.
-- Build optimization is forced to `-Og` for this target. The current upstream port already documents unresolved `-O2` issues, while current PS2SDK injects `-O2` by default.
-- Project-owned PATH3/GS command submission, native texture residency, indexed
-  formats, multipass combiner graphs and native framebuffer presentation are
-  active behind the shared Fast3D frontend.
-- An opt-in VIF1/VU1 diagnostic now submits complete GS-ready color and
-  textured A+D packets through VU1 XGKICK/PATH1 while preserving the PATH3
-  renderer as the automatic fallback and physical-console A/B baseline.
-- The same diagnostic build routes ordinary one-pass textured Fast3D draws
-  through a separate VU1 geometry microprogram: perspective divide, viewport
-  and depth mapping, STQ and PACKED XYZ2/XYZF2 output. Fixed NOP-padded state
-  slots and disjoint input/output banks are host-tested. CPU fallback vertices
-  are still prepared eagerly; physical-console transform A/B remains pending.
-- DualShock 2 input implements the portable controller contract through
-  ROM-resident PADMAN modules.
-- ROM data is read through a bounded file-backed source instead of retaining a
-  32 MiB image in EE RAM. Ordinary assets are loaded lazily and released at the
-  existing file lifetime boundary.
-- The PS2 audio backend embeds `audsrv.irx`, loads ROM `LIBSD`, and streams the
-  game's mixed 22050 Hz stereo PCM16 frames through an ownership-explicit,
-  bounded IOP queue.
+The ROM must be a legally obtained NTSC-final / US v1.1 big-endian `.z64`
+image. Its MD5 is `e03b088b6ac9e0080440efed07c1e40f`.
 
-### Inference / not yet proven
+On first start the game also creates these files beside the ELF:
 
-Loader-specific `argv[0]` behaviour varies between launch paths. The backend handles common device-prefixed forms such as `host:` and `mass:`, but this must be checked under the loaders we actually support.
+```text
+pd.ini       runtime configuration
+eeprom.bin   emulated 16 Kbit cartridge EEPROM, exactly 2048 bytes
+pdps2.log    durable bring-up log
+```
+
+The ELF directory is the default base and save directory because PS2 launchers
+do not provide a reliable desktop-style working directory. Common PS2 device
+prefixes such as `mass:`, `host:`, `mc0:` and `pfs0:` are treated as absolute.
 
 ## Build
 
-With a current PS2DEV/PS2SDK environment:
+With `PS2DEV`, `PS2SDK` and `GSKIT` exported:
 
 ```sh
-cmake -S port/ps2 -B build-ps2 \
-  -DCMAKE_TOOLCHAIN_FILE="$PS2SDK/samples/ps2dev.cmake"
-cmake --build build-ps2 -j
+cmake -S port/ps2 -B build-ps2 -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE="$PWD/port/ps2/ps2dev-toolchain.cmake"
+cmake --build build-ps2 --target pd_ps2_game -j2
 ```
 
-If `PS2SDK` is exported, the subproject can also locate the current toolchain itself:
+Outputs:
+
+```text
+build-ps2/pd-ps2-game.elf
+build-ps2/pd-ps2-game.map
+```
+
+The map file is a required build artifact. It records actual archive members,
+section contributions and discarded sections after `--gc-sections`; source
+presence in CMake alone is not proof that code survives the final link.
+
+The default target builds the standalone diagnostic:
 
 ```sh
-cmake -S port/ps2 -B build-ps2
-cmake --build build-ps2 -j
+cmake --build build-ps2 -j2
+# build-ps2/pd-ps2-bootstrap.elf
 ```
 
-Expected output:
+Optional hardware diagnostics use separate build directories:
+
+```sh
+cmake -S port/ps2 -B build-ps2-alpha-diag -G Ninja \
+  -DPD_PS2_ALPHA_TRILERP_DIAGNOSTIC=ON
+cmake --build build-ps2-alpha-diag -j2
+
+cmake -S port/ps2 -B build-ps2-vu1-diag -G Ninja \
+  -DPD_PS2_VU1_COLOR_DIAGNOSTIC=ON
+cmake --build build-ps2-vu1-diag -j2
+```
+
+CI builds and inspects all three configurations, runs backend-independent host
+tests, rejects undefined symbols in the game ELF, and publishes the game ELF
+together with its linker map.
+
+## Runtime options useful during bring-up
+
+| Option | Effect |
+| --- | --- |
+| `--rom-file <path>` | Override the ROM path. |
+| `--eeprom-file <path>` | Override the EEPROM path. |
+| `--basedir <path>` | Override the data root. |
+| `--savedir <path>` | Override config/save output. |
+| `--boot-stage <number>` | Start at a selected stage number. |
+| `--skip-intro` | Start at CI training instead of the title sequence. |
+| `--no-sound` | Disable the game audio heap and output. |
+| `--no-log` | Disable the file log for timing experiments. |
+| `--profile <number>` | Select a player profile where supported. |
+
+Input or SPU2 startup failure is non-fatal. A failed SPU2 backend automatically
+disables the game audio heap. ROM, video, required asset, and required-memory
+failures are fatal.
+
+On PS2 a fatal error writes and closes `pdps2.log`, then deliberately holds the
+EE instead of returning to the OSD. Reset the console manually after copying the
+log. This makes a controlled failure distinguishable from an uncontrolled
+exception or hardware reset.
+
+## Renderer boundary
+
+The active game path is:
 
 ```text
-build-ps2/pd-ps2-bootstrap.elf
+Perfect Dark GBI -> portable Fast3D -> PS2 combiner/pass planner
+                 -> VIF1/VU1 PATH1 where supported
+                 -> PATH3 CPU fallback otherwise
+                 -> GS framebuffer -> VBlank presentation
 ```
 
-For the first VIF1/VU1/PATH1 hardware artifact and its validation procedure,
-see [VU1_COLOR_DIAGNOSTIC.md](VU1_COLOR_DIAGNOSTIC.md).
+Implemented now:
 
-Expected runtime output:
+- color and textured triangles;
+- depth, scissor, viewport, fog, alpha test and texture alpha state;
+- N64 TMEM load semantics and texture conversion;
+- native VRAM residency and eviction;
+- one-pass and selected multipass combiner plans;
+- VU1 textured transform and GS-ready packet transport;
+- renderer counters and controller-triggered durable snapshots.
 
-```text
-Perfect DarkStation 2 bootstrap
-platform: r5900-ps2
-system backend: ok
-heap smoke: ok
-bootstrap completed in ... us
-```
+Known incomplete areas:
 
-Run it in PCSX2 for basic correctness/inspection, then validate it on real hardware. Emulator timing is not accepted as a performance result.
+- unsupported combiner recipes are logged and dropped;
+- offscreen framebuffer effects and framebuffer copies are not implemented;
+- mipmap generation and sampling are not implemented;
+- runtime display-mode changes are not implemented;
+- per-command display-list/Vtx arena overflow guards are still missing;
+- visual fidelity of text, blend equations and all title/game effects needs
+  systematic real-hardware validation.
 
-## What to record for the first hardware run
+See [the native renderer architecture](../../docs/PS2_NATIVE_RENDERER_ARCHITECTURE.md)
+for design details and [the startup chain](../../docs/PS2_STARTUP_CHAIN.md) for
+the complete execution path.
 
-At minimum:
+## Hardware test handoff
 
-```text
-SCPH / hardware revision
-PS2SDK commit
-toolchain version
-build flags
-loader / launch path
-active IRX modules
-ELF size
-runtime output
-```
+For each run record:
 
-No performance claim is attached to bootstrap 0.
+- ELF SHA-256 and embedded commit shown in `pdps2.log`;
+- console model, launch device and loader;
+- exact last durable `runtime:` or `title:` checkpoint;
+- whether the console held, returned to OSD, or reset;
+- a photograph for visual corruption;
+- `pdps2.log`, `pd.ini`, and `eeprom.bin` when created;
+- Triangle/Select renderer snapshots when the frame loop is alive.
 
-## Port order
+Emulators are useful for functional inspection. Timing, DMA ordering, VIF/VU
+hazards, GS FIFO behavior and device I/O must be accepted only after testing on
+real hardware.
 
-The project intentionally follows the least-risk path first:
+## More documentation
 
-1. platform/toolchain bootstrap;
-2. filesystem and ROM access model;
-3. controller input through the current PS2SDK pad stack;
-4. audio correctness baseline;
-5. PS2 `GfxWindowManagerAPI` semantics;
-6. PS2 `GfxRenderingAPI` compile stub;
-7. Fast3D command translation into a minimal GS backend;
-8. first real triangles and title-screen path;
-9. profiling on real hardware;
-10. only then introduce data-layout, batching, DMA/VIF/VU or hand-tuned kernels where measurements justify them.
-
-## Memory status
-
-The desktop port still retains the complete ROM, but the PS2 path no longer
-does. A file-backed `RomSource` performs bounded reads and streaming RZIP
-decompression. Permanent segments receive exact-sized allocations; ordinary
-assets keep compact extent metadata and become resident only while used.
-
-The game heap now has an explicit fixed-memory policy. On PS2 the platform
-measures the current libc tail after persistent subsystem startup, preserves a
-4 MiB platform/streaming reserve and bounds the requested `memp` arena instead
-of blindly asking `calloc` for the configured size. Diagnostic logs expose the
-physical/linker/libc addresses and resulting plan without reserving the arena.
-Real hardware at build `aa007d1b72cc` reported a 27,864 KiB free libc tail after
-renderer startup and accepted the requested 16 MiB game arena while preserving
-the 4 MiB reserve. The remaining memory work is peak lazy-asset measurement in
-the real game loop.
-
-`pd_ps2_game` is the full-runtime link frontier. It links the real game entry
-point and complete game/core object sets against the PS2 filesystem, ROM,
-controller, SPU2 and native renderer services. Its default data and save root is
-the ELF directory, and PS2 device prefixes are absolute paths. The two retired
-bring-up scenes which bypassed this maintained path have been removed. CI run
-33643145244 linked the first `pd-ps2-game.elf` with zero undefined symbols and
-3,528,478 bytes of text, data and BSS.
-
-## Performance rules for this port
-
-Before changing a hot path, identify the actual bottleneck. Prefer, in order:
-
-1. remove work;
-2. do it less often;
-3. move less data;
-4. improve representation/locality;
-5. batch;
-6. remove unnecessary copies and dynamic allocations;
-7. overlap independent work;
-8. use specialised PS2 hardware where the workload fits;
-9. hand-specialise only the measured hot kernel.
-
-For every major data set, track producer, consumer, lifetime, representation, alignment requirement, transport, batch size and ownership. Cache-line alignment, allocator alignment and DMA/device alignment are separate contracts.
-
-Once frame-time measurement starts, report p50, p95, p99, max and deadline misses, not just an average FPS number.
+- [Startup and first-frame chain](../../docs/PS2_STARTUP_CHAIN.md)
+- [Code and file audit](../../docs/PS2_CODE_AND_FILE_AUDIT.md)
+- [Native renderer architecture](../../docs/PS2_NATIVE_RENDERER_ARCHITECTURE.md)
+- [N64 RDP/TMEM semantics](../../docs/N64_RDP_TMEM_SEMANTICS.md)
+- [Diagnostic test procedure](PROTOTYPE_TEST.md)
+- [VU1 diagnostic](VU1_COLOR_DIAGNOSTIC.md)

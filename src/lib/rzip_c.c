@@ -7,13 +7,13 @@
 
 void *var80091558; // g_RzipUnused
 
-bool rzipIs1172(void *buffer)
+s32 rzipIs1172(void *buffer)
 {
 	const u8* src = buffer;
 	return (src[0] == 0x11 && src[1] == 0x72);
 }
 
-bool rzipIs1173(void *buffer)
+s32 rzipIs1173(void *buffer)
 {
 	const u8* src = buffer;
 	return (src[0] == 0x11 && src[1] == 0x73);
@@ -51,11 +51,80 @@ static inline s32 rzipInflate1173(z_stream *strm, u8 *src, void *dst, u32 dstLen
 	return strm->total_out;
 }
 
+/**
+ * Inflate a Rare 1172/1173 stream without allowing zlib to read or write past
+ * caller-owned buffers. The original N64 API does not carry either bound, so
+ * keep rzipInflate for matching callers and use this entry point for portable
+ * file-backed data whose exact compressed extent is known.
+ */
+s32 rzipInflateSized(void *srcp, u32 srcLen, void *dst, u32 dstLen, void *scratch)
+{
+	u8 *src = srcp;
+	u32 headerLen;
+	u32 expectedLen;
+	z_stream strm = { 0 };
+	s32 zret;
+
+	(void)scratch;
+
+	if (!src || !dst || srcLen < 2 || dstLen == 0) {
+		return 0;
+	}
+
+	if (rzipIs1173(src)) {
+		if (srcLen < 5) {
+			return 0;
+		}
+
+		headerLen = 5;
+		expectedLen = ((u32)src[2] << 16) | ((u32)src[3] << 8) | (u32)src[4];
+
+		if (expectedLen == 0 || expectedLen > dstLen) {
+			return 0;
+		}
+	} else if (rzipIs1172(src)) {
+		headerLen = 2;
+		expectedLen = dstLen;
+	} else {
+		return 0;
+	}
+
+	if (srcLen <= headerLen) {
+		return 0;
+	}
+
+	zret = inflateInit2(&strm, -15);
+
+	if (zret != Z_OK) {
+		return 0;
+	}
+
+	strm.next_in = src + headerLen;
+	strm.avail_in = srcLen - headerLen;
+	strm.next_out = dst;
+	strm.avail_out = expectedLen;
+
+	zret = inflate(&strm, Z_FINISH);
+
+	if (zret != Z_STREAM_END || strm.total_out == 0 ||
+		(rzipIs1173(src) && strm.total_out != expectedLen)) {
+		inflateEnd(&strm);
+		return 0;
+	}
+
+	var80091558 = strm.next_in;
+	expectedLen = strm.total_out;
+	inflateEnd(&strm);
+
+	return expectedLen;
+}
+
 s32 rzipInflate(void *srcp, void *dst, void *scratch)
 {
 	s32 ret = 0;
 	u8 *src = srcp;
 	z_stream strm = { 0 };
+	(void)scratch;
 
 	ret = inflateInit2(&strm, -15);
 	if (ret != Z_OK) {

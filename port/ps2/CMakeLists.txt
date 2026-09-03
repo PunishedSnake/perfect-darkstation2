@@ -577,7 +577,11 @@ target_compile_definitions(pd_ps2_game PRIVATE
   PERFECT_DARK_PS2_VU1_COLOR_BATCH=1
 )
 target_link_directories(pd_ps2_game PRIVATE "${GSKIT}/lib")
-target_link_options(pd_ps2_game PRIVATE -Wl,--gc-sections)
+set(PD_PS2_GAME_LINK_MAP "${CMAKE_CURRENT_BINARY_DIR}/pd-ps2-game.map")
+target_link_options(pd_ps2_game PRIVATE
+  -Wl,--gc-sections
+  "-Wl,-Map,${PD_PS2_GAME_LINK_MAP}"
+)
 target_link_libraries(pd_ps2_game PRIVATE
   gskit dmakit padx z audsrv patches kernel m)
 set_target_properties(pd_ps2_game PROPERTIES

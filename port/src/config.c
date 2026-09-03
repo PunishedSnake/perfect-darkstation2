@@ -53,6 +53,10 @@ static inline f32 configClampFloat(f32 val, f32 min, f32 max)
 
 static inline struct configentry *configFindEntry(const char *key)
 {
+	if (!key) {
+		return NULL;
+	}
+
 	for (s32 i = 0; i < numSettings; ++i) {
 		if (!strncasecmp(settings[i].key, key, CONFIG_MAX_KEYNAME)) {
 			return &settings[i];
@@ -63,9 +67,13 @@ static inline struct configentry *configFindEntry(const char *key)
 
 static inline struct configentry *configAddEntry(const char *key)
 {
+	if (!key || !key[0]) {
+		return NULL;
+	}
+
 	if (numSettings < CONFIG_MAX_SETTINGS) {
 		struct configentry *cfg = &settings[numSettings++];
-		snprintf(cfg->key, CONFIG_MAX_KEYNAME, "%s", key);
+		snprintf(cfg->key, sizeof(cfg->key), "%s", key);
 		const char *delim = strrchr(cfg->key, '.');
 		cfg->seclen = delim ? (delim - cfg->key) : 0;
 		return cfg;
@@ -79,6 +87,10 @@ static inline struct configentry *configAddEntry(const char *key)
 
 static inline struct configentry *configFindOrAddEntry(const char *key)
 {
+	if (!key) {
+		return NULL;
+	}
+
 	for (s32 i = 0; i < numSettings; ++i) {
 		if (!strncasecmp(settings[i].key, key, CONFIG_MAX_KEYNAME)) {
 			return &settings[i];
@@ -103,6 +115,10 @@ static inline const char *configGetSection(char *sec, const struct configentry *
 
 void configRegisterInt(const char *key, s32 *var, s32 min, s32 max)
 {
+	if (!var) {
+		return;
+	}
+
 	struct configentry *cfg = configFindOrAddEntry(key);
 	if (cfg) {
 		cfg->type = CFG_S32;
@@ -114,6 +130,10 @@ void configRegisterInt(const char *key, s32 *var, s32 min, s32 max)
 
 void configRegisterUInt(const char* key, u32* var, u32 min, u32 max)
 {
+	if (!var) {
+		return;
+	}
+
 	struct configentry* cfg = configFindOrAddEntry(key);
 	if (cfg) {
 		cfg->type = CFG_U32;
@@ -125,6 +145,10 @@ void configRegisterUInt(const char* key, u32* var, u32 min, u32 max)
 
 void configRegisterFloat(const char *key, f32 *var, f32 min, f32 max)
 {
+	if (!var) {
+		return;
+	}
+
 	struct configentry *cfg = configFindOrAddEntry(key);
 	if (cfg) {
 		cfg->type = CFG_F32;
@@ -136,6 +160,12 @@ void configRegisterFloat(const char *key, f32 *var, f32 min, f32 max)
 
 void configRegisterString(const char *key, char *var, u32 maxstr)
 {
+	if (!var || maxstr == 0) {
+		sysLogPrintf(LOG_ERROR, "configRegisterString: invalid buffer for %s",
+			key ? key : "(null)");
+		return;
+	}
+
 	struct configentry *cfg = configFindOrAddEntry(key);
 	if (cfg) {
 		cfg->type = CFG_STR;
@@ -146,6 +176,10 @@ void configRegisterString(const char *key, char *var, u32 maxstr)
 
 static void configSetFromString(const char *key, const char *val)
 {
+	if (!key || !val) {
+		return;
+	}
+
 	struct configentry *cfg = configFindEntry(key);
 	if (!cfg) return;
 
@@ -175,7 +209,10 @@ static void configSetFromString(const char *key, const char *val)
 			*(u32*)cfg->ptr = tmp_u32;
 			break;
 		case CFG_STR:
-			strncpy(cfg->ptr, val, cfg->max_str ? cfg->max_str - 1 : 4096);
+			if (cfg->ptr && cfg->max_str) {
+				strncpy(cfg->ptr, val, cfg->max_str - 1);
+				((char *)cfg->ptr)[cfg->max_str - 1] = '\0';
+			}
 			break;
 		default:
 			break;
@@ -220,6 +257,10 @@ s32 configSave(const char *fname)
 
 	char tmpSec[CONFIG_MAX_SECNAME + 1] = { 0 };
 	char curSec[CONFIG_MAX_SECNAME + 1] = { 0 };
+	if (numSettings == 0) {
+		return fclose(f) == 0;
+	}
+
 	configGetSection(curSec, &settings[0]);
 	fprintf(f, "[%s]\n", curSec);
 
@@ -228,13 +269,14 @@ s32 configSave(const char *fname)
 		configGetSection(tmpSec, cfg);
 		if (strncmp(curSec, tmpSec, CONFIG_MAX_SECNAME) != 0) {
 			fprintf(f, "\n[%s]\n", tmpSec);
-			strncpy(curSec, tmpSec, CONFIG_MAX_SECNAME);
+			snprintf(curSec, sizeof(curSec), "%s", tmpSec);
 		}
 		configSaveEntry(cfg, f);
 	}
 
-	fsFileFree(f);
-	return 1;
+	const s32 writeOk = !ferror(f) && fflush(f) == 0;
+	const s32 closeOk = fclose(f) == 0;
+	return writeOk && closeOk;
 }
 
 s32 configLoad(const char *fname)
@@ -249,8 +291,6 @@ s32 configLoad(const char *fname)
 	char token[UTIL_MAX_TOKEN + 1] = { 0 };
 	char lineBuf[2048] = { 0 };
 	char *line = lineBuf;
-	s32 lineLen = 0;
-
 	while (fgets(lineBuf, sizeof(lineBuf), f)) {
 		line = lineBuf;
 
@@ -264,6 +304,7 @@ s32 configLoad(const char *fname)
 				continue;
 			}
 			strncpy(curSec, token, CONFIG_MAX_SECNAME);
+			curSec[CONFIG_MAX_SECNAME] = '\0';
 			// eat ]
 			line = strParseToken(line, token, NULL);
 			if (token[0] != ']' || token[1] != '\0') {
@@ -271,7 +312,7 @@ s32 configLoad(const char *fname)
 			}
 		} else if (token[0]) {
 			// probably a key=value pair; append key name to section name
-			snprintf(keyBuf, sizeof(keyBuf) - 1, "%s.%s", curSec, token);
+			snprintf(keyBuf, sizeof(keyBuf), "%s.%s", curSec, token);
 			// eat =
 			line = strParseToken(line, token, NULL);
 			if (token[0] != '=' || token[1] != '\0') {
@@ -287,14 +328,18 @@ s32 configLoad(const char *fname)
 		}
 	}
 
-	fsFileFree(f);
+	const s32 readOk = !ferror(f);
+	const s32 closeOk = fclose(f) == 0;
 
-	return 1;
+	return readOk && closeOk;
 }
 
 void configInit(void)
 {
 	if (fsFileSize(CONFIG_PATH) > 0) {
-		configLoad(CONFIG_PATH);
+		if (!configLoad(CONFIG_PATH)) {
+			sysLogPrintf(LOG_WARNING, "Could not completely read configuration file %s",
+				CONFIG_PATH);
+		}
 	}
 }

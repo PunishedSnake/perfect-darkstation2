@@ -17,6 +17,7 @@
 #ifndef PLATFORM_N64
 #include "video.h"
 #include "platform.h"
+#include "system.h"
 #endif
 
 #define TO_U16_A(x) ((u16)(x))
@@ -220,6 +221,12 @@ void viReset(s32 stagenum)
 	}
 
 	ptr = mempAlloc(fbsize * sizeof(u16) + 0x40, MEMPOOL_STAGE);
+#ifndef PLATFORM_N64
+	if (!ptr) {
+		sysFatalError("Could not allocate %u bytes for the emulated VI buffers.",
+			fbsize * (u32)sizeof(u16) + 0x40u);
+	}
+#endif
 
 #ifdef PLATFORM_64BIT
 	ptr = (u8*)(((uintptr_t)ptr + 0x3f) & 0xffffffffffffffc0);

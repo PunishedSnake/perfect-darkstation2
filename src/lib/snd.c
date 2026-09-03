@@ -1488,6 +1488,11 @@ void sndInit(void)
 		// clear it and give it to the audio library
 		u32 len = REF_SEG _seqctlSegmentRomEnd - REF_SEG _seqctlSegmentRomStart;
 		u8 *ptr = mempAlloc(heaplen, MEMPOOL_PERMANENT);
+#ifndef PLATFORM_N64
+		if (!ptr) {
+			sysFatalError("Could not allocate %u bytes for the audio heap.", heaplen);
+		}
+#endif
 		s32 i;
 		u8 *heapstart = ptr;
 		u8 *end = heapstart + heaplen;
@@ -1503,6 +1508,11 @@ void sndInit(void)
 		// Allocate some space at the start of the heap for a string identifier.
 		// This might be used to determine if the heap has overflowed.
 		g_SndGuardStringPtr = alHeapAlloc(&g_SndHeap, 1, ALIGN16(sizeof(g_SndGuardString)));
+#ifndef PLATFORM_N64
+		if (!g_SndGuardStringPtr) {
+			sysFatalError("Audio heap exhausted while allocating its guard string.");
+		}
+#endif
 		strcpy(g_SndGuardStringPtr, g_SndGuardString);
 
 		// Load sfx.ctl
@@ -1511,6 +1521,11 @@ void sndInit(void)
 		// Load seq.ctl
 		var80095200 = 0xffffffff;
 		bankfile = alHeapAlloc(&g_SndHeap, 1, len);
+#ifndef PLATFORM_N64
+		if (!bankfile) {
+			sysFatalError("Audio heap exhausted while loading seqctl (%u bytes).", len);
+		}
+#endif
 		dmaExec(bankfile, (romptr_t) REF_SEG _seqctlSegmentRomStart, len);
 
 		// Load seq.tbl
@@ -1521,14 +1536,30 @@ void sndInit(void)
 		// enough space for the table and load it.
 		var80095204 = bankfile->bankArray[0];
 		g_SeqTable = alHeapDBAlloc(0, 0, &g_SndHeap, 1, 0x10);
+#ifndef PLATFORM_N64
+		if (!g_SeqTable) {
+			sysFatalError("Audio heap exhausted while reading the sequence table header.");
+		}
+#endif
 		dmaExec(g_SeqTable, (romptr_t) REF_SEG _sequencesSegmentRomStart, 0x10);
 
 		len = g_SeqTable->count * sizeof(struct seqtableentry) + 4;
 		g_SeqTable = alHeapDBAlloc(0, 0, &g_SndHeap, 1, len);
+#ifndef PLATFORM_N64
+		if (!g_SeqTable) {
+			sysFatalError("Audio heap exhausted while loading the sequence table (%u bytes).", len);
+		}
+#endif
 		dmaExec(g_SeqTable, (romptr_t) REF_SEG _sequencesSegmentRomStart, (len + 0xf) & ~0xf);
 
 		// Promote segment-relative offsets to ROM addresses
 		g_SeqRomAddrs = mempAlloc(g_SeqTable->count * sizeof(uintptr_t), MEMPOOL_PERMANENT);
+#ifndef PLATFORM_N64
+		if (!g_SeqRomAddrs) {
+			sysFatalError("Could not allocate the sequence address table (%u entries).",
+				g_SeqTable->count);
+		}
+#endif
 		
 		for (i = 0; i < g_SeqTable->count; i++) {
 			g_SeqRomAddrs[i] = g_SeqTable->entries[i].romaddr + (romptr_t) REF_SEG _sequencesSegmentRomStart;

@@ -16,6 +16,13 @@ To run the port, you must already have a Perfect Dark ROM, specifically one of t
   Technically supported, but requires a separate custom-built executable.  
   Called `PAL 8.7 final` on the boot screen.
 
+> **PlayStation 2 branch:** `ps2` contains the Perfect DarkStation 2 port. It
+> builds a real EE game ELF and has reached the legal/Expansion Pak startup
+> screens on retail hardware, but it is not playable yet. See the
+> [PS2 quick start](port/ps2/README.md),
+> [startup chain](docs/PS2_STARTUP_CHAIN.md), and
+> [code/file audit](docs/PS2_CODE_AND_FILE_AUDIT.md) for the exact frontier.
+
 ## Status
 
 The game is in a mostly functional state, with both singleplayer and split-screen multiplayer modes fully working.  
@@ -40,6 +47,9 @@ There are minor graphics- and gameplay-related issues, and possibly occasional c
 * Linux: i686, x86_64
 * MacOS: x86_64 (OS 10.9+), arm64 (OS 11.0+)
 * Nintendo Switch: arm64
+
+The PlayStation 2 port is an experimental bring-up target and is intentionally
+not included in the supported-platform list above yet.
 
 ## Download
 

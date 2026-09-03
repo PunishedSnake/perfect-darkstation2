@@ -111,7 +111,9 @@ int main(int argc, const char **argv)
 	sysInit();
 	sysLogPrintf(LOG_NOTE, "runtime: system ready");
 	GAME_STARTUP_CHECKPOINT();
-	fsInit();
+	if (fsInit() < 0) {
+		sysFatalError("Filesystem initialisation failed.");
+	}
 
 #if PLATFORM_PS2
 	const s32 initial_config_size = fsFileSize(CONFIG_PATH);
@@ -171,13 +173,17 @@ int main(int argc, const char **argv)
 	 */
 	sysLogPrintf(LOG_NOTE, "runtime: ROM data initialisation begin");
 	GAME_STARTUP_CHECKPOINT();
-	romdataInit();
+	if (romdataInit() < 0) {
+		sysFatalError("ROM data initialisation failed.");
+	}
 	sysLogPrintf(LOG_NOTE, "runtime: ROM data ready");
 	GAME_STARTUP_CHECKPOINT();
 	g_ValidGbcRomFound = romdataCheckGbcRom();
 #endif
 
-	videoInit();
+	if (videoInit() < 0) {
+		sysFatalError("Video initialisation failed.");
+	}
 	sysLogPrintf(LOG_NOTE, "runtime: video ready");
 	GAME_STARTUP_CHECKPOINT();
 
@@ -186,7 +192,9 @@ int main(int argc, const char **argv)
 	audioInit();
 	sysLogPrintf(LOG_NOTE, "runtime: input and audio ready");
 	GAME_STARTUP_CHECKPOINT();
-	romdataInit();
+	if (romdataInit() < 0) {
+		sysFatalError("ROM data initialisation failed.");
+	}
 	sysLogPrintf(LOG_NOTE, "runtime: ROM data ready");
 	GAME_STARTUP_CHECKPOINT();
 
@@ -227,7 +235,11 @@ int main(int argc, const char **argv)
 	}
 	GAME_STARTUP_CHECKPOINT();
 
+#if PLATFORM_PS2
+	g_SndDisabled = sysArgCheck("--no-sound") || audio_result < 0;
+#else
 	g_SndDisabled = sysArgCheck("--no-sound");
+#endif
 
 	g_StageNum = sysArgGetInt("--boot-stage", STAGE_TITLE);
 

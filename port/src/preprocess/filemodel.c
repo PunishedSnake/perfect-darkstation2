@@ -5,6 +5,7 @@
 #include "types.h"
 #include "gbi.h"
 #include "game/texdecompress.h"
+#include "system.h"
 
 #include "preprocess/common.h"
 #include "preprocess/gbi.h"
@@ -1076,7 +1077,16 @@ u8 *preprocessModelFile(u8 *data, u32 size, u32 *outSize)
 	gbiReset();
 
 	u32 newSizeEstimated = romdataFileGetEstimatedSize(size, LOADTYPE_MODEL);
-	u8 *dst = sysMemZeroAlloc(newSizeEstimated);
+	if (!data || !outSize || newSizeEstimated == 0 || newSizeEstimated > 0xffffff7fu) {
+		sysFatalError("invalid model preprocess request, size %u estimate %u",
+			size, newSizeEstimated);
+	}
+
+	u8 *dst = sysMemZeroAlloc(newSizeEstimated + 128);
+	if (!dst) {
+		sysFatalError("could not allocate %u bytes to preprocess model",
+			newSizeEstimated + 128);
+	}
 
 	u32 newSize = convertModel(dst, data, size);
 
@@ -1097,7 +1107,16 @@ u8 *preprocessGunFile(u8 *data, u32 size, u32 *outSize)
 	gbiReset();
 
 	u32 newSizeEstimated = romdataFileGetEstimatedSize(size, LOADTYPE_MODEL);
-	u8 *dst = sysMemZeroAlloc(newSizeEstimated+128);
+	if (!data || !outSize || newSizeEstimated == 0 || newSizeEstimated > 0xffffff7fu) {
+		sysFatalError("invalid gun preprocess request, size %u estimate %u",
+			size, newSizeEstimated);
+	}
+
+	u8 *dst = sysMemZeroAlloc(newSizeEstimated + 128);
+	if (!dst) {
+		sysFatalError("could not allocate %u bytes to preprocess gun model",
+			newSizeEstimated + 128);
+	}
 
 	u32 newSize = convertModel(dst, data, size);
 

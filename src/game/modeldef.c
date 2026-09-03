@@ -23,6 +23,9 @@
 #include "lib/model.h"
 #include "data.h"
 #include "types.h"
+#ifndef PLATFORM_N64
+#include "system.h"
+#endif
 
 struct skeleton *g_Skeletons[] = {
 	&g_SkelChr,
@@ -187,11 +190,24 @@ struct modeldef *modeldefLoad(u16 fileid, u8 *dst, s32 size, struct texpool *arg
 
 	g_LoadType = LOADTYPE_MODEL;
 
+#ifndef PLATFORM_N64
+	if (dst && size <= 0) {
+		sysFatalError("Invalid destination capacity %d for model file 0x%04x.",
+			size, fileid);
+	}
+#endif
+
 	if (dst) {
 		modeldef = fileLoadToAddr(fileid, FILELOADMETHOD_EXTRAMEM, dst, size);
 	} else {
 		modeldef = fileLoadToNew(fileid, FILELOADMETHOD_EXTRAMEM, LOADTYPE_MODEL);
 	}
+
+#ifndef PLATFORM_N64
+	if (!modeldef) {
+		sysFatalError("Could not load model file 0x%04x.", fileid);
+	}
+#endif
 
 	modelPromoteTypeToPointer(modeldef);
 	modelPromoteOffsetsToPointers(modeldef, 0x5000000, (uintptr_t) modeldef);

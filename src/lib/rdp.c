@@ -5,6 +5,9 @@
 #include "bss.h"
 #include "lib/memp.h"
 #include "lib/sched.h"
+#ifndef PLATFORM_N64
+#include "system.h"
+#endif
 
 ALIGNED16 u8 g_RdpDramStack[SP_DRAM_STACK_SIZE8];
 ALIGNED16 u8 g_RdpYieldData[0xb00];
@@ -72,6 +75,11 @@ void rdpInit(void)
 	}
 
 	g_RdpOutBufferStart = mempAlloc(size, MEMPOOL_PERMANENT);
+#ifndef PLATFORM_N64
+	if (!g_RdpOutBufferStart) {
+		sysFatalError("Could not allocate %d bytes for the RDP output buffer.", size);
+	}
+#endif
 	g_RdpOutBufferEnd = (u16 *) ((uintptr_t) g_RdpOutBufferStart + size);
 }
 
@@ -95,7 +103,16 @@ void rdpCreateTask(Gfx *gdlstart, Gfx *gdlend, u32 arg2, uintptr_t msg)
 	task->t.output_buff = (u64 *)g_RdpOutBufferStart;
 	task->t.output_buff_size = (u64 *)g_RdpOutBufferEnd;
 	task->t.data_ptr = (u64 *) gdlstart;
+#ifdef PLATFORM_N64
 	task->t.data_size = (gdlend - gdlstart) * sizeof(Gfx);
+#else
+	if (gdlstart && gdlend && gdlend >= gdlstart) {
+		task->t.data_size = (gdlend - gdlstart) * sizeof(Gfx);
+	} else {
+		task->t.data_ptr = NULL;
+		task->t.data_size = 0;
+	}
+#endif
 	task->t.yield_data_ptr = (u64 *)&g_RdpYieldData;
 	task->t.yield_data_size = sizeof(g_RdpYieldData);
 
