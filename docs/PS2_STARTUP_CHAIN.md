@@ -177,7 +177,10 @@ Use this distinction during bring-up:
 
 1. The first Rare-logo display list has not yet completed on confirmed retail
    hardware with the hardened loader.
-2. Per-frame Gfx and Vtx arenas still need pre-write capacity enforcement.
+2. Central Vtx/Mtx/colour allocations now fail before crossing their active
+   frame arena, and the PS2 master display list is checked at frame phase
+   boundaries. Direct display-list writers still need per-writer reservations
+   or a protected trailing region to prevent damage before a post-phase check.
 3. Unsupported combiner recipes are counted and dropped, so a healthy frame
    loop can still produce an empty image.
 4. Offscreen framebuffer effects, framebuffer copies and mipmaps are not yet

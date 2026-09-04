@@ -148,21 +148,82 @@ Gfx *gfxGetMasterDisplayList(void)
 	return (Gfx *)g_GfxBuffers[g_GfxActiveBufferIndex];
 }
 
+#ifndef PLATFORM_N64
+static u32 gfxGetFreeVtxChecked(const char *context)
+{
+	uintptr_t start;
+	uintptr_t end;
+	uintptr_t pos;
+
+	if (g_GfxActiveBufferIndex >= NUM_GFXTASKS) {
+		sysFatalError("%s: invalid graphics buffer index %u.", context,
+			g_GfxActiveBufferIndex);
+	}
+
+	start = (uintptr_t)g_VtxBuffers[g_GfxActiveBufferIndex];
+	end = (uintptr_t)g_VtxBuffers[g_GfxActiveBufferIndex + 1];
+	pos = (uintptr_t)g_GfxMemPos;
+
+	if (!start || !end || end < start || pos < start || pos > end) {
+		sysFatalError("%s: vertex arena cursor is outside its active buffer.", context);
+	}
+
+	return end - pos;
+}
+
+static void *gfxAllocateVtxBytes(u64 size, bool alignend, const char *context)
+{
+	uintptr_t pos = (uintptr_t)g_GfxMemPos;
+	uintptr_t allocation = pos;
+	u32 available = gfxGetFreeVtxChecked(context);
+	u32 padding;
+
+	if (size > available) {
+		sysFatalError("%s: vertex arena exhausted (need %llu bytes, %u remain).",
+			context, (unsigned long long)size, available);
+	}
+
+	pos += (uintptr_t)size;
+
+	if (alignend) {
+		padding = (16u - (u32)(pos & 15u)) & 15u;
+
+		if (size + padding > available) {
+			sysFatalError("%s: vertex arena exhausted by 16-byte alignment.", context);
+		}
+
+		pos += padding;
+	}
+
+	g_GfxMemPos = (u8 *)pos;
+
+	return (void *)allocation;
+}
+#endif
+
 Vtx *gfxAllocateVertices(u32 count)
 {
+#ifdef PLATFORM_N64
 	void *ptr = g_GfxMemPos;
 	g_GfxMemPos += count * sizeof(Vtx);
 	g_GfxMemPos = (u8 *)ALIGN16((uintptr_t)g_GfxMemPos);
 
 	return ptr;
+#else
+	return gfxAllocateVtxBytes((u64)count * sizeof(Vtx), true, "gfxAllocateVertices");
+#endif
 }
 
 void *gfxAllocateMatrix(void)
 {
+#ifdef PLATFORM_N64
 	void *ptr = g_GfxMemPos;
 	g_GfxMemPos += sizeof(Mtx);
 
 	return ptr;
+#else
+	return gfxAllocateVtxBytes(sizeof(Mtx), false, "gfxAllocateMatrix");
+#endif
 }
 
 /**
@@ -172,6 +233,7 @@ void *gfxAllocateMatrix(void)
  */
 LookAt *gfxAllocateLookAt(s32 count)
 {
+#ifdef PLATFORM_N64
 	void *ptr = g_GfxMemPos;
 #ifdef PLATFORM_64BIT
 	g_GfxMemPos += count * (sizeof(LookAt) * 2);
@@ -180,25 +242,80 @@ LookAt *gfxAllocateLookAt(s32 count)
 #endif
 
 	return ptr;
+#else
+	if (count < 0) {
+		sysFatalError("gfxAllocateLookAt: negative element count %d.", count);
+	}
+
+#ifdef PLATFORM_64BIT
+	return gfxAllocateVtxBytes((u64)count * (sizeof(LookAt) * 2), false,
+			"gfxAllocateLookAt");
+#else
+	return gfxAllocateVtxBytes((u64)count * (sizeof(LookAt) / 2), false,
+			"gfxAllocateLookAt");
+#endif
+#endif
 }
 
 Col *gfxAllocateColours(s32 count)
 {
+#ifdef PLATFORM_N64
 	void *ptr = g_GfxMemPos;
 	count = ALIGN16(count * sizeof(Col));
 	g_GfxMemPos += count;
 
 	return ptr;
+#else
+	if (count < 0) {
+		sysFatalError("gfxAllocateColours: negative element count %d.", count);
+	}
+
+	return gfxAllocateVtxBytes((u64)count * sizeof(Col), true, "gfxAllocateColours");
+#endif
 }
 
 void *gfxAllocate(u32 size)
 {
+#ifdef PLATFORM_N64
 	void *ptr = g_GfxMemPos;
 	size = ALIGN16(size);
 	g_GfxMemPos += size;
 
 	return ptr;
+#else
+	return gfxAllocateVtxBytes(size, true, "gfxAllocate");
+#endif
 }
+
+#ifndef PLATFORM_N64
+void gfxCheckMasterDisplayList(Gfx *gdl, u32 required, const char *context)
+{
+	uintptr_t start;
+	uintptr_t end;
+	uintptr_t pos = (uintptr_t)gdl;
+	u32 available;
+
+	if (g_GfxActiveBufferIndex >= NUM_GFXTASKS) {
+		sysFatalError("%s: invalid graphics buffer index %u.", context,
+			g_GfxActiveBufferIndex);
+	}
+
+	start = (uintptr_t)g_GfxBuffers[g_GfxActiveBufferIndex];
+	end = (uintptr_t)g_GfxBuffers[g_GfxActiveBufferIndex + 1];
+
+	if (!start || !end || end < start || pos < start || pos > end
+			|| (pos - start) % sizeof(Gfx) != 0) {
+		sysFatalError("%s: master display-list cursor is outside its active buffer.", context);
+	}
+
+	available = (end - pos) / sizeof(Gfx);
+
+	if (required > available) {
+		sysFatalError("%s: master display list exhausted (need %u commands, %u remain).",
+			context, required, available);
+	}
+}
+#endif
 
 void gfxSwapBuffers(void)
 {
@@ -215,10 +332,18 @@ void gfxSwapBuffers(void)
 
 s32 gfxGetFreeGfx(Gfx *gdl)
 {
+#ifndef PLATFORM_N64
+	gfxCheckMasterDisplayList(gdl, 0, "gfxGetFreeGfx");
+#endif
+
 	return (Gfx *)g_GfxBuffers[g_GfxActiveBufferIndex + 1] - gdl;
 }
 
 u32 gfxGetFreeVtx(void)
 {
+#ifdef PLATFORM_N64
 	return g_VtxBuffers[g_GfxActiveBufferIndex + 1] - g_GfxMemPos;
+#else
+	return gfxGetFreeVtxChecked("gfxGetFreeVtx");
+#endif
 }

@@ -562,6 +562,7 @@ void mainTick(void)
 
 		if (g_MainGameLogicEnabled) {
 			gdl = gdlstart = gfxGetMasterDisplayList();
+			gfxCheckMasterDisplayList(gdl, 2, "mainTick frame header");
 
 			gDPSetTile(gdl++, G_IM_FMT_RGBA, G_IM_SIZ_16b, 0, 0x0000, G_TX_LOADTILE, 0, G_TX_NOMIRROR | G_TX_WRAP, G_TX_NOMASK, G_TX_NOLOD, G_TX_NOMIRROR | G_TX_WRAP, G_TX_NOMASK, G_TX_NOLOD);
 			gDPSetTile(gdl++, G_IM_FMT_RGBA, G_IM_SIZ_4b, 0, 0x0100, 6, 0, G_TX_NOMIRROR | G_TX_WRAP, G_TX_NOMASK, G_TX_NOLOD, G_TX_NOMIRROR | G_TX_WRAP, G_TX_NOMASK, G_TX_NOLOD);
@@ -585,13 +586,17 @@ void mainTick(void)
 			}
 
 			gdl = lvRender(gdl);
+			gfxCheckMasterDisplayList(gdl, 0, "mainTick lvRender");
 
 			if (debugGetProfileMode() >= 2) {
 				gdl = profileRender(gdl);
+				gfxCheckMasterDisplayList(gdl, 0, "mainTick profileRender");
 			}
 
+			gfxCheckMasterDisplayList(gdl, 2, "mainTick frame trailer");
 			gDPFullSync(gdl++);
 			gSPEndDisplayList(gdl++);
+			gfxCheckMasterDisplayList(gdl, 0, "mainTick completed frame");
 		}
 
 		if (g_MainGameLogicEnabled) {

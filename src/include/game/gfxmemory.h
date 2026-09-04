@@ -13,7 +13,11 @@ void *gfxAllocateMatrix(void);
 LookAt *gfxAllocateLookAt(s32 count);
 Col *gfxAllocateColours(s32 count);
 void *gfxAllocate(u32 size);
+#ifndef PLATFORM_N64
+void gfxCheckMasterDisplayList(Gfx *gdl, u32 required, const char *context);
+#endif
 void gfxSwapBuffers(void);
 s32 gfxGetFreeGfx(Gfx *gdl);
+u32 gfxGetFreeVtx(void);
 
 #endif

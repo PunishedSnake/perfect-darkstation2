@@ -63,7 +63,7 @@ commit.
 
 | Path/class | Finding | Action |
 | --- | --- | --- |
-| `src/setups/setupwax.c` | The local copy is 971 lines shorter than `HEAD` and ends mid-token at `if_chr_knockedout`. It is an interrupted/truncated edit, not an intentional small change. The file maps to `UsetupwaxZ` and `Ump_setupwaxZ` in project data. | Do not delete or commit. Recover the intended edit or restore it separately after confirming no work would be lost. |
+| `src/setups/setupwax.c` | A previous local copy was 971 lines shorter than `HEAD` and ended mid-token at `if_chr_knockedout`. History and conversation review found no intended WAX edit. The file defines the complete Mr. Blonde's Revenge stage setup and maps to `UsetupwaxZ` and `Ump_setupwaxZ`. | Recovered byte-for-byte from the tracked blob on 2026-09-04. Keep it as canonical decompilation source even though the current PS2 runtime streams the compiled setup from ROM. |
 | `src/assets/*/tiles/.lee.json.*`, `.lue.json.*`, `.azt.json.*`, `.cave.json.*`, `.pam.json.*` | Large JSON fragments ending mid-record. Their suffixes do not match the generator's `*.json` glob. They look like interrupted atomic-write/editor temporary files. | Safe cleanup candidates after the owner confirms they contain no recoverable edits. Now ignored. |
 | `artifacts/` | Downloaded CI ZIP/ELF output, reproducible from GitHub Actions. | Safe to remove locally when no longer needed. Now ignored. |
 | `pd.ini`, `eeprom.bin`, `pdps2.log` | Runtime state and diagnostic evidence created beside the ELF. | Keep outside source control. Now ignored by repository-local patterns. |
@@ -137,7 +137,7 @@ No tracked zero-byte file was found.
 | Priority | Risk | Consequence | Next verification |
 | --- | --- | --- | --- |
 | P0 | First Rare-logo model/render path remains unconfirmed after loader hardening. | Black screen, fatal hold or EE fault immediately after Expansion Pak notice. | Retail run and last durable `title:` checkpoint. |
-| P0 | Gfx/Vtx frame arenas lack writer-side capacity guards. | Silent memory corruption under a large display list. | Add reservation APIs/canaries, then stress title and a gameplay stage. |
+| P0 | Direct display-list writers can still overrun between phase checks. Central Vtx/Mtx/colour allocations and PS2 frame boundaries are now guarded. | A single oversized renderer may cross the Gfx boundary before the post-phase check catches it. | Add per-writer reservations or a trailing canary, then stress title and a gameplay stage. |
 | P0 | Unsupported combiner recipes are dropped. | Valid runtime with invisible geometry/effects. | Capture counters/recipes and implement the most frequent title/game cases. |
 | P1 | Offscreen framebuffer operations and copies are stubs. | Missing blur, surveillance, menu and other framebuffer effects. | Build an explicit render-target/copy path with VRAM budgeting. |
 | P1 | Preprocessors validate some sizes after writing. | Corrupt ROM or bad estimate can overrun temporary output. | Convert writers to bounded cursors. |
@@ -159,9 +159,9 @@ Before deleting a file, require all applicable evidence:
 6. a separate cleanup commit so a regression is easy to bisect.
 
 Under that policy, the interrupted hidden JSON fragments and downloaded
-`artifacts/` directory are cleanup candidates. The truncated local
-`setupwax.c`, tracked PS2 sources, versioned assets and diagnostic tests are
-not deletion candidates.
+`artifacts/` directory are cleanup candidates. The recovered `setupwax.c`,
+tracked PS2 sources, versioned assets and diagnostic tests are not deletion
+candidates.
 
 ## Audit conclusion
 

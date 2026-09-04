@@ -144,7 +144,9 @@ Known incomplete areas:
 - offscreen framebuffer effects and framebuffer copies are not implemented;
 - mipmap generation and sampling are not implemented;
 - runtime display-mode changes are not implemented;
-- per-command display-list/Vtx arena overflow guards are still missing;
+- centralized Vtx/Mtx/colour arena allocations are bounds checked, and the
+  master display list is checked at PS2 frame phase boundaries; individual
+  display-list writers do not yet reserve their worst-case command count;
 - visual fidelity of text, blend equations and all title/game effects needs
   systematic real-hardware validation.
 
