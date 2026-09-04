@@ -289,6 +289,47 @@ static bool ps2_plan_tex01_lerp_independent_alpha(
     return true;
 }
 
+static bool ps2_plan_tex01_lerp_tex1_alpha(
+    const struct CCFeatures *f, struct Ps2CombinerPlan *plan)
+{
+    if (!f->opt_2cyc || !f->opt_alpha || f->opt_invisible ||
+        !ps2_is_tex01_lerp_cycle(f) ||
+        !ps2_cycle_multiplies_combined_by_input2(f, 0u) ||
+        !f->do_single[0][1] ||
+        !ps2_shader_item_is_tex1_alpha(f->c[0][1][3]) ||
+        !f->do_multiply[1][1]) {
+        return false;
+    }
+
+    const uint8_t alpha_a = f->c[1][1][0];
+    const uint8_t alpha_c = f->c[1][1][2];
+    if (!((alpha_a == SHADER_COMBINED &&
+           alpha_c == SHADER_INPUT_1) ||
+          (alpha_a == SHADER_INPUT_1 &&
+           alpha_c == SHADER_COMBINED))) {
+        return false;
+    }
+
+    /*
+     * Active room-fog replacement CUSTOM_11/CUSTOM_06:
+     * RGB = lerp(TEXEL0, TEXEL1, LOD_FRACTION) * SHADE
+     * A   = TEXEL1.a * ENVIRONMENT.a
+     *
+     * RGB remains the regular two-texture graph. The renderer captures the
+     * independent TEXEL1 alpha with a third alpha-only GS draw.
+     */
+    plan->color_recipe = PS2_COLOR_TEX01_LERP_INPUT1_MUL_INPUT2;
+    plan->alpha_recipe = PS2_ALPHA_TEX1_MUL_INPUT1;
+    plan->color_cycle = 1u;
+    plan->alpha_cycle = 1u;
+    plan->textured = true;
+    plan->texture_alpha = true;
+    plan->pass_graph = PS2_PASS_GRAPH_TRILERP_INDEPENDENT_ALPHA;
+    plan->hardware_validation_required = true;
+    plan->supported = true;
+    return true;
+}
+
 static bool ps2_plan_tex01_lerp_independent_input_alpha(
     const struct CCFeatures *f, struct Ps2CombinerPlan *plan)
 {
@@ -742,6 +783,10 @@ bool ps2GfxPlanCombiner(const struct CCFeatures *f,
     }
 
     if (ps2_plan_tex01_lerp_independent_alpha(f, plan)) {
+        return true;
+    }
+
+    if (ps2_plan_tex01_lerp_tex1_alpha(f, plan)) {
         return true;
     }
 

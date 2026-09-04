@@ -21,6 +21,8 @@ int main(void)
     ps2RendererStatsRecordVu1Transform(81u);
     ps2RendererStatsRecordPath3(false, 6u, 13u);
     ps2RendererStatsRecordPath3(true, 9u, 31u);
+    ps2RendererStatsRecordUnsupportedShader(12u);
+    ps2RendererStatsRecordUnsupportedShader(3u);
     ps2RendererStatsRecordVu1Reject(9u);
     ps2RendererStatsRecordVu1Wait(7u, true);
     ps2RendererStatsRecordVu1Wait(3u, false);
@@ -45,6 +47,8 @@ int main(void)
     assert(stats.path3_textured_batches == 1u);
     assert(stats.path3_vertices == 15u);
     assert(stats.path3_records == 44u);
+    assert(stats.unsupported_shader_batches == 2u);
+    assert(stats.unsupported_shader_triangles == 15u);
     assert(stats.vu1_rejected_batches == 1u);
     assert(stats.vu1_rejected_vertices == 9u);
     assert(stats.vu1_wait_calls == 2u);

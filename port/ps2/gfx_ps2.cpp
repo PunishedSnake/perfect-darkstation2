@@ -56,6 +56,7 @@
  *   - INPUT2 * INPUT1 * (1 - INPUT1), reconstructed through GS ALPHA
  *   - INPUT3 + TEXEL0 * (INPUT1 - INPUT2), reduced to signed TEX_EDGE tests
  *   - lerp(INPUT2, INPUT1, TEXEL0), reconstructed in a scalar alpha lane
+ *   - TEXEL1 * INPUT1 beside trilerped RGB, captured by an alpha-only draw
  *
  * Alpha-bearing TEXEL0/TEXEL1 trilerp has a tiled CT32 execution graph. Its
  * low-lane channel shuffle passed the deterministic image A/B on physical PS2
@@ -74,6 +75,8 @@
  * Unsupported combiners are retained in the shader table so shader_get_info()
  * still reports the exact upstream VBO layout, but draw submission rejects the
  * unsupported recipe rather than silently rendering a wrong approximation.
+ * Rejected batches and triangles are counted, and the first rejection forces a
+ * durable log checkpoint for retail-hardware diagnosis.
  */
 
 #define PS2_GFX_MAX_SHADERS 128
@@ -239,6 +242,8 @@ static bool s_logged_interference_scalar;
 static bool s_logged_interference_vector;
 static bool s_warned_independent_tex0_alpha_workspace;
 static bool s_warned_independent_tex0_alpha_modulate;
+static bool s_checkpointed_unsupported_shader;
+static bool s_pending_unsupported_shader_checkpoint;
 static Ps2GsRenderTargetHandle s_alpha_trilerp_color_target;
 static Ps2GsRenderTargetHandle s_alpha_trilerp_scalar_target;
 static uint8_t s_draw_fog_r;
@@ -975,6 +980,7 @@ static bool ps2_is_trilerp_independent_alpha(
          plan->alpha_recipe == PS2_ALPHA_INPUT1_MUL_INPUT2 ||
          plan->alpha_recipe ==
             PS2_ALPHA_TEX0_MUL_INPUT1_MUL_INPUT2 ||
+         plan->alpha_recipe == PS2_ALPHA_TEX1_MUL_INPUT1 ||
          plan->alpha_recipe ==
             PS2_ALPHA_INPUT1_PLUS_INPUT2_EDGE ||
          plan->alpha_recipe ==
@@ -1005,6 +1011,12 @@ static bool ps2_independent_alpha_is_custom22_23(
 {
     return plan->alpha_recipe ==
         PS2_ALPHA_TEX0_MUL_INPUT1_MINUS_INPUT2_PLUS_INPUT3_EDGE;
+}
+
+static bool ps2_independent_alpha_uses_tex1(
+    const struct Ps2CombinerPlan *plan)
+{
+    return plan->alpha_recipe == PS2_ALPHA_TEX1_MUL_INPUT1;
 }
 
 static void ps2_trilerp_set_base_state(void)
@@ -2342,11 +2354,18 @@ static bool ps2_draw_trilerp_independent_alpha_tile(
 {
     struct Ps2GsTexturedVertex texture0[3];
     struct Ps2GsTexturedVertex texture1[3];
+    struct Ps2GsTexturedVertex texture1_alpha[3];
     struct Ps2GsTexturedVertex composite[3];
+    const bool tex1_alpha = ps2_independent_alpha_uses_tex1(
+        &s_shader->plan);
     ps2_make_independent_alpha_texture_triangle(
         triangle, 0, tile->x, tile->y, false, texture0);
     ps2_make_independent_alpha_texture_triangle(
         triangle, 1, tile->x, tile->y, true, texture1);
+    if (tex1_alpha) {
+        ps2_make_independent_alpha_texture_triangle(
+            triangle, 1, tile->x, tile->y, false, texture1_alpha);
+    }
     ps2_make_alpha_trilerp_workspace_triangle(
         triangle, tile->x, tile->y, 0x80u, false, true, false,
         composite);
@@ -2354,14 +2373,15 @@ static bool ps2_draw_trilerp_independent_alpha_tile(
     if (!ps2GsCoreBindRenderTarget(s_alpha_trilerp_color_target)) {
         return false;
     }
-    ps2GsCoreSetAlphaWrite(true);
+    ps2GsCoreSetAlphaWrite(!tex1_alpha);
     ps2GsCoreSetAlphaTest(false, 0u);
     ps2GsCoreSetFog(s_shader->features.opt_fog,
         s_draw_fog_r, s_draw_fog_g, s_draw_fog_b);
     ps2GsCoreSetDepthMode(false, false, false);
     ps2GsCoreSetAlphaBlend(false);
     ps2GsCoreSetFramebufferAlphaForce(false);
-    ps2GsCoreSetTextureAlpha(s_shader->plan.texture_alpha);
+    ps2GsCoreSetTextureAlpha(
+        s_shader->plan.texture_alpha && !tex1_alpha);
     ps2GsCoreClear(true, false);
     ps2_apply_texture_clamp(0);
     ps2GsCoreDrawTexturedTriangles(
@@ -2374,6 +2394,18 @@ static bool ps2_draw_trilerp_independent_alpha_tile(
     ps2_apply_texture_clamp(1);
     ps2GsCoreDrawTexturedTriangles(
         s_selected_texture[1], texture1, 3u);
+
+    if (tex1_alpha) {
+        /* Preserve reconstructed RGB and replace only its alpha lane. */
+        ps2GsCoreSetAlphaBlend(false);
+        ps2GsCoreSetColorWrite(false);
+        ps2GsCoreSetAlphaWrite(true);
+        ps2GsCoreSetTextureAlpha(true);
+        ps2_apply_texture_clamp(1);
+        ps2GsCoreDrawTexturedTriangles(
+            s_selected_texture[1], texture1_alpha, 3u);
+        ps2GsCoreSetColorWrite(true);
+    }
 
     ps2GsCoreBindDefaultRenderTarget();
     ps2GsCoreSetScissor(tile->x, tile->y, tile->width, tile->height);
@@ -2652,6 +2684,8 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
     }
 
     if (!s_shader->plan.supported) {
+        ps2RendererStatsRecordUnsupportedShader(
+            (uint32_t)buf_vbo_num_tris);
         if (!s_shader->warned_rejected_draw) {
             sysLogPrintf(LOG_WARNING,
                 "GfxPS2 dropping unsupported shader id=%016llx/%08x first_batch_tris=%u",
@@ -2659,6 +2693,10 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
                 (unsigned int)s_shader->shader_id1,
                 (unsigned int)buf_vbo_num_tris);
             s_shader->warned_rejected_draw = true;
+            if (!s_checkpointed_unsupported_shader &&
+                !s_pending_unsupported_shader_checkpoint) {
+                s_pending_unsupported_shader_checkpoint = true;
+            }
         }
         return;
     }
@@ -2984,6 +3022,12 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
                     vertex->independent_alpha =
                         ps2_modulate_component(input[0][3]);
                 } else if (s_shader->plan.alpha_recipe ==
+                        PS2_ALPHA_TEX1_MUL_INPUT1) {
+                    vertex->shade_a = 0x80u;
+                    vertex->independent_alpha =
+                        ps2_texture_alpha_fragment_component(
+                            input[0][3]);
+                } else if (s_shader->plan.alpha_recipe ==
                         PS2_ALPHA_INPUT1_PLUS_INPUT2_EDGE) {
                     vertex->shade_a =
                         ps2_texture_alpha_fragment_component(
@@ -3197,6 +3241,8 @@ static void ps2_init(void)
     s_logged_native_rgba16 = false;
     s_logged_native_ia16 = false;
     s_logged_native_mirror = false;
+    s_checkpointed_unsupported_shader = false;
+    s_pending_unsupported_shader_checkpoint = false;
     s_upload_mirror_s = false;
     s_upload_mirror_t = false;
     ps2GsCoreSetAlphaTest(false, 0u);
@@ -3237,6 +3283,7 @@ static void ps2_log_renderer_stats(
         "path1_vertices=%llu path1_records=%llu "
         "path3_color=%llu path3_textured=%llu "
         "path3_vertices=%llu path3_records=%llu "
+        "unsupported=%llu/%llu triangles "
         "vu1_rejects=%llu/%llu vertices",
         (unsigned long long)stats.path1_color_batches,
         (unsigned long long)stats.path1_textured_batches,
@@ -3246,6 +3293,8 @@ static void ps2_log_renderer_stats(
         (unsigned long long)stats.path3_textured_batches,
         (unsigned long long)stats.path3_vertices,
         (unsigned long long)stats.path3_records,
+        (unsigned long long)stats.unsupported_shader_batches,
+        (unsigned long long)stats.unsupported_shader_triangles,
         (unsigned long long)stats.vu1_rejected_batches,
         (unsigned long long)stats.vu1_rejected_vertices);
     sysLogPrintf(LOG_NOTE,
@@ -3276,6 +3325,13 @@ extern "C" void gfxPs2LogRendererStats(bool checkpoint)
 static void ps2_end_frame(void)
 {
     ps2GsCoreSubmit();
+
+    /* Filesystem close/reopen stays outside primitive submission hot paths. */
+    if (s_pending_unsupported_shader_checkpoint) {
+        ps2LogCheckpointForce();
+        s_pending_unsupported_shader_checkpoint = false;
+        s_checkpointed_unsupported_shader = true;
+    }
 
     struct Ps2RendererStats stats;
     ps2RendererStatsGet(&stats);

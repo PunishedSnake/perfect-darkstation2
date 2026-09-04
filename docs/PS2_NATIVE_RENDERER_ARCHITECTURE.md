@@ -313,8 +313,11 @@ This semantic layer should remain backend-independent where possible. PS2-specif
   until that ordering scaffold passes on retail hardware;
 - **CURRENT IMPLEMENTATION:** cumulative renderer counters record EE vertex
   translation batches, vertices and microseconds, PATH1/PATH3 color/textured
-  batches, final A+D records and VU1 rejections. The serial snapshot is emitted
-  on frame one and every 300 frames, never inside a primitive submission;
+  batches, final A+D records, unsupported-shader batches/triangles and VU1
+  rejections. The serial snapshot is emitted on frame one and every 300 frames,
+  never inside a primitive submission. The first unsupported draw also queues
+  one durable end-of-frame checkpoint so an early title failure cannot hide
+  its recipe without performing filesystem I/O in a draw hot path;
 - **CURRENT IMPLEMENTATION:** ordinary state and primitive reservations may spill across any number of the two alternating PATH3 command arenas in one logical frame. A spill submits the full arena, begins the other one and continues in-order with persistent GS register state; it waits only for GIF-channel ownership and never inserts `FINISH`. Single packets larger than an arena remain a hard error, with host-tested boundary arithmetic preventing unsigned-capacity wraparound;
 - texture uploads use project-owned GIF IMAGE source chains with two persistent staging slots;
 - upload staging is prepared before claiming the GIF channel, following `submit early, wait late` as far as dependency allows;
@@ -366,6 +369,7 @@ This semantic layer should remain backend-independent where possible. PS2-specif
 - **CURRENT IMPLEMENTATION:** `G_CC_INTERFERENCE -> G_CC_MODULATEIA2` reconstructs `TEXEL0*TEXEL1*SHADE` without another VRAM target. The color target first receives `TEXEL1*SHADE`; TEXEL0 RGB is captured as GS alpha factors and multiplies destination RGB through `(Cd-0)*Ad`. Partial `TEXEL1.a*SHADE.a` is preserved in the scalar target while color-target alpha is scratch, then multiplied by `TEXEL0.a` through `(Cd-0)*As` and copied back before the single final depth/blend/fog composite. The actual IA8 TEXEL0 path is format-proven monochrome and therefore uses one RGB factor pass;
 - **CURRENT IMPLEMENTATION:** independent-color texture-alpha recipes used by `CUSTOM_02`, `CUSTOM_04` and `SHADEDECALA` no longer receive a wrong direct `MODULATE` approximation or get dropped. One tiled CT32 target captures `TEXEL0.a` while `FRAME.FBMSK` blocks texture RGB, then receives the independent `INPUT1` RGB while alpha is masked. A single screen-space composite owns the original Z, blend, fog and alpha/texture-edge test. The graph reuses the existing 128x64 target and performs no EE readback; its new channel sequence remains marked for physical-hardware validation;
 - **CURRENT IMPLEMENTATION:** `TRILERP -> CUSTOM_08` and the equivalent `CUSTOM_15` topology reuse the one-target trilerp graph when final RGB is `COMBINED*INPUT2` but alpha is an independent `INPUT1`. The independent alpha is stored with the TEXEL0 base, TEXEL1 interpolation masks alpha writes, and the final composite applies fog/blend/Z once. This covers fog replacements whose RGB and alpha inputs intentionally name different RDP sources while keeping their shared compact VBO indices;
+- **CURRENT IMPLEMENTATION:** the active room-fog replacement `CUSTOM_11 -> CUSTOM_06` now reuses that graph for `lerp(TEXEL0,TEXEL1,LOD)*SHADE` RGB and adds an exact alpha-only TEXEL1 draw for `TEXEL1.a*ENVIRONMENT.a`. RGB writes are masked during the third draw, so no texture colour contaminates the completed target. The topology supports the replacement's texture-edge option and remains marked for physical-hardware validation;
 - the graph first captures `TEXEL0.a * SHADE.a` and `TEXEL1.a * SHADE.a`, exposes each high byte through the PSMT8H identity view, and interpolates the scalar result by vertex LOD into the red lane of the scalar target. It separately reconstructs RGB as the existing opaque two-pass trilerp, copies scalar red into result alpha, then samples the completed RGBA target once through the caller's alpha/depth state;
 - workspace sampling converts integer-translated screen coordinates to normalized GS `STQ` by the fixed 128x64 target extent. A host test locks origin, center and far-edge mappings so the diagnostic path cannot silently confuse texel-space `UV` with normalized `STQ`;
 - **CURRENT IMPLEMENTATION:** ordinary builds classify the hardware-validated alpha-bearing `TRILERP/MODULATEIA2` graph as supported. Its gameplay availability no longer depends on a diagnostic compile definition;
@@ -565,6 +569,8 @@ PCSX2 is useful for correctness, packet/state inspection and fast iteration. It 
   final depth/blend/fog/alpha-test composite and hardware-validation marker;
 - retain the one-target `TRILERP -> CUSTOM_08`/`CUSTOM_15` topology for
   trilerped, modulated RGB with independent `INPUT1` alpha;
+- retain the active room-fog `CUSTOM_11 -> CUSTOM_06` topology, whose third
+  masked draw captures `TEXEL1.a*ENVIRONMENT.a` without changing trilerped RGB;
 - log unsupported recipes instead of silently approximating them.
 - retain explicit rejection for region bounds outside the GS 10-bit
   `CLAMP.MIN/MAX` contract instead of silently truncating them.

@@ -138,7 +138,7 @@ No tracked zero-byte file was found.
 | --- | --- | --- | --- |
 | P0 | First Rare-logo model/render path remains unconfirmed after loader hardening. | Black screen, fatal hold or EE fault immediately after Expansion Pak notice. | Retail run and last durable `title:` checkpoint. |
 | P0 | Direct display-list writers can still overrun between phase checks. Central Vtx/Mtx/colour allocations and PS2 frame boundaries are now guarded. | A single oversized renderer may cross the Gfx boundary before the post-phase check catches it. | Add per-writer reservations or a trailing canary, then stress title and a gameplay stage. |
-| P0 | Unsupported combiner recipes are dropped. | Valid runtime with invisible geometry/effects. | Capture counters/recipes and implement the most frequent title/game cases. |
+| P0 | Remaining unsupported combiner recipes are dropped. The renderer now counts dropped batches/triangles and durably checkpoints the first recipe; active room-fog `CUSTOM_11/CUSTOM_06` is implemented exactly. | Valid runtime with invisible geometry/effects. | Use the next title/game hardware trace to rank nonzero recipe IDs, then implement them in frequency order. |
 | P1 | Offscreen framebuffer operations and copies are stubs. | Missing blur, surveillance, menu and other framebuffer effects. | Build an explicit render-target/copy path with VRAM budgeting. |
 | P1 | Preprocessors validate some sizes after writing. | Corrupt ROM or bad estimate can overrun temporary output. | Convert writers to bounded cursors. |
 | P1 | VIF1/VU1 and PATH3 synchronization is only partly proven. | Intermittent corruption or hangs that host tests cannot reproduce. | Long hardware stress run with DMA/VU checkpoints and canaries. |

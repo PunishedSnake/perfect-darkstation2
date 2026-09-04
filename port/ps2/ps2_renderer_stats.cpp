@@ -46,6 +46,13 @@ extern "C" void ps2RendererStatsRecordPath3(
     s_stats.path3_records += register_count;
 }
 
+extern "C" void ps2RendererStatsRecordUnsupportedShader(
+    uint32_t triangle_count)
+{
+    ++s_stats.unsupported_shader_batches;
+    s_stats.unsupported_shader_triangles += triangle_count;
+}
+
 extern "C" void ps2RendererStatsRecordVu1Transform(uint32_t vertex_count)
 {
     ++s_stats.vu1_transform_batches;

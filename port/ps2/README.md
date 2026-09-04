@@ -136,7 +136,11 @@ Implemented now:
 - native VRAM residency and eviction;
 - one-pass and selected multipass combiner plans;
 - VU1 textured transform and GS-ready packet transport;
-- renderer counters and controller-triggered durable snapshots.
+- renderer counters for PATH1/PATH3, VU1 and unsupported-shader drops, plus
+  controller-triggered durable snapshots; the first unsupported draw also
+  schedules a durable checkpoint at the end of that frame;
+- exact fog-replacement coverage for `CUSTOM_11/CUSTOM_06`, including its
+  independent `TEXEL1.a * ENVIRONMENT.a` lane.
 
 Known incomplete areas:
 

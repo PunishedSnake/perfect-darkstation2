@@ -182,7 +182,10 @@ Use this distinction during bring-up:
    boundaries. Direct display-list writers still need per-writer reservations
    or a protected trailing region to prevent damage before a post-phase check.
 3. Unsupported combiner recipes are counted and dropped, so a healthy frame
-   loop can still produce an empty image.
+   loop can still produce an empty image. The first dropped draw schedules an
+   end-of-frame durable checkpoint containing its shader ID; periodic and
+   controller snapshots report dropped batch/triangle totals as
+   `unsupported=B/T`.
 4. Offscreen framebuffer effects, framebuffer copies and mipmaps are not yet
    implemented.
 5. Some preprocessors estimate output space and validate after conversion;

@@ -24,6 +24,8 @@ struct Ps2RendererStats {
     uint64_t path3_textured_batches;
     uint64_t path3_vertices;
     uint64_t path3_records;
+    uint64_t unsupported_shader_batches;
+    uint64_t unsupported_shader_triangles;
     uint64_t vu1_rejected_batches;
     uint64_t vu1_rejected_vertices;
     uint64_t vu1_wait_calls;
@@ -43,6 +45,7 @@ void ps2RendererStatsRecordPath1(
     bool textured, uint32_t vertex_count, uint32_t register_count);
 void ps2RendererStatsRecordPath3(
     bool textured, uint32_t vertex_count, uint32_t register_count);
+void ps2RendererStatsRecordUnsupportedShader(uint32_t triangle_count);
 void ps2RendererStatsRecordVu1Transform(uint32_t vertex_count);
 void ps2RendererStatsRecordVu1Reject(uint32_t vertex_count);
 void ps2RendererStatsRecordVu1Wait(
