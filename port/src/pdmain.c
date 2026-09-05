@@ -541,6 +541,7 @@ void mainLoop(void)
 		g_Ps2TraceFirstFrame = true;
 		const u64 firstframewaitstart = sysGetMicroseconds();
 		bool firstframewaitreported = false;
+		u64 frameTimingReport = 0;
 		sysLogPrintf(LOG_NOTE,
 			"runtime: frame gate stage=%d next=%d logic=%d mininc60=%d count=%u start=%u",
 			g_StageNum, g_MainChangeToStageNum, g_MainGameLogicEnabled,
@@ -556,16 +557,29 @@ void mainLoop(void)
 					mainRuntimeCheckpoint("first frame: scheduler begin");
 				}
 #endif
+#ifdef PLATFORM_PS2
+				const u64 frameStart = sysGetMicroseconds();
+#endif
 				schedStartFrame(&g_Sched);
 				mainFirstFrameCheckpoint("first frame: video begin complete; mainTick begin");
 				mainTick();
 #ifdef PLATFORM_PS2
+				const u64 tickEnd = sysGetMicroseconds();
 				if (g_Ps2TraceFirstFrame) {
 					mainRuntimeCheckpoint("first frame: mainTick complete; present begin");
 				}
 #endif
 				schedEndFrame(&g_Sched);
 #ifdef PLATFORM_PS2
+				const u64 frameEnd = sysGetMicroseconds();
+				if (frameEnd - frameTimingReport >= 5000000ULL) {
+					sysLogPrintf(LOG_NOTE,
+						"PS2 frame runtime: tick_us=%u end_us=%u total_us=%u",
+						(unsigned int)(tickEnd - frameStart),
+						(unsigned int)(frameEnd - tickEnd),
+						(unsigned int)(frameEnd - frameStart));
+					frameTimingReport = frameEnd;
+				}
 				if (g_Ps2TraceFirstFrame) {
 					mainRuntimeCheckpoint("first frame: present complete");
 					g_Ps2TraceFirstFrame = false;

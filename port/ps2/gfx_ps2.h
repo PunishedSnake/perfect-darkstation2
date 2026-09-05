@@ -12,6 +12,13 @@ extern struct GfxRenderingAPI gfx_ps2_api;
 
 struct GfxRdpTmemLiveTextureView;
 
+/* Only constant endpoints eliminate a texture without changing the equation. */
+static inline int gfxPs2TrilerpEndpoint(uint8_t a, uint8_t b, uint8_t c)
+{
+    if (a != b || a != c) return -1;
+    return a == 0u ? 0 : (a == 128u ? 1 : -1);
+}
+
 /* Backend-private cache variant for a physically expanded mirror period. */
 static inline uint8_t gfxPs2TextureMirrorVariant(uint8_t cms, uint8_t cmt)
 {

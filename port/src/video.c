@@ -29,6 +29,9 @@ static struct GfxWindowManagerAPI *wmAPI;
 static struct GfxRenderingAPI *renderingAPI;
 
 static bool initDone = false;
+#ifdef PLATFORM_PS2
+static u64 ps2RenderUs, ps2TimingReport;
+#endif
 
 static s32 vidWidth = DEFAULT_VID_WIDTH;
 static s32 vidHeight = DEFAULT_VID_HEIGHT;
@@ -120,6 +123,9 @@ s32 videoInit(void)
 
 void videoStartFrame(void)
 {
+#ifdef PLATFORM_PS2
+	ps2RenderUs = 0;
+#endif
 	if (initDone) {
 		startTime = wmAPI->get_time();
 		gfx_start_frame();
@@ -133,7 +139,13 @@ void videoStartFrame(void)
 void videoSubmitCommands(Gfx *cmds)
 {
 	if (initDone) {
+#ifdef PLATFORM_PS2
+		const u64 renderStart = sysGetMicroseconds();
+#endif
 		gfx_run(cmds);
+#ifdef PLATFORM_PS2
+		ps2RenderUs += sysGetMicroseconds() - renderStart;
+#endif
 		++dlcount;
 	}
 }
@@ -144,7 +156,18 @@ void videoEndFrame(void)
 		return;
 	}
 
+#ifdef PLATFORM_PS2
+	const u64 presentStart = sysGetMicroseconds();
+#endif
 	gfx_end_frame();
+#ifdef PLATFORM_PS2
+	const u64 presentEnd = sysGetMicroseconds();
+	if (presentEnd - ps2TimingReport >= 5000000ULL) {
+		sysLogPrintf(LOG_NOTE, "PS2 frame video: render_us=%u present_us=%u",
+			(unsigned int)ps2RenderUs, (unsigned int)(presentEnd - presentStart));
+		ps2TimingReport = presentEnd;
+	}
+#endif
 
 	++frames;
 	++fpsNumFrames;
