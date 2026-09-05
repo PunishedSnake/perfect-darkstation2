@@ -226,6 +226,12 @@ jobs:
             -o /tmp/vi_black_state_test
           /tmp/vi_black_state_test
 
+          gcc -std=c11 -Wall -Wextra -Werror \
+            -Iport/include -Iinclude -Iinclude/PR \
+            port/ps2/vi_unblack_timer_test.c \
+            -o /tmp/vi_unblack_timer_test
+          /tmp/vi_unblack_timer_test
+
           gcc -std=c11 -Wall -Wextra -Werror -fsyntax-only \
             -D_LANGUAGE_C=1 -DPLATFORM_PS2=1 \
             -Iport/ps2 -Iport/include -Iinclude -Iinclude/PR -Isrc/include \

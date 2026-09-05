@@ -184,8 +184,6 @@ void *mempAllocFromBank(struct memorypool *pool, u32 size, u8 poolnum)
 	}
 
 	if (size > (u32)(pool->rightpos - pool->leftpos)) {
-		sysLogPrintf(LOG_ERROR, "memory pool %p is full. Req: %u free: %u",
-			pool, size, (u32)(pool->rightpos - pool->leftpos));
 		return 0;
 	}
 
@@ -215,6 +213,21 @@ void *mempAlloc(u32 len, u8 pool)
 	if (allocation) {
 		return allocation;
 	}
+
+#ifdef PLATFORM_PS2
+	{
+		struct memorypool *onboard = &g_MempOnboardPools[pool];
+		struct memorypool *expansion = &g_MempExpansionPools[pool];
+		u32 onboardfree = onboard->leftpos != 0 && onboard->rightpos >= onboard->leftpos
+			? (u32)(onboard->rightpos - onboard->leftpos) : 0;
+		u32 expansionfree = expansion->leftpos != 0 && expansion->rightpos >= expansion->leftpos
+			? (u32)(expansion->rightpos - expansion->leftpos) : 0;
+
+		sysLogPrintf(LOG_ERROR,
+			"mempAlloc: pool %u exhausted. Req: %u onboard_free: %u expansion_free: %u",
+			pool, len, onboardfree, expansionfree);
+	}
+#endif
 
 #if VERSION < VERSION_NTSC_1_0
 #ifdef DEBUG

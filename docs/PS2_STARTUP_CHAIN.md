@@ -94,6 +94,11 @@ Critical permanent allocations in RDP, sound, MEMA, VI and per-frame Gfx/Vtx
 setup are checked. An allocation failure now names the subsystem and enters the
 fatal hold instead of continuing into address zero.
 
+The two-bank `memp` allocator probes the onboard bank before the expansion
+bank. Exhausting only the first bank is normal fallback, so it is no longer
+reported as an error. A PS2 `mempAlloc` error now means that neither bank could
+satisfy the request and reports the remaining capacity in both banks.
+
 ## Phase 5: title sequence
 
 The title state machine is owned by `src/game/title.c`. The relevant early path
@@ -168,6 +173,33 @@ frame before its single submit and presentation. It must not call
 `videoClearScreen` from `viHandleRetrace`: that would open a nested Fast3D/GS
 frame, reset the native command arena after game submission and perform an
 extra VBlank presentation from inside the scheduler.
+
+`viBlack(false)` is intentionally delayed rather than immediate. It initializes
+a countdown equal to the emulated framebuffer count so stale buffers cannot
+flash on screen. The portable scheduler already decrements that value in
+`__scUpdateViMode`, once per presented frame after `viHandleRetrace` applies
+the current state. Do not also decrement it in `schedEndFrame`: this would
+halve the intended delay. A host regression test covers the countdown and
+the permanent-black sentinel. The missing countdown hypothesis for the
+2026-09-05 hardware log was rejected on inspection of the full scheduler.
+
+### LEGAL-screen diagnostic build
+
+The `pdps2(20260905-094506).log` capture ends at `stage reset complete; frame
+loop begin`. It does not establish which call stopped progress afterwards,
+or prove that VI blanking caused the black screen. The added first-frame
+checkpoints distinguish the frame gate, native frame begin, timing, `lvTick`,
+`lvRender`, synchronous graphics-task execution and presentation. They run
+only for the first frame of each stage. A one-shot warning reports a frame
+gate that still has not opened after five seconds, provided the system clock
+continues advancing. This is observation only, not an automatic reset,
+stage skip or timeout recovery.
+
+Title-mode application is logged separately, including controller detection
+and Rare-logo entry. Existing file-backed logging can itself block or fail;
+the last durable line is a boundary for investigation, not proof that the
+next source line crashed. Retest this build on hardware before attributing
+the original failure to any single subsystem.
 
 ## Fatal and hang interpretation
 

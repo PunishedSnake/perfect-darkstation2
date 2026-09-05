@@ -25,6 +25,7 @@
 #include "audio.h"
 #include "input.h"
 #include "mixer.h"
+#include "vi_unblack_timer.h"
 
 /*
  * private typedefs and defines
@@ -214,9 +215,9 @@ void __scUpdateViMode(void)
 		g_SchedViModesPending[1 - var8005ce74] = false;
 	}
 
-	if (g_ViUnblackTimer != 0 && g_ViUnblackTimer <= NUM_FRAMEBUFFERS) {
-		g_ViUnblackTimer--;
-	}
+	/* Exactly once per presented frame, after viHandleRetrace applies it. */
+	g_ViUnblackTimer = viUnblackTimerAfterRetrace(
+		g_ViUnblackTimer, NUM_FRAMEBUFFERS);
 }
 
 /**

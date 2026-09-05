@@ -81,11 +81,26 @@
 extern u8 *g_MempHeap;
 extern u32 g_MempHeapSize;
 
+#ifdef PLATFORM_PS2
+static bool g_Ps2TraceFirstFrame;
+#endif
+
 static void mainRuntimeCheckpoint(const char *phase)
 {
 #ifdef PLATFORM_PS2
 	sysLogPrintf(LOG_NOTE, "runtime: %s", phase);
 	ps2LogCheckpoint();
+#else
+	(void)phase;
+#endif
+}
+
+static void mainFirstFrameCheckpoint(const char *phase)
+{
+#ifdef PLATFORM_PS2
+	if (g_Ps2TraceFirstFrame) {
+		mainRuntimeCheckpoint(phase);
+	}
 #else
 	(void)phase;
 #endif
@@ -522,13 +537,52 @@ void mainLoop(void)
 		profileReset();
 		mainRuntimeCheckpoint("stage reset complete; frame loop begin");
 
+#ifdef PLATFORM_PS2
+		g_Ps2TraceFirstFrame = true;
+		const u64 firstframewaitstart = sysGetMicroseconds();
+		bool firstframewaitreported = false;
+		sysLogPrintf(LOG_NOTE,
+			"runtime: frame gate stage=%d next=%d logic=%d mininc60=%d count=%u start=%u",
+			g_StageNum, g_MainChangeToStageNum, g_MainGameLogicEnabled,
+			g_Vars.mininc60, (unsigned int)osGetCount(),
+			(unsigned int)g_Vars.thisframestartt);
+#endif
+
 		while (g_MainChangeToStageNum < 0) {
 			const s32 cycles = osGetCount() - g_Vars.thisframestartt;
 			if (!g_Vars.mininc60 || (cycles >= g_Vars.mininc60 * CYCLES_PER_FRAME - CYCLES_PER_FRAME / 2)) {
+#ifdef PLATFORM_PS2
+				if (g_Ps2TraceFirstFrame) {
+					mainRuntimeCheckpoint("first frame: scheduler begin");
+				}
+#endif
 				schedStartFrame(&g_Sched);
+				mainFirstFrameCheckpoint("first frame: video begin complete; mainTick begin");
 				mainTick();
+#ifdef PLATFORM_PS2
+				if (g_Ps2TraceFirstFrame) {
+					mainRuntimeCheckpoint("first frame: mainTick complete; present begin");
+				}
+#endif
 				schedEndFrame(&g_Sched);
+#ifdef PLATFORM_PS2
+				if (g_Ps2TraceFirstFrame) {
+					mainRuntimeCheckpoint("first frame: present complete");
+					g_Ps2TraceFirstFrame = false;
+				}
+#endif
 			}
+#ifdef PLATFORM_PS2
+			if (g_Ps2TraceFirstFrame && !firstframewaitreported &&
+					sysGetMicroseconds() - firstframewaitstart >= 5000000ULL) {
+				sysLogPrintf(LOG_WARNING,
+					"runtime: first frame gate still waiting cycles=%d mininc60=%d count=%u start=%u",
+					cycles, g_Vars.mininc60, (unsigned int)osGetCount(),
+					(unsigned int)g_Vars.thisframestartt);
+				ps2LogCheckpointForce();
+				firstframewaitreported = true;
+			}
+#endif
 			if (g_TickExtraSleep) {
 				sysSleep(EXTRA_SLEEP_TIME);
 			}
@@ -555,6 +609,7 @@ void mainTick(void)
 
 	if (g_MainChangeToStageNum < 0) {
 		frametimeCalculate();
+		mainFirstFrameCheckpoint("first frame: timing complete");
 		profileReset();
 		profileSetMarker(PROFILE_MAINTICK_START);
 		joyDebugJoy();
@@ -567,7 +622,9 @@ void mainTick(void)
 			gDPSetTile(gdl++, G_IM_FMT_RGBA, G_IM_SIZ_16b, 0, 0x0000, G_TX_LOADTILE, 0, G_TX_NOMIRROR | G_TX_WRAP, G_TX_NOMASK, G_TX_NOLOD, G_TX_NOMIRROR | G_TX_WRAP, G_TX_NOMASK, G_TX_NOLOD);
 			gDPSetTile(gdl++, G_IM_FMT_RGBA, G_IM_SIZ_4b, 0, 0x0100, 6, 0, G_TX_NOMIRROR | G_TX_WRAP, G_TX_NOMASK, G_TX_NOLOD, G_TX_NOMIRROR | G_TX_WRAP, G_TX_NOMASK, G_TX_NOLOD);
 
+			mainFirstFrameCheckpoint("first frame: lvTick begin");
 			lvTick();
+			mainFirstFrameCheckpoint("first frame: lvTick complete");
 			playermgrShuffle();
 
 			if (g_StageNum < STAGE_TITLE) {
@@ -585,7 +642,9 @@ void mainTick(void)
 				}
 			}
 
+			mainFirstFrameCheckpoint("first frame: lvRender begin");
 			gdl = lvRender(gdl);
+			mainFirstFrameCheckpoint("first frame: lvRender complete");
 			gfxCheckMasterDisplayList(gdl, 0, "mainTick lvRender");
 
 			if (debugGetProfileMode() >= 2) {
@@ -604,7 +663,9 @@ void mainTick(void)
 			viUpdateMode();
 		}
 
+		mainFirstFrameCheckpoint("first frame: graphics task begin");
 		rdpCreateTask(gdlstart, gdl, 0, (uintptr_t) &msg);
+		mainFirstFrameCheckpoint("first frame: graphics task complete");
 		memaPrint();
 		profileSetMarker(PROFILE_MAINTICK_END);
 	}

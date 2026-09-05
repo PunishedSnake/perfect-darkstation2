@@ -2678,6 +2678,7 @@ void titleTick(void)
 		g_TitleMode = g_TitleNextMode;
 		g_TitleNextMode = -1;
 		g_TitleFastForward = false;
+		TITLE_PS2_CHECKPOINT_FORCE("title: mode applied mode=%d", g_TitleMode);
 
 		switch (g_TitleMode) {
 		case TITLEMODE_LEGAL:
