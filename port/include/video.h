@@ -27,6 +27,7 @@ s32 videoInit(void);
 void videoStartFrame(void);
 void videoSubmitCommands(Gfx *cmds);
 void videoClearScreen(void);
+void videoSetBlack(s32 black);
 void videoEndFrame(void);
 
 void *videoGetWindowHandle(void);

@@ -23,6 +23,9 @@
 #include "lib/anim.h"
 #include "data.h"
 #include "types.h"
+#ifndef PLATFORM_N64
+#include "system.h"
+#endif
 
 #define NUMTYPE1() (IS4MB() ? 0 : 35)
 #define NUMTYPE2() (IS4MB() ? 24 : 25)
@@ -98,6 +101,14 @@ void modelmgrAllocateSlots(s32 numobjs, s32 numchrs)
 	g_ModelRwdataBindings[2] = NULL;
 
 	ptr = mempAlloc(totalsize, MEMPOOL_STAGE);
+
+#ifndef PLATFORM_N64
+	if (ptr == NULL) {
+		sysFatalError(
+			"Could not allocate %u bytes for %d model and %d animation slots.",
+			(unsigned int)totalsize, g_MaxModels, g_MaxAnims);
+	}
+#endif
 
 	if (NUMTYPE1()) {
 		g_ModelRwdataBindings[0] = (struct modelrwdatabinding *) ptr;

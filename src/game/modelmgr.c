@@ -115,6 +115,13 @@ struct model *modelmgrInstantiateModel(struct modeldef *modeldef, bool withanim)
 #endif
 	s32 i;
 
+#ifndef PLATFORM_N64
+	if (modeldef == NULL) {
+		sysLogPrintf(LOG_ERROR, "Cannot instantiate a null model definition.");
+		return NULL;
+	}
+#endif
+
 	if (!g_ModelIsLvResetting) {
 		// If it's being allocated mid-gameplay, look through all slots
 		// and find any slot that's big enough.
@@ -230,6 +237,41 @@ struct model *modelmgrInstantiateModel(struct modeldef *modeldef, bool withanim)
 			}
 		}
 	}
+
+#ifndef PLATFORM_N64
+	if (model) {
+		/*
+		 * Models with indexed runtime state cannot be initialised without their
+		 * rwdata block. modelInitRwData() immediately walks and writes that
+		 * storage, so allowing a failed memp allocation through here turns an
+		 * actionable out-of-memory condition into a later null dereference.
+		 */
+		if (modeldef->rwdatalen > 0 && rwdatas == NULL) {
+			for (i = 0; i < NUMTYPE1(); i++) {
+				if (g_ModelRwdataBindings[0][i].model == model) {
+					g_ModelRwdataBindings[0][i].model = NULL;
+				}
+			}
+
+			for (i = 0; i < NUMTYPE2(); i++) {
+				if (g_ModelRwdataBindings[1][i].model == model) {
+					g_ModelRwdataBindings[1][i].model = NULL;
+				}
+			}
+
+			for (i = 0; i < NUMTYPE3(); i++) {
+				if (g_ModelRwdataBindings[2][i].model == model) {
+					g_ModelRwdataBindings[2][i].model = NULL;
+				}
+			}
+
+			sysLogPrintf(LOG_ERROR,
+				"Could not allocate %u bytes of model runtime data for definition %p.",
+				(unsigned int)ALIGN16(modeldef->rwdatalen * 4), (void *)modeldef);
+			model = NULL;
+		}
+	}
+#endif
 
 	if (model) {
 		if (withanim) {

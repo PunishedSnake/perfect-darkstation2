@@ -6,6 +6,9 @@
 #include "lib/memp.h"
 #include "data.h"
 #include "types.h"
+#ifndef PLATFORM_N64
+#include "system.h"
+#endif
 
 void titleReset(void)
 {
@@ -22,6 +25,13 @@ void titleReset(void)
 	}
 
 	var8009cca0 = mempAlloc(TITLE_ALLOCSIZE, MEMPOOL_STAGE);
+
+#ifndef PLATFORM_N64
+	if (var8009cca0 == NULL) {
+		sysFatalError("Could not allocate the %u-byte title asset arena.",
+			(unsigned int)TITLE_ALLOCSIZE);
+	}
+#endif
 
 	getitleReset();
 }

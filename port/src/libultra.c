@@ -130,9 +130,7 @@ void osViSetEvent(OSMesgQueue *mq, OSMesg msg, u32 retraceCount)
 
 void osViBlack(u8 active)
 {
-	if (active) {
-		videoClearScreen();
-	}
+	videoSetBlack(active != 0);
 }
 
 void osViSetSpecialFeatures(u32 func)

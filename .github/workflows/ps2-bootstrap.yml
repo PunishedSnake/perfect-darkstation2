@@ -217,6 +217,15 @@ jobs:
             -o /tmp/input_ps2_map_test
           /tmp/input_ps2_map_test
 
+          gcc -std=c11 -Wall -Wextra -Werror \
+            -Wno-unused-parameter -Wno-unused-value -Wno-empty-body \
+            -ffunction-sections -fdata-sections -Wl,--gc-sections \
+            -D_LANGUAGE_C=1 -DPLATFORM_PS2=1 \
+            -Iport/ps2 -Iport/include -Iinclude -Iinclude/PR -Isrc/include \
+            port/src/libultra.c port/ps2/vi_black_state_test.c \
+            -o /tmp/vi_black_state_test
+          /tmp/vi_black_state_test
+
           gcc -std=c11 -Wall -Wextra -Werror -fsyntax-only \
             -D_LANGUAGE_C=1 -DPLATFORM_PS2=1 \
             -Iport/ps2 -Iport/include -Iinclude -Iinclude/PR -Isrc/include \

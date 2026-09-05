@@ -133,8 +133,12 @@ The model path is now fail-fast:
 4. `rzipInflateSized` writes into the full bounded destination and must reach
    the end of the stream;
 5. preprocessing checks its temporary allocation;
-6. only a successful model definition reaches relocation, RW-data allocation
-   and instantiation.
+6. model definitions used by the title sequence must have a root node and at
+   least one matrix;
+7. title-arena, model-slot and model RW-data allocations are checked before
+   pointer walking or instance initialization;
+8. only a successful model definition and instance reach relation updates and
+   rendering.
 
 This removes the previous unsigned tail-placement underflow and the case where
 a failed file read still returned a destination pointer.
@@ -152,11 +156,18 @@ Every game frame follows this ownership chain:
 | Planning | `port/ps2/gfx_ps2.cpp` | Maps state and combiner recipes to one or more GS passes. |
 | Native transport | `gs_core`, `gs_native_queue`, `gs_vu1_*` | Uses VIF1/VU1 PATH1 where supported and PATH3 fallback otherwise. |
 | Presentation | `gfx_end_frame` -> `ps2GsCorePresent` | Waits for the appropriate synchronization and flips at VBlank. |
-| Frame end | `schedEndFrame` | Polls PAD/audio and advances VI unblack state. |
+| Frame end | `schedEndFrame` | Polls PAD/audio, applies VI blanking to the active frame and advances the delayed-unblank state. |
 
 The portable scheduler does not launch a separate RSP. It preserves the game
 task boundary but executes the graphics task synchronously through the PS2
 backend.
+
+`osViBlack` is implemented as persistent output state on PS2. While blanking is
+active, `videoEndFrame` appends a black colour/depth clear to the already-open
+frame before its single submit and presentation. It must not call
+`videoClearScreen` from `viHandleRetrace`: that would open a nested Fast3D/GS
+frame, reset the native command arena after game submission and perform an
+extra VBlank presentation from inside the scheduler.
 
 ## Fatal and hang interpretation
 

@@ -57,6 +57,34 @@
 #define TITLE_ASPECT (videoGetAspect())
 #endif
 
+#ifdef PLATFORM_PS2
+static void titlePs2RequireModelDef(const char *name, u16 fileid, struct modeldef *modeldef)
+{
+	if (modeldef == NULL) {
+		sysFatalError("Title model %s (file 0x%04x) has no definition.", name, fileid);
+	}
+
+	if (modeldef->rootnode == NULL) {
+		sysFatalError("Title model %s (file 0x%04x) has no root node.", name, fileid);
+	}
+
+	if (modeldef->nummatrices <= 0) {
+		sysFatalError("Title model %s (file 0x%04x) has invalid matrix count %d.",
+			name, fileid, modeldef->nummatrices);
+	}
+}
+
+static void titlePs2RequireModel(const char *name, u16 fileid, struct model *model)
+{
+	if (model == NULL) {
+		sysFatalError("Could not instantiate title model %s (file 0x%04x).", name, fileid);
+	}
+}
+#else
+#define titlePs2RequireModelDef(name, fileid, modeldef) ((void)0)
+#define titlePs2RequireModel(name, fileid, model) ((void)0)
+#endif
+
 u8 *var8009cca0;
 u32 var8009cca4;
 Vtx *g_PdLogoVertices[NUM_FRAMEBUFFERS];
@@ -587,12 +615,15 @@ void titleInitPdLogo(void)
 	{
 		struct coord coord = {0, 0, 0};
 		g_ModelStates[MODEL_NLOGO].modeldef = modeldefLoad(g_ModelStates[MODEL_NLOGO].fileid, nextaddr, TITLE_ALLOCSIZE, 0);
+		titlePs2RequireModelDef("N logo", g_ModelStates[MODEL_NLOGO].fileid,
+			g_ModelStates[MODEL_NLOGO].modeldef);
 		size = ALIGN64(fileGetLoadedSize(g_ModelStates[MODEL_NLOGO].fileid));
 		nextaddr += size;
 		remaining = TITLE_ALLOCSIZE - size;
 		modelAllocateRwData(g_ModelStates[MODEL_NLOGO].modeldef);
 
 		g_TitleModel = modelmgrInstantiateModelWithAnim(g_ModelStates[MODEL_NLOGO].modeldef);
+		titlePs2RequireModel("N logo", g_ModelStates[MODEL_NLOGO].fileid, g_TitleModel);
 		modelSetScale(g_TitleModel, 1);
 		modelSetRootPosition(g_TitleModel, &coord);
 	}
@@ -600,12 +631,15 @@ void titleInitPdLogo(void)
 	{
 		struct coord coord = {0, 0, 0};
 		g_ModelStates[MODEL_NLOGO2].modeldef = modeldefLoad(g_ModelStates[MODEL_NLOGO2].fileid, nextaddr, remaining, 0);
+		titlePs2RequireModelDef("N logo 2", g_ModelStates[MODEL_NLOGO2].fileid,
+			g_ModelStates[MODEL_NLOGO2].modeldef);
 		size = ALIGN64(fileGetLoadedSize(g_ModelStates[MODEL_NLOGO2].fileid));
 		nextaddr += size;
 		remaining -= size;
 		modelAllocateRwData(g_ModelStates[MODEL_NLOGO2].modeldef);
 
 		g_TitleModelNLogo2 = modelmgrInstantiateModelWithAnim(g_ModelStates[MODEL_NLOGO2].modeldef);
+		titlePs2RequireModel("N logo 2", g_ModelStates[MODEL_NLOGO2].fileid, g_TitleModelNLogo2);
 		modelSetScale(g_TitleModelNLogo2, 1);
 		modelSetRootPosition(g_TitleModelNLogo2, &coord);
 	}
@@ -613,12 +647,15 @@ void titleInitPdLogo(void)
 	{
 		struct coord coord = {0, 0, 0};
 		g_ModelStates[MODEL_PDTWO].modeldef = modeldefLoad(g_ModelStates[MODEL_PDTWO].fileid, nextaddr, remaining, 0);
+		titlePs2RequireModelDef("PD logo 2", g_ModelStates[MODEL_PDTWO].fileid,
+			g_ModelStates[MODEL_PDTWO].modeldef);
 		size = ALIGN64(fileGetLoadedSize(g_ModelStates[MODEL_PDTWO].fileid));
 		nextaddr += size;
 		remaining -= size;
 		modelAllocateRwData(g_ModelStates[MODEL_PDTWO].modeldef);
 
 		g_TitleModelPdTwo = modelmgrInstantiateModelWithoutAnim(g_ModelStates[MODEL_PDTWO].modeldef);
+		titlePs2RequireModel("PD logo 2", g_ModelStates[MODEL_PDTWO].fileid, g_TitleModelPdTwo);
 		modelSetScale(g_TitleModelPdTwo, 1);
 		modelSetRootPosition(g_TitleModelPdTwo, &coord);
 	}
@@ -627,6 +664,8 @@ void titleInitPdLogo(void)
 	{
 		struct coord coord = {0, 0, 0};
 		g_ModelStates[MODEL_JPNLOGO].modeldef = modeldefLoad(g_ModelStates[MODEL_JPNLOGO].fileid, nextaddr, remaining, 0);
+		titlePs2RequireModelDef("Japanese logo", g_ModelStates[MODEL_JPNLOGO].fileid,
+			g_ModelStates[MODEL_JPNLOGO].modeldef);
 		size = ALIGN64(fileGetLoadedSize(g_ModelStates[MODEL_JPNLOGO].fileid));
 		nextaddr += size;
 		remaining -= size;
@@ -634,18 +673,23 @@ void titleInitPdLogo(void)
 
 		g_TitleModelJpnLogo1 = modelmgrInstantiateModelWithoutAnim(g_ModelStates[MODEL_JPNLOGO].modeldef);
 		g_TitleModelJpnLogo2 = modelmgrInstantiateModelWithoutAnim(g_ModelStates[MODEL_JPNLOGO].modeldef);
+		titlePs2RequireModel("Japanese logo 1", g_ModelStates[MODEL_JPNLOGO].fileid, g_TitleModelJpnLogo1);
+		titlePs2RequireModel("Japanese logo 2", g_ModelStates[MODEL_JPNLOGO].fileid, g_TitleModelJpnLogo2);
 		modelSetScale(g_TitleModelJpnLogo1, 1);
 		modelSetScale(g_TitleModelJpnLogo2, 1);
 		modelSetRootPosition(g_TitleModelJpnLogo1, &coord);
 		modelSetRootPosition(g_TitleModelJpnLogo2, &coord);
 
 		g_ModelStates[MODEL_JPNPD].modeldef = modeldefLoad(g_ModelStates[MODEL_JPNPD].fileid, nextaddr, remaining, 0);
+		titlePs2RequireModelDef("Japanese PD logo", g_ModelStates[MODEL_JPNPD].fileid,
+			g_ModelStates[MODEL_JPNPD].modeldef);
 		size = ALIGN64(fileGetLoadedSize(g_ModelStates[MODEL_JPNPD].fileid));
 		nextaddr += size;
 		remaining -= size;
 		modelAllocateRwData(g_ModelStates[MODEL_JPNPD].modeldef);
 
 		g_TitleModelJpnPd = modelmgrInstantiateModelWithoutAnim(g_ModelStates[MODEL_JPNPD].modeldef);
+		titlePs2RequireModel("Japanese PD logo", g_ModelStates[MODEL_JPNPD].fileid, g_TitleModelJpnPd);
 		modelSetScale(g_TitleModelJpnPd, 1);
 		modelSetRootPosition(g_TitleModelJpnPd, &coord);
 	}
@@ -654,12 +698,15 @@ void titleInitPdLogo(void)
 	{
 		struct coord coord = {0, 0, 0};
 		g_ModelStates[MODEL_PDTHREE].modeldef = modeldefLoad(g_ModelStates[MODEL_PDTHREE].fileid, nextaddr, remaining, 0);
+		titlePs2RequireModelDef("PD logo 3", g_ModelStates[MODEL_PDTHREE].fileid,
+			g_ModelStates[MODEL_PDTHREE].modeldef);
 		size = ALIGN64(fileGetLoadedSize(g_ModelStates[MODEL_PDTHREE].fileid));
 		nextaddr += size;
 		remaining -= size;
 		modelAllocateRwData(g_ModelStates[MODEL_PDTHREE].modeldef);
 
 		g_TitleModelPdThree = modelmgrInstantiateModelWithoutAnim(g_ModelStates[MODEL_PDTHREE].modeldef);
+		titlePs2RequireModel("PD logo 3", g_ModelStates[MODEL_PDTHREE].fileid, g_TitleModelPdThree);
 		modelSetScale(g_TitleModelPdThree, 1);
 		modelSetRootPosition(g_TitleModelPdThree, &coord);
 	}
@@ -1837,9 +1884,12 @@ void titleInitNintendoLogo(void)
 		struct coord coord = {0, 0, 0};
 
 		g_ModelStates[MODEL_NINTENDOLOGO].modeldef = modeldefLoad(g_ModelStates[MODEL_NINTENDOLOGO].fileid, nextaddr, TITLE_ALLOCSIZE, 0);
+		titlePs2RequireModelDef("Nintendo logo", g_ModelStates[MODEL_NINTENDOLOGO].fileid,
+			g_ModelStates[MODEL_NINTENDOLOGO].modeldef);
 
 		modelAllocateRwData(g_ModelStates[MODEL_NINTENDOLOGO].modeldef);
 		g_TitleModel = modelmgrInstantiateModelWithoutAnim(g_ModelStates[MODEL_NINTENDOLOGO].modeldef);
+		titlePs2RequireModel("Nintendo logo", g_ModelStates[MODEL_NINTENDOLOGO].fileid, g_TitleModel);
 		modelSetScale(g_TitleModel, 1);
 		modelSetRootPosition(g_TitleModel, &coord);
 		var800624f4 = 1;
@@ -2004,6 +2054,8 @@ void titleInitRareLogo(void)
 		struct coord coord = {0, 0, 0};
 
 		g_ModelStates[MODEL_RARELOGO].modeldef = modeldefLoad(g_ModelStates[MODEL_RARELOGO].fileid, nextaddr, TITLE_ALLOCSIZE, 0);
+		titlePs2RequireModelDef("Rare logo", g_ModelStates[MODEL_RARELOGO].fileid,
+			g_ModelStates[MODEL_RARELOGO].modeldef);
 		TITLE_PS2_CHECKPOINT(
 			"title: Rare logo model loaded definition=%p size=%u",
 			(void *)g_ModelStates[MODEL_RARELOGO].modeldef,
@@ -2011,6 +2063,7 @@ void titleInitRareLogo(void)
 
 		modelAllocateRwData(g_ModelStates[MODEL_RARELOGO].modeldef);
 		g_TitleModel = modelmgrInstantiateModelWithoutAnim(g_ModelStates[MODEL_RARELOGO].modeldef);
+		titlePs2RequireModel("Rare logo", g_ModelStates[MODEL_RARELOGO].fileid, g_TitleModel);
 		TITLE_PS2_CHECKPOINT("title: Rare logo model instantiated model=%p", (void *)g_TitleModel);
 		modelSetScale(g_TitleModel, 1);
 		modelSetRootPosition(g_TitleModel, &coord);

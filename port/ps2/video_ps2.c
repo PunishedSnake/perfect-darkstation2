@@ -37,6 +37,7 @@
  */
 
 static bool s_init_done;
+static bool s_blackout = true;
 static s32 s_framerate_limit;
 static s32 s_display_fps;
 static s32 s_aspect_mode = VIDEO_ASPECT_4_3;
@@ -85,6 +86,9 @@ static void ps2VideoRefreshModeList(void)
 
 s32 videoInit(void)
 {
+    /* VI starts blank and explicitly unblacks after the first scheduled task. */
+    s_blackout = true;
+
     if (!ps2GsCoreIsReady()) {
         const struct Ps2GsCreateInfo gs_info = {
             PS2_GS_PSM_CT16,
@@ -188,6 +192,18 @@ void videoEndFrame(void)
         return;
     }
 
+    /*
+     * N64 VI blanking is output state, not a nested frame. The old portable
+     * shim called videoClearScreen() from viHandleRetrace(), after the game had
+     * already opened and submitted the current frame. On PS2 that started a
+     * second Fast3D/GS frame, reset the native command arena and presented from
+     * inside schedEndFrame(). Append a final clear to the one active frame
+     * instead, preserving command and front/back-buffer ownership.
+     */
+    if (s_blackout) {
+        gfx_ps2_api.clear_framebuffer(true, true);
+    }
+
     gfx_end_frame();
 
     const f64 now = gfx_window_ps2_api.get_time();
@@ -218,6 +234,21 @@ void videoClearScreen(void)
     gfx_start_frame();
     gfx_ps2_api.clear_framebuffer(true, true);
     gfx_end_frame();
+}
+
+void videoSetBlack(s32 black)
+{
+    const bool next = black != 0;
+
+    if (next == s_blackout) {
+        return;
+    }
+
+    s_blackout = next;
+    if (s_init_done) {
+        sysLogPrintf(LOG_NOTE, "VideoPS2: VI output %s",
+            s_blackout ? "blanked" : "unblanked");
+    }
 }
 
 void *videoGetWindowHandle(void)
@@ -559,6 +590,8 @@ void videoShutdown(void)
         gfx_destroy();
         s_init_done = false;
     }
+
+    s_blackout = true;
 }
 
 PD_CONSTRUCTOR static void videoPs2ConfigInit(void)

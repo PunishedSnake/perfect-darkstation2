@@ -176,6 +176,18 @@ void videoClearScreen(void)
 	videoEndFrame();
 }
 
+void videoSetBlack(s32 black)
+{
+	/*
+	 * The desktop backend historically represented VI blanking with a single
+	 * immediate clear. Keep that behaviour here; the PS2 backend owns the
+	 * persistent, frame-safe implementation required by the console scheduler.
+	 */
+	if (black) {
+		videoClearScreen();
+	}
+}
+
 void *videoGetWindowHandle(void)
 {
 	if (initDone) {

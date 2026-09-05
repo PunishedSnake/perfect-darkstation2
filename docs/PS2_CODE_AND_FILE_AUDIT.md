@@ -1,8 +1,9 @@
 # PS2 code and file audit
 
-Audit date: 2026-09-03. Scope: the complete repository with emphasis on the
-`ps2` branch build graph, runtime startup, renderer frontier, generated inputs
-and the local uncommitted files present during the audit.
+Audit date: 2026-09-03; startup-chain review updated 2026-09-05. Scope: the
+complete repository with emphasis on the `ps2` branch build graph, runtime
+startup, renderer frontier, generated inputs and the local uncommitted files
+present during the audit.
 
 This audit intentionally distinguishes four different meanings of “unused”:
 
@@ -111,6 +112,8 @@ No tracked zero-byte file was found.
 | Startup | Required filesystem, ROM and video initialization return values ignored. | Fail at the owning phase with a durable message. |
 | Audio startup | Failed backend could still allow sound heap/output initialization. | Disable game sound automatically for that run. |
 | Critical heaps | RDP, sound, MEMA, VI and Gfx/Vtx allocations used without null checks. | Subsystem-specific fail-fast checks. |
+| Model runtime | Slot-table, title-arena and model RW-data allocation failures could flow into pointer arithmetic or `modelInitRwData`. | Validate the owning allocations and fail with the exact byte/model context. |
+| VI blanking | `osViBlack` opened and presented a nested frame from `schedEndFrame`, resetting the PS2 native command arena after game submission. | Keep persistent blanking state and append the black clear to the one active GS frame. |
 | EEPROM | Unterminated path, unchecked partial I/O and address/length overflow. | Bounded path and 2048-byte range enforcement. |
 | Fatal exit | Controlled failure returned to OSD and resembled a reset. | Close the durable log and park the EE until manual reset. |
 | Desktop CMake | Recursive `port/*.c` globs accidentally included PS2 sources and test `main()` functions. | Exclude `port/ps2` and `port/fast3d/tests` from desktop sources. |
@@ -136,7 +139,7 @@ No tracked zero-byte file was found.
 
 | Priority | Risk | Consequence | Next verification |
 | --- | --- | --- | --- |
-| P0 | First Rare-logo model/render path remains unconfirmed after loader hardening. | Black screen, fatal hold or EE fault immediately after Expansion Pak notice. | Retail run and last durable `title:` checkpoint. |
+| P0 | First Rare-logo model/render path remains unconfirmed after loader and VI-frame ownership hardening. | Black screen, fatal hold or EE fault immediately after Expansion Pak notice. | Retail run and last durable `title:`/`VideoPS2:` checkpoint. |
 | P0 | Direct display-list writers can still overrun between phase checks. Central Vtx/Mtx/colour allocations and PS2 frame boundaries are now guarded. | A single oversized renderer may cross the Gfx boundary before the post-phase check catches it. | Add per-writer reservations or a trailing canary, then stress title and a gameplay stage. |
 | P0 | Remaining unsupported combiner recipes are dropped. The renderer now counts dropped batches/triangles and durably checkpoints the first recipe; active room-fog `CUSTOM_11/CUSTOM_06` is implemented exactly. | Valid runtime with invisible geometry/effects. | Use the next title/game hardware trace to rank nonzero recipe IDs, then implement them in frequency order. |
 | P1 | Offscreen framebuffer operations and copies are stubs. | Missing blur, surveillance, menu and other framebuffer effects. | Build an explicit render-target/copy path with VRAM budgeting. |
