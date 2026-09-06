@@ -223,6 +223,28 @@ the last durable line is a boundary for investigation, not proof that the
 next source line crashed. Retest this build on hardware before attributing
 the original failure to any single subsystem.
 
+### Correct-logo performance baseline
+
+The `aaad5659` hardware capture on 2026-09-06 confirms that the Rare, Nintendo
+64 and Perfect Dark logos render correctly. The first frame reports 527
+translated batches and 3162 vertices in 17.154 ms of EE translation, while
+the complete frame takes 217.705 ms. A later logo frame spends 650.209 ms in
+`schedEndFrame`, which contains the final GS completion fence and VBlank wait.
+This rules out vertex translation as the dominant title bottleneck and points
+at queued GS pass work.
+
+The exact alpha-bearing trilerp graph is especially expensive: each 128x64
+tile uses two CT32 scratch targets, several texture/composite passes and up to
+512 independent 8x2 channel-shuffle sprites. Constant LOD endpoints do not
+need that graph. They now collapse exactly to one selected texture, and a
+whole endpoint batch is emitted as one draw. Mixed batches retain the exact
+tiled path only for non-endpoint triangles.
+
+Renderer telemetry now records cumulative endpoint triangles, tiled
+triangles, submitted graph tiles, and GS FINISH wait time. Periodic durable
+log publication happens after the measured frame interval so mass-storage
+close/reopen latency is not attributed to renderer work.
+
 ## Fatal and hang interpretation
 
 On PS2, `sysFatalError` writes the final error, forces a log checkpoint, closes
@@ -240,8 +262,9 @@ Use this distinction during bring-up:
 
 ## Remaining high-risk boundaries
 
-1. The first Rare-logo display list has not yet completed on confirmed retail
-   hardware with the hardened loader.
+1. The title sequence is correct on confirmed retail hardware but remains too
+   slow to reach the menu in practical time. Non-endpoint alpha-trilerp tiles
+   and their channel shuffle are the leading measured target.
 2. Central Vtx/Mtx/colour allocations now fail before crossing their active
    frame arena, and the PS2 master display list is checked at frame phase
    boundaries. Direct display-list writers still need per-writer reservations

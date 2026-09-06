@@ -75,6 +75,7 @@
 #include "system.h"
 
 #ifdef PLATFORM_PS2
+#include "gfx_ps2.h"
 #include "log_ps2.h"
 #endif
 
@@ -587,6 +588,9 @@ void mainLoop(void)
 						(unsigned int)(frameEnd - tickEnd),
 						(unsigned int)(frameEnd - frameStart));
 					frameTimingReport = frameEnd;
+					/* Publish coarse telemetry outside the measured frame path. */
+					gfxPs2LogRendererStats(false);
+					ps2LogCheckpoint();
 				}
 				if (g_Ps2TraceFirstFrame) {
 					mainRuntimeCheckpoint("first frame: present complete");

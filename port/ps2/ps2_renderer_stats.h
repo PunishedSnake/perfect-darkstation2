@@ -35,6 +35,13 @@ struct Ps2RendererStats {
     uint64_t vu1_wait_max_microseconds;
     uint64_t vu1_wait_timeouts;
     uint64_t vu1_wait_errors;
+    uint64_t gs_finish_wait_calls;
+    uint64_t gs_finish_wait_microseconds;
+    uint64_t gs_finish_wait_max_microseconds;
+    uint64_t gs_finish_wait_errors;
+    uint64_t alpha_trilerp_endpoint_triangles;
+    uint64_t alpha_trilerp_tiled_triangles;
+    uint64_t alpha_trilerp_tiles;
 };
 
 void ps2RendererStatsReset(void);
@@ -52,6 +59,10 @@ void ps2RendererStatsRecordVu1Wait(
     uint64_t microseconds, bool observed_busy);
 void ps2RendererStatsRecordVu1WaitElided(void);
 void ps2RendererStatsRecordVu1WaitFailure(bool timeout);
+void ps2RendererStatsRecordGsFinishWait(uint64_t microseconds, bool success);
+void ps2RendererStatsRecordAlphaTrilerp(
+    uint32_t endpoint_triangles, uint32_t tiled_triangles,
+    uint32_t tile_count);
 void ps2RendererStatsGet(struct Ps2RendererStats *stats);
 
 #ifdef __cplusplus

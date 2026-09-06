@@ -92,6 +92,28 @@ extern "C" void ps2RendererStatsRecordVu1WaitFailure(bool timeout)
     }
 }
 
+extern "C" void ps2RendererStatsRecordGsFinishWait(
+    uint64_t microseconds, bool success)
+{
+    ++s_stats.gs_finish_wait_calls;
+    s_stats.gs_finish_wait_microseconds += microseconds;
+    if (microseconds > s_stats.gs_finish_wait_max_microseconds) {
+        s_stats.gs_finish_wait_max_microseconds = microseconds;
+    }
+    if (!success) {
+        ++s_stats.gs_finish_wait_errors;
+    }
+}
+
+extern "C" void ps2RendererStatsRecordAlphaTrilerp(
+    uint32_t endpoint_triangles, uint32_t tiled_triangles,
+    uint32_t tile_count)
+{
+    s_stats.alpha_trilerp_endpoint_triangles += endpoint_triangles;
+    s_stats.alpha_trilerp_tiled_triangles += tiled_triangles;
+    s_stats.alpha_trilerp_tiles += tile_count;
+}
+
 extern "C" void ps2RendererStatsGet(struct Ps2RendererStats *stats)
 {
     if (stats) {

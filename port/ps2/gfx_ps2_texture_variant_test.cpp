@@ -6,6 +6,14 @@
 
 int main(void)
 {
+    for (unsigned int a = 0; a <= 128u; ++a) {
+        assert(gfxPs2TrilerpEndpoint(a, a, a) ==
+            (a == 0u ? 0 : (a == 128u ? 1 : -1)));
+    }
+    assert(gfxPs2TrilerpEndpoint(0u, 0u, 128u) == -1);
+    assert(gfxPs2TrilerpEndpoint(128u, 0u, 128u) == -1);
+    assert(gfxPs2TrilerpEndpoint(255u, 255u, 255u) == -1);
+
     assert(gfxPs2MaterialRgbChannelPasses(true) == 1u);
     assert(gfxPs2MaterialRgbChannelPasses(false) == 3u);
     assert(gfxPs2CoverageUnion(0.0f, 0.0f) == 0.0f);

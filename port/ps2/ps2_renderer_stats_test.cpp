@@ -31,6 +31,10 @@ int main(void)
     ps2RendererStatsRecordVu1WaitFailure(true);
     ps2RendererStatsRecordVu1WaitFailure(false);
     ps2RendererStatsRecordVu1WaitFailure(false);
+    ps2RendererStatsRecordGsFinishWait(1234u, true);
+    ps2RendererStatsRecordGsFinishWait(4321u, false);
+    ps2RendererStatsRecordAlphaTrilerp(7u, 2u, 11u);
+    ps2RendererStatsRecordAlphaTrilerp(5u, 3u, 13u);
     ps2RendererStatsGet(&stats);
 
     assert(stats.frames == 2u);
@@ -58,6 +62,13 @@ int main(void)
     assert(stats.vu1_wait_max_microseconds == 7u);
     assert(stats.vu1_wait_timeouts == 1u);
     assert(stats.vu1_wait_errors == 2u);
+    assert(stats.gs_finish_wait_calls == 2u);
+    assert(stats.gs_finish_wait_microseconds == 5555u);
+    assert(stats.gs_finish_wait_max_microseconds == 4321u);
+    assert(stats.gs_finish_wait_errors == 1u);
+    assert(stats.alpha_trilerp_endpoint_triangles == 12u);
+    assert(stats.alpha_trilerp_tiled_triangles == 5u);
+    assert(stats.alpha_trilerp_tiles == 24u);
 
     ps2RendererStatsGet(NULL);
     return 0;
