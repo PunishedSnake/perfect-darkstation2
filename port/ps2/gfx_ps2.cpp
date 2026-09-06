@@ -2618,32 +2618,9 @@ static bool ps2_draw_alpha_trilerp_tile(
         s_alpha_trilerp_color_target, composite, 3u, false);
 }
 
-static void ps2_draw_alpha_trilerp_endpoint(
-    const struct Ps2AlphaTrilerpVertex *triangle, int texture_index)
-{
-    struct Ps2GsTexturedVertex output[3];
-    ps2_restore_alpha_trilerp_state();
-    ps2GsCoreSetTextureAlpha(true);
-    ps2GsCoreSetFog(s_shader->features.opt_fog,
-        s_draw_fog_r, s_draw_fog_g, s_draw_fog_b);
-    ps2_apply_texture_clamp(texture_index);
-    for (uint32_t i = 0u; i < 3u; ++i) {
-        const Ps2AlphaTrilerpVertex *v = &triangle[i];
-        output[i].rgbaq = ps2_pack_rgbaq(
-            v->shade_r, v->shade_g, v->shade_b, v->shade_a, v->inv_w);
-        output[i].st = ps2_pack_st(
-            v->tex_u[texture_index] * v->inv_w,
-            v->tex_v[texture_index] * v->inv_w);
-        output[i].xyz2 = s_shader->features.opt_fog
-            ? ps2_pack_xyzf2(v->x, v->y, v->z, v->fog)
-            : ps2_pack_xyz2(v->x, v->y, v->z);
-    }
-    ps2GsCoreDrawTexturedTriangles(s_selected_texture[texture_index], output, 3u);
-}
-
 static bool ps2_draw_alpha_trilerp(uint32_t vertex_count)
 {
-    static uint32_t endpoint_triangles, tiled_triangles, submitted_tiles;
+    static uint32_t tiled_triangles, submitted_tiles;
     static uint64_t report_time;
     if (s_modulate) {
         if (!s_warned_alpha_trilerp_modulate) {
@@ -2674,17 +2651,6 @@ static bool ps2_draw_alpha_trilerp(uint32_t vertex_count)
 
     bool success = true;
     for (uint32_t vertex = 0u; vertex < vertex_count && success; vertex += 3u) {
-        const int endpoint = gfxPs2TrilerpEndpoint(
-            s_alpha_trilerp_vertices[vertex].lod,
-            s_alpha_trilerp_vertices[vertex + 1u].lod,
-            s_alpha_trilerp_vertices[vertex + 2u].lod);
-        if (endpoint >= 0 && !s_shader->features.opt_texture_edge &&
-            !s_shader->features.opt_invisible) {
-            ps2_draw_alpha_trilerp_endpoint(
-                &s_alpha_trilerp_vertices[vertex], endpoint);
-            ++endpoint_triangles;
-            continue;
-        }
         struct Ps2GfxPassGraphTriangle geometry = {};
         for (uint32_t i = 0u; i < 3u; ++i) {
             geometry.x[i] = s_alpha_trilerp_vertices[vertex + i].x;
@@ -2712,8 +2678,8 @@ static bool ps2_draw_alpha_trilerp(uint32_t vertex_count)
     const uint64_t now = sysGetMicroseconds();
     if (now - report_time >= 5000000ULL) {
         sysLogPrintf(LOG_NOTE,
-            "GfxPS2 trilerp cumulative: endpoint=%u tiled=%u tiles=%u",
-            endpoint_triangles, tiled_triangles, submitted_tiles);
+            "GfxPS2 trilerp cumulative: tiled=%u tiles=%u",
+            tiled_triangles, submitted_tiles);
         report_time = now;
     }
     if (!success && !s_warned_alpha_trilerp_workspace) {

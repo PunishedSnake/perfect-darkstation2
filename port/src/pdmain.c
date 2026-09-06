@@ -95,11 +95,19 @@ static void mainRuntimeCheckpoint(const char *phase)
 #endif
 }
 
+#ifdef PLATFORM_PS2
+static void mainRuntimeTrace(const char *phase)
+{
+	sysLogPrintf(LOG_NOTE, "runtime: %s", phase);
+	ps2LogFlush();
+}
+#endif
+
 static void mainFirstFrameCheckpoint(const char *phase)
 {
 #ifdef PLATFORM_PS2
 	if (g_Ps2TraceFirstFrame) {
-		mainRuntimeCheckpoint(phase);
+		mainRuntimeTrace(phase);
 	}
 #else
 	(void)phase;
@@ -554,7 +562,7 @@ void mainLoop(void)
 			if (!g_Vars.mininc60 || (cycles >= g_Vars.mininc60 * CYCLES_PER_FRAME - CYCLES_PER_FRAME / 2)) {
 #ifdef PLATFORM_PS2
 				if (g_Ps2TraceFirstFrame) {
-					mainRuntimeCheckpoint("first frame: scheduler begin");
+					mainRuntimeTrace("first frame: scheduler begin");
 				}
 #endif
 #ifdef PLATFORM_PS2
@@ -566,7 +574,7 @@ void mainLoop(void)
 #ifdef PLATFORM_PS2
 				const u64 tickEnd = sysGetMicroseconds();
 				if (g_Ps2TraceFirstFrame) {
-					mainRuntimeCheckpoint("first frame: mainTick complete; present begin");
+					mainRuntimeTrace("first frame: mainTick complete; present begin");
 				}
 #endif
 				schedEndFrame(&g_Sched);

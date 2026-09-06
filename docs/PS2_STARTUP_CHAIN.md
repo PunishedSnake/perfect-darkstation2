@@ -11,17 +11,25 @@ confirmed. Title rendering remains incorrect: fragmented logos and roughly one
 frame per four seconds were reported. Reaching these states does not establish
 renderer correctness or playable performance.
 
-The next build bounds scratch channel copies to each tile's used rectangle and
-uses a direct texture draw for constant alpha-trilerp endpoints (0 or 128 at all
-three vertices). Intermediate factors retain the multipass graph. These changes
-need hardware validation; the cause of the fragmented logos is not yet proven.
+The next build bounds scratch channel copies to each tile's used rectangle. An
+experimental direct draw for constant alpha-trilerp endpoints was removed after
+the first hardware build containing it no longer showed the post-LEGAL logos.
+All factors therefore retain the known tiled graph until a controlled A/B build
+can validate a cheaper path independently. The cause of the fragmented logos is
+not yet proven.
+
+Title tracing now flushes buffered text without closing and reopening `mass:`
+inside `lvTick` or model rendering. The first-frame completion checkpoint remains
+outside `mainTick`, after presentation. This follows the logger's own rule that
+durable USB filesystem checkpoints do not belong in frame-critical code and
+prevents tracing from becoming part of the renderer bottleneck.
 
 Diagnostic lines `PS2 frame video` measure full `gfx_run` and `gfx_end_frame`
 durations. `PS2 frame runtime` measures scheduler-start plus mainTick, scheduler-end,
 and their total, excluding the outer frame gate. Rendering happens within mainTick,
 so these timings overlap and must not be added together. Each reports one sampled
 frame at roughly five-second intervals, not an average. Trilerp counters are
-cumulative and identify direct endpoint versus tiled triangles. Existing `ee_us`
+cumulative and identify tiled triangles and submitted scratch tiles. Existing `ee_us`
 only measures vertex translation and cannot explain total frame time.
 
 ## Execution overview

@@ -38,17 +38,12 @@
 #ifdef PLATFORM_PS2
 #include "system.h"
 #include "log_ps2.h"
-#define TITLE_PS2_CHECKPOINT(...) do { \
+#define TITLE_PS2_TRACE(...) do { \
 	sysLogPrintf(LOG_NOTE, __VA_ARGS__); \
-	ps2LogCheckpoint(); \
-} while (0)
-#define TITLE_PS2_CHECKPOINT_FORCE(...) do { \
-	sysLogPrintf(LOG_NOTE, __VA_ARGS__); \
-	ps2LogCheckpointForce(); \
+	ps2LogFlush(); \
 } while (0)
 #else
-#define TITLE_PS2_CHECKPOINT(...) ((void)0)
-#define TITLE_PS2_CHECKPOINT_FORCE(...) ((void)0)
+#define TITLE_PS2_TRACE(...) ((void)0)
 #endif
 
 #ifdef PLATFORM_N64
@@ -2045,7 +2040,7 @@ void titleInitRareLogo(void)
 #ifdef PLATFORM_PS2
 	g_Ps2RareLogoFirstRenderPending = true;
 #endif
-	TITLE_PS2_CHECKPOINT_FORCE(
+	TITLE_PS2_TRACE(
 		"title: Rare logo load begin file=%u dst=%p capacity=%u",
 		(unsigned int)g_ModelStates[MODEL_RARELOGO].fileid,
 		(void *)nextaddr, (unsigned int)TITLE_ALLOCSIZE);
@@ -2056,7 +2051,7 @@ void titleInitRareLogo(void)
 		g_ModelStates[MODEL_RARELOGO].modeldef = modeldefLoad(g_ModelStates[MODEL_RARELOGO].fileid, nextaddr, TITLE_ALLOCSIZE, 0);
 		titlePs2RequireModelDef("Rare logo", g_ModelStates[MODEL_RARELOGO].fileid,
 			g_ModelStates[MODEL_RARELOGO].modeldef);
-		TITLE_PS2_CHECKPOINT(
+		TITLE_PS2_TRACE(
 			"title: Rare logo model loaded definition=%p size=%u",
 			(void *)g_ModelStates[MODEL_RARELOGO].modeldef,
 			(unsigned int)fileGetLoadedSize(g_ModelStates[MODEL_RARELOGO].fileid));
@@ -2064,7 +2059,7 @@ void titleInitRareLogo(void)
 		modelAllocateRwData(g_ModelStates[MODEL_RARELOGO].modeldef);
 		g_TitleModel = modelmgrInstantiateModelWithoutAnim(g_ModelStates[MODEL_RARELOGO].modeldef);
 		titlePs2RequireModel("Rare logo", g_ModelStates[MODEL_RARELOGO].fileid, g_TitleModel);
-		TITLE_PS2_CHECKPOINT("title: Rare logo model instantiated model=%p", (void *)g_TitleModel);
+		TITLE_PS2_TRACE("title: Rare logo model instantiated model=%p", (void *)g_TitleModel);
 		modelSetScale(g_TitleModel, 1);
 		modelSetRootPosition(g_TitleModel, &coord);
 
@@ -2078,7 +2073,7 @@ void titleInitRareLogo(void)
 		}
 	}
 
-	TITLE_PS2_CHECKPOINT_FORCE("title: Rare logo init complete");
+	TITLE_PS2_TRACE("title: Rare logo init complete");
 }
 
 void titleExitRareLogo(void)
@@ -2158,7 +2153,7 @@ Gfx *titleRenderRareLogo(Gfx *gdl)
 #ifdef PLATFORM_PS2
 	const bool trace_first_render = g_Ps2RareLogoFirstRenderPending && g_TitleTimer >= 0;
 	if (trace_first_render) {
-		TITLE_PS2_CHECKPOINT("title: Rare logo first render begin timer=%d model=%p",
+		TITLE_PS2_TRACE("title: Rare logo first render begin timer=%d model=%p",
 			g_TitleTimer, (void *)g_TitleModel);
 	}
 #endif
@@ -2245,7 +2240,7 @@ Gfx *titleRenderRareLogo(Gfx *gdl)
 
 #ifdef PLATFORM_PS2
 		if (trace_first_render) {
-			TITLE_PS2_CHECKPOINT("title: Rare logo relations ready matrices=%u",
+			TITLE_PS2_TRACE("title: Rare logo relations ready matrices=%u",
 				(unsigned int)g_TitleModel->definition->nummatrices);
 		}
 #endif
@@ -2280,7 +2275,7 @@ Gfx *titleRenderRareLogo(Gfx *gdl)
 
 #ifdef PLATFORM_PS2
 		if (trace_first_render) {
-			TITLE_PS2_CHECKPOINT("title: Rare logo first model pass complete");
+			TITLE_PS2_TRACE("title: Rare logo first model pass complete");
 		}
 #endif
 
@@ -2322,7 +2317,7 @@ Gfx *titleRenderRareLogo(Gfx *gdl)
 #ifdef PLATFORM_PS2
 	if (trace_first_render) {
 		g_Ps2RareLogoFirstRenderPending = false;
-		TITLE_PS2_CHECKPOINT("title: Rare logo first render complete");
+		TITLE_PS2_TRACE("title: Rare logo first render complete");
 	}
 #endif
 
@@ -2590,7 +2585,7 @@ Gfx *titleRenderNoExpansion(Gfx *gdl)
 void titleSetNextMode(s32 mode)
 {
 	if (g_TitleDelayedMode != mode) {
-		TITLE_PS2_CHECKPOINT(
+		TITLE_PS2_TRACE(
 			"title: schedule mode current=%d next=%d timer=%d",
 			g_TitleMode, mode, g_TitleTimer);
 		g_TitleNextMode = mode;
@@ -2678,7 +2673,8 @@ void titleTick(void)
 		g_TitleMode = g_TitleNextMode;
 		g_TitleNextMode = -1;
 		g_TitleFastForward = false;
-		TITLE_PS2_CHECKPOINT_FORCE("title: mode applied mode=%d", g_TitleMode);
+		/* Never close/reopen mass: from inside lvTick's frame-critical path. */
+		TITLE_PS2_TRACE("title: mode applied mode=%d", g_TitleMode);
 
 		switch (g_TitleMode) {
 		case TITLEMODE_LEGAL:
@@ -2708,6 +2704,7 @@ void titleTick(void)
 			break;
 #endif
 		}
+		TITLE_PS2_TRACE("title: mode init complete mode=%d", g_TitleMode);
 
 		if (g_TitleMode != TITLEMODE_CHECKCONTROLLERS && g_TitleMode != TITLEMODE_SKIP) {
 			viBlack(false);
