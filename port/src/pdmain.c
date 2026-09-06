@@ -75,8 +75,8 @@
 #include "system.h"
 
 #ifdef PLATFORM_PS2
-#include "gfx_ps2.h"
 #include "log_ps2.h"
+void gfxPs2LogRendererStats(int checkpoint);
 #endif
 
 extern u8 *g_MempHeap;

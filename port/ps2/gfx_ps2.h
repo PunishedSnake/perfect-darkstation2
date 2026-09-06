@@ -121,7 +121,7 @@ static inline uint64_t gfxPs2TextureVariantIdentity(
 void gfxPs2SetTextureUploadMirror(uint8_t cms, uint8_t cmt);
 
 /* Emit the current renderer/VU1 counters, optionally forcing durable storage. */
-void gfxPs2LogRendererStats(bool checkpoint);
+void gfxPs2LogRendererStats(int checkpoint);
 
 /*
  * PS2-only import seam used by the generated live-TMEM frontend. Returns true
