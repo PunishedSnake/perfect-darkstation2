@@ -72,7 +72,7 @@ int main(void)
     assert(stats.alpha_trilerp_tiled_triangles == 5u);
     assert(stats.alpha_trilerp_tiles == 24u);
     assert(stats.fast_direct_alpha_triangles == 22u);
-    assert(stats.fast_nearest_mip_triangles == 30u);
+    assert(stats.fast_base_texel0_triangles == 30u);
 
     ps2RendererStatsGet(NULL);
     return 0;

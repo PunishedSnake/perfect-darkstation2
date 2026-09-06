@@ -115,10 +115,10 @@ extern "C" void ps2RendererStatsRecordAlphaTrilerp(
 }
 
 extern "C" void ps2RendererStatsRecordFastComplexMaterial(
-    uint32_t direct_alpha_triangles, uint32_t nearest_mip_triangles)
+    uint32_t direct_alpha_triangles, uint32_t base_texel0_triangles)
 {
     s_stats.fast_direct_alpha_triangles += direct_alpha_triangles;
-    s_stats.fast_nearest_mip_triangles += nearest_mip_triangles;
+    s_stats.fast_base_texel0_triangles += base_texel0_triangles;
 }
 
 extern "C" void ps2RendererStatsGet(struct Ps2RendererStats *stats)

@@ -13,12 +13,6 @@ int main(void)
     assert(gfxPs2TrilerpEndpoint(0u, 0u, 128u) == -1);
     assert(gfxPs2TrilerpEndpoint(128u, 0u, 128u) == -1);
     assert(gfxPs2TrilerpEndpoint(255u, 255u, 255u) == -1);
-    assert(gfxPs2TrilerpNearest(0u, 0u, 0u) == 0);
-    assert(gfxPs2TrilerpNearest(63u, 64u, 64u) == 0);
-    assert(gfxPs2TrilerpNearest(64u, 64u, 64u) == 1);
-    assert(gfxPs2TrilerpNearest(0u, 64u, 128u) == 1);
-    assert(gfxPs2TrilerpNearest(255u, 255u, 255u) == 1);
-
     assert(gfxPs2MaterialRgbChannelPasses(true) == 1u);
     assert(gfxPs2MaterialRgbChannelPasses(false) == 3u);
     assert(gfxPs2CoverageUnion(0.0f, 0.0f) == 0.0f);

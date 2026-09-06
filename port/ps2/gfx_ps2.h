@@ -19,13 +19,6 @@ static inline int gfxPs2TrilerpEndpoint(uint8_t a, uint8_t b, uint8_t c)
     return a == 0u ? 0 : (a == 128u ? 1 : -1);
 }
 
-/* Fast full-game policy: select the nearest of the two mip levels per triangle. */
-static inline int gfxPs2TrilerpNearest(uint8_t a, uint8_t b, uint8_t c)
-{
-    return (unsigned int)a + (unsigned int)b + (unsigned int)c >= 192u
-        ? 1 : 0;
-}
-
 /* Backend-private cache variant for a physically expanded mirror period. */
 static inline uint8_t gfxPs2TextureMirrorVariant(uint8_t cms, uint8_t cmt)
 {

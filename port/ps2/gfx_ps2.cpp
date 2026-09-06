@@ -1263,17 +1263,10 @@ static void ps2_log_fast_complex_material_policy(void)
 {
     if (!s_logged_fast_complex_materials) {
         sysLogPrintf(LOG_NOTE,
-            "GfxPS2 fast complex-material policy active: direct alpha, nearest mip; diagnostic ELF keeps exact tiled graphs");
+            "GfxPS2 fast complex-material policy active: direct TEXEL0 approximation; diagnostic ELF keeps exact tiled graphs");
         s_logged_fast_complex_materials = true;
     }
 }
-
-static void ps2_make_independent_tex0_alpha_texture_triangle(
-    const struct Ps2IndependentTex0AlphaVertex *source,
-    int origin_x, int origin_y, struct Ps2GsTexturedVertex output[3]);
-static void ps2_make_independent_tex0_alpha_color_triangle(
-    const struct Ps2IndependentTex0AlphaVertex *source,
-    int origin_x, int origin_y, struct Ps2GsColorVertex output[3]);
 
 static bool ps2_draw_independent_tex0_alpha_direct(uint32_t vertex_count)
 {
@@ -1283,49 +1276,38 @@ static bool ps2_draw_independent_tex0_alpha_direct(uint32_t vertex_count)
         return false;
     }
 
-    ps2_log_fast_complex_material_policy();
-    ps2GsCoreBindDefaultRenderTarget();
-    ps2GsCoreSetScissor(
-        s_scissor.x, s_scissor.y, s_scissor.width, s_scissor.height);
-
-    for (uint32_t vertex = 0u; vertex < vertex_count; vertex += 3u) {
-        struct Ps2GsTexturedVertex alpha_vertices[3];
-        struct Ps2GsColorVertex color_vertices[3];
-        ps2_make_independent_tex0_alpha_texture_triangle(
-            &s_independent_tex0_alpha_vertices[vertex],
-            0, 0, alpha_vertices);
-        ps2_make_independent_tex0_alpha_color_triangle(
-            &s_independent_tex0_alpha_vertices[vertex],
-            0, 0, color_vertices);
-
-        /* Store only TEXEL0.a * INPUT1.a and establish this primitive's Z. */
-        ps2GsCoreSetDepthMode(s_depth_test, s_depth_update, s_depth_compare);
-        ps2GsCoreSetColorWrite(false);
-        ps2GsCoreSetAlphaWrite(true);
-        ps2GsCoreSetAlphaBlend(false);
-        ps2GsCoreSetAlphaTest(false, 0u);
-        ps2GsCoreSetFramebufferAlphaForce(false);
-        ps2GsCoreSetTextureAlpha(true);
-        ps2GsCoreSetFog(false, 0u, 0u, 0u);
-        ps2_apply_texture_clamp(0);
-        ps2GsCoreDrawTexturedTriangles(
-            s_selected_texture[0], alpha_vertices, 3u);
-
-        /* RGB = lerp(old RGB, INPUT1 RGB, the alpha stored above). */
-        ps2GsCoreSetDepthMode(s_depth_test, false, s_depth_compare);
-        ps2GsCoreSetColorWrite(true);
-        ps2GsCoreSetAlphaWrite(false);
-        ps2GsCoreSetTextureAlpha(false);
-        ps2GsCoreSetFog(s_shader->features.opt_fog,
-            s_draw_fog_r, s_draw_fog_g, s_draw_fog_b);
-        ps2GsCoreSetAlphaBlend(s_alpha_blend);
-        if (s_alpha_blend) {
-            ps2GsCoreSetAlphaBlendEquation(
-                PS2_GS_ALPHA_BLEND_DESTINATION_ALPHA_LERP);
-        }
-        ps2GsCoreDrawColorTriangles(color_vertices, 3u);
+    struct Ps2GsTexturedVertex *output = s_stq_vertices[0];
+    for (uint32_t i = 0u; i < vertex_count; ++i) {
+        const struct Ps2IndependentTex0AlphaVertex *vertex =
+            &s_independent_tex0_alpha_vertices[i];
+        output[i].rgbaq = ps2_pack_rgbaq(
+            (uint8_t)(((uint32_t)vertex->input[0] + 1u) >> 1u),
+            (uint8_t)(((uint32_t)vertex->input[1] + 1u) >> 1u),
+            (uint8_t)(((uint32_t)vertex->input[2] + 1u) >> 1u),
+            vertex->input[3], vertex->inv_w);
+        output[i].st = ps2_pack_st(
+            vertex->tex_u * vertex->inv_w,
+            vertex->tex_v * vertex->inv_w);
+        output[i].xyz2 = s_shader->features.opt_fog
+            ? ps2_pack_xyzf2(
+                vertex->x, vertex->y, vertex->z, vertex->fog)
+            : ps2_pack_xyz2(vertex->x, vertex->y, vertex->z);
     }
 
+    /*
+     * The scanout target is PSMCT16 and exposes only A1, so destination-alpha
+     * reconstruction cannot carry the required 0..128 coverage. Use one
+     * conventional TEXEL0 * INPUT1 draw. It is exact for alpha and for white
+     * mask textures, and remains a bounded approximation for intensity masks.
+     */
+    ps2_log_fast_complex_material_policy();
+    ps2_restore_alpha_trilerp_state();
+    ps2GsCoreSetTextureAlpha(true);
+    ps2GsCoreSetFog(s_shader->features.opt_fog,
+        s_draw_fog_r, s_draw_fog_g, s_draw_fog_b);
+    ps2_apply_texture_clamp(0);
+    ps2GsCoreDrawTexturedTriangles(
+        s_selected_texture[0], output, vertex_count);
     ps2_restore_alpha_trilerp_state();
     ps2RendererStatsRecordFastComplexMaterial(vertex_count / 3u, 0u);
     return true;
@@ -2509,7 +2491,7 @@ static bool ps2_draw_trilerp_independent_alpha_tile(
 }
 
 #if !defined(PERFECT_DARK_PS2_ALPHA_TRILERP_DIAGNOSTIC)
-static void ps2_draw_nearest_trilerp(
+static void ps2_draw_base_texel0_trilerp(
     const struct Ps2AlphaTrilerpVertex *vertices,
     uint32_t vertex_count, bool texture_alpha)
 {
@@ -2519,44 +2501,26 @@ static void ps2_draw_nearest_trilerp(
     ps2GsCoreSetFog(s_shader->features.opt_fog,
         s_draw_fog_r, s_draw_fog_g, s_draw_fog_b);
 
-    uint32_t first = 0u;
-    while (first < vertex_count) {
-        const int texture_index = gfxPs2TrilerpNearest(
-            vertices[first].lod,
-            vertices[first + 1u].lod,
-            vertices[first + 2u].lod);
-        uint32_t end = first + 3u;
-        while (end < vertex_count &&
-               gfxPs2TrilerpNearest(
-                   vertices[end].lod,
-                   vertices[end + 1u].lod,
-                   vertices[end + 2u].lod) == texture_index) {
-            end += 3u;
-        }
-
-        struct Ps2GsTexturedVertex *output = s_stq_vertices[0];
-        for (uint32_t source = first; source < end; ++source) {
-            const struct Ps2AlphaTrilerpVertex *vertex = &vertices[source];
-            const uint32_t destination = source - first;
-            output[destination].rgbaq = ps2_pack_rgbaq(
-                vertex->shade_r, vertex->shade_g, vertex->shade_b,
-                texture_alpha ? vertex->shade_a : vertex->independent_alpha,
-                vertex->inv_w);
-            output[destination].st = ps2_pack_st(
-                vertex->tex_u[texture_index] * vertex->inv_w,
-                vertex->tex_v[texture_index] * vertex->inv_w);
-            output[destination].xyz2 = s_shader->features.opt_fog
-                ? ps2_pack_xyzf2(
-                    vertex->x, vertex->y, vertex->z, vertex->fog)
-                : ps2_pack_xyz2(vertex->x, vertex->y, vertex->z);
-        }
-
-        ps2_apply_texture_clamp(texture_index);
-        ps2GsCoreDrawTexturedTriangles(
-            s_selected_texture[texture_index], output, end - first);
-        first = end;
+    struct Ps2GsTexturedVertex *output = s_stq_vertices[0];
+    for (uint32_t i = 0u; i < vertex_count; ++i) {
+        const struct Ps2AlphaTrilerpVertex *vertex = &vertices[i];
+        output[i].rgbaq = ps2_pack_rgbaq(
+            vertex->shade_r, vertex->shade_g, vertex->shade_b,
+            texture_alpha ? vertex->shade_a : vertex->independent_alpha,
+            vertex->inv_w);
+        output[i].st = ps2_pack_st(
+            vertex->tex_u[0] * vertex->inv_w,
+            vertex->tex_v[0] * vertex->inv_w);
+        output[i].xyz2 = s_shader->features.opt_fog
+            ? ps2_pack_xyzf2(
+                vertex->x, vertex->y, vertex->z, vertex->fog)
+            : ps2_pack_xyz2(vertex->x, vertex->y, vertex->z);
     }
 
+    /* TEXEL0 is the exact LOD=0 base and cannot erase it like TEXEL1 alone. */
+    ps2_apply_texture_clamp(0);
+    ps2GsCoreDrawTexturedTriangles(
+        s_selected_texture[0], output, vertex_count);
     ps2_restore_alpha_trilerp_state();
     ps2RendererStatsRecordFastComplexMaterial(0u, vertex_count / 3u);
 }
@@ -2577,7 +2541,7 @@ static bool ps2_draw_trilerp_independent_alpha(uint32_t vertex_count)
          s_shader->plan.alpha_recipe == PS2_ALPHA_INPUT1_MUL_INPUT2) &&
         !s_shader->features.opt_texture_edge &&
         !s_shader->features.opt_invisible) {
-        ps2_draw_nearest_trilerp(
+        ps2_draw_base_texel0_trilerp(
             s_alpha_trilerp_vertices, vertex_count, false);
         return true;
     }
@@ -2826,7 +2790,7 @@ static bool ps2_draw_alpha_trilerp(uint32_t vertex_count)
 #if !defined(PERFECT_DARK_PS2_ALPHA_TRILERP_DIAGNOSTIC)
     if (!s_shader->features.opt_texture_edge &&
         !s_shader->features.opt_invisible) {
-        ps2_draw_nearest_trilerp(
+        ps2_draw_base_texel0_trilerp(
             s_alpha_trilerp_vertices, vertex_count, true);
         return true;
     }
@@ -3550,7 +3514,7 @@ static void ps2_log_renderer_stats(
     sysLogPrintf(LOG_NOTE,
         "GfxPS2 GS: finish_waits=%llu time=%llu us max=%llu us errors=%llu "
         "alpha_trilerp_endpoint=%llu tiled=%llu tiles=%llu "
-        "fast_direct_alpha=%llu fast_nearest_mip=%llu",
+        "fast_direct_alpha=%llu fast_base_texel0=%llu",
         (unsigned long long)stats.gs_finish_wait_calls,
         (unsigned long long)stats.gs_finish_wait_microseconds,
         (unsigned long long)stats.gs_finish_wait_max_microseconds,
@@ -3559,7 +3523,7 @@ static void ps2_log_renderer_stats(
         (unsigned long long)stats.alpha_trilerp_tiled_triangles,
         (unsigned long long)stats.alpha_trilerp_tiles,
         (unsigned long long)stats.fast_direct_alpha_triangles,
-        (unsigned long long)stats.fast_nearest_mip_triangles);
+        (unsigned long long)stats.fast_base_texel0_triangles);
     if (checkpoint) {
         ps2LogCheckpointForce();
     }
