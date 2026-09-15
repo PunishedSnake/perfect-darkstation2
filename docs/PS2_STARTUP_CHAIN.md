@@ -295,10 +295,11 @@ It consumes the same authoritative TMEM view but lets the portable importer
 expand CI/IA/I 4-bit and 8-bit textures to CT32, removing native PSMT4/PSMT8
 IMAGE, TBW and CLUT layout from the font experiment. It also compiles the full
 game without the VU1/PATH1 transform define, forcing the existing EE/PATH3
-fallback for geometry. The normal artifact is unchanged. Text and geometry are
-independent visual checks even in this combined control: corrected glyph rows
-implicate indexed residency, while removal of stretched triangles implicates
-the VU1 transform path.
+fallback for geometry. The normal artifact is unchanged. Because this combined
+control changes both texture residency and transform transport, it is useful
+as a conservative build but cannot by itself assign a corrected glyph to one
+subsystem. The orthogonal `pd-ps2-game-ee` artifact below removes that
+ambiguity.
 
 Source comparison with the SM64 PS2 port identified a missing prerequisite in
 that initial A/B: SM64 explicitly enables six-plane homogeneous clipping for
@@ -316,6 +317,20 @@ near-plane attribute interpolation, negative-W input, complete rejection,
 insufficient output capacity and 10,000 deterministic random triangles. This
 fix is shared by both geometry transports; the older pre-clip `safe` artifact
 remains useful only for isolating indexed texture residency and VU1 behavior.
+
+Current CI publishes three full-game corners so the font result is not
+confounded with the transform selection:
+
+| Artifact | Indexed textures | Geometry transform |
+| --- | --- | --- |
+| `pd-ps2-game` | native PSMT4/PSMT8 | VU1/PATH1 |
+| `pd-ps2-game-ee` | native PSMT4/PSMT8 | EE/PATH3 |
+| `pd-ps2-game-safe` | expanded CT32 | EE/PATH3 |
+
+Compare `game` with `game-ee` to isolate VU1, then `game-ee` with `game-safe`
+to isolate indexed GS residency. All three contain the same homogeneous
+clipper, so a remaining difference is no longer attributable to eye-plane
+crossings.
 
 The normal game build therefore keeps the file sink disabled. Console logging
 remains active, `--file-log` opts into `pdps2.log`, and CI retains a separate
