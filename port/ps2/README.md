@@ -17,14 +17,12 @@ Real hardware has confirmed:
 - bounded loading of the NTSC-final ROM data segment;
 - GS presentation and the diagnostic renderer;
 - DualShock 2 discovery and corrected stick extrema;
-- the Perfect Dark legal/product-identification screen, including the
-  "N64 Expansion Pak detected" status;
+- the legal screen followed by the Rare, Nintendo 64 and Perfect Dark logos;
 - EEPROM creation through the portable libultra interface.
 
-The first normal 3D title frame after that legal screen has not yet been
-confirmed. The current audit hardened the title-model load path and added
-checkpoints around the Rare-logo model, but those changes still require a real
-hardware run. This is not a playable release.
+The title models render correctly, but the sequence remains far below its frame
+deadline and has not reached the menu in a practical hardware run. This is not
+a playable release.
 
 ## Required files
 
@@ -67,6 +65,20 @@ build-ps2/pd-ps2-game.elf
 build-ps2/pd-ps2-game.map
 ```
 
+The default `Og` profile remains the correctness baseline. For a controlled
+compiler-only A/B, use a separate build directory:
+
+```sh
+cmake -S port/ps2 -B build-ps2-o2 -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE="$PWD/port/ps2/ps2dev-toolchain.cmake" \
+  -DPD_PS2_OPTIMIZATION=O2
+cmake --build build-ps2-o2 --target pd_ps2_game -j2
+```
+
+CI publishes this as `pd-ps2-game-o2`. The runtime log records
+`optimization=Og` or `optimization=O2`; compare the two ELFs with the same ROM,
+configuration, scene and logging policy. Do not mix their measurements.
+
 The map file is a required build artifact. It records actual archive members,
 section contributions and discarded sections after `--gc-sections`; source
 presence in CMake alone is not proof that code survives the final link.
@@ -90,9 +102,9 @@ cmake -S port/ps2 -B build-ps2-vu1-diag -G Ninja \
 cmake --build build-ps2-vu1-diag -j2
 ```
 
-CI builds and inspects all three configurations, runs backend-independent host
-tests, rejects undefined symbols in the game ELF, and publishes the game ELF
-together with its linker map.
+CI builds and inspects all diagnostic configurations plus `Og` and `O2` game
+ELFs, runs backend-independent host tests, rejects undefined symbols, and
+publishes both game variants together with their linker maps.
 
 ## Runtime options useful during bring-up
 

@@ -28,6 +28,10 @@
 #define PD_PS2_GIT_COMMIT "unknown"
 #endif
 
+#ifndef PD_PS2_OPTIMIZATION_PROFILE
+#define PD_PS2_OPTIMIZATION_PROFILE "unknown"
+#endif
+
 static s32 sysArgc;
 static const char **sysArgv;
 static u64 startUsec;
@@ -253,7 +257,8 @@ void sysInit(void)
     }
 
     sysLogPrintf(LOG_NOTE, "Perfect DarkStation 2 logger online");
-    sysLogPrintf(LOG_NOTE, "build commit: %s", PD_PS2_GIT_COMMIT);
+    sysLogPrintf(LOG_NOTE, "build commit: %s optimization=%s",
+        PD_PS2_GIT_COMMIT, PD_PS2_OPTIMIZATION_PROFILE);
     sysLogPrintf(LOG_NOTE, "compiler: %s", __VERSION__);
     sysLogPrintf(LOG_NOTE, "file sink: %s", logFile ? logPath : "unavailable/disabled; console only");
     sysLogPrintf(LOG_NOTE,

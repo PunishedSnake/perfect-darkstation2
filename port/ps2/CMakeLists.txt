@@ -146,8 +146,21 @@ set(PD_PS2_COMMON_INCLUDE_DIRS
   "${PD_ROOT}/port/fast3d"
 )
 
+set(PD_PS2_OPTIMIZATION "Og" CACHE STRING
+  "EE optimization profile for PS2 targets (Og or O2)"
+)
+set_property(CACHE PD_PS2_OPTIMIZATION PROPERTY STRINGS Og O2)
+if(PD_PS2_OPTIMIZATION STREQUAL "Og")
+  set(PD_PS2_OPTIMIZATION_FLAG -Og)
+elseif(PD_PS2_OPTIMIZATION STREQUAL "O2")
+  set(PD_PS2_OPTIMIZATION_FLAG -O2)
+else()
+  message(FATAL_ERROR
+    "PD_PS2_OPTIMIZATION must be Og or O2, got: ${PD_PS2_OPTIMIZATION}")
+endif()
+
 set(PD_PS2_CORRECTNESS_FLAGS
-  -Og
+  ${PD_PS2_OPTIMIZATION_FLAG}
   -G0
   -ffunction-sections
   -fdata-sections
@@ -166,6 +179,7 @@ set(PD_PS2_GAME_DEFINITIONS
   PAL=0
   VERSION=2
   VERSION_ROMID="${PD_PS2_ROMID}"
+  PD_PS2_OPTIMIZATION_PROFILE="${PD_PS2_OPTIMIZATION}"
 )
 
 # The game compile depends on generated enum headers even before any binary
@@ -603,3 +617,4 @@ set_target_properties(pd_ps2_game PROPERTIES
 message(STATUS "Perfect Dark PS2 bootstrap root: ${PD_ROOT}")
 message(STATUS "Perfect Dark PS2 bootstrap gsKit: ${GSKIT}")
 message(STATUS "Perfect Dark PS2 bootstrap commit: ${PD_PS2_GIT_COMMIT}")
+message(STATUS "Perfect Dark PS2 EE optimization: ${PD_PS2_OPTIMIZATION}")

@@ -42,7 +42,7 @@ as fixes or approximations.
 | Texture source | Linear EE staging cache | Authoritative TMEM view with native CT16/CT32/T4/T8 formats | Keep the Perfect Dark path |
 | VRAM lifetime | gsKit manager; complete VRAM clear on Fast3D flush | Transactional residency and fence-delayed block retirement | Keep the Perfect Dark path |
 | Complex materials | One or two approximate passes | Exact tiled graphs can require many passes and channel shuffles | Preserve exact graphs in the diagnostic ELF; use measured approximations in the full game |
-| Build optimization | Unconditionally `-O3` for PS2 | `-Og` correctness-first build | Add an `-O2` A/B only after the GS pass bottleneck is remeasured |
+| Build optimization | Unconditionally `-O3` for PS2 | `-Og` correctness baseline plus separately published `-O2` A/B | Compare both on identical hardware workload; do not adopt SM64's `-O3` blindly |
 | IOP footprint | Loads only required modules | Own startup and embedded `audsrv.irx` | Compare active IRX and IOP memory after graphics reaches its frame target |
 
 ## Reusable lessons
@@ -56,9 +56,10 @@ as fixes or approximations.
    alpha-trilerp diagnostic should remain exact, while the normal game build
    may select one-pass approximations that retain depth, alpha-test, fog and
    visibility semantics.
-4. Treat compiler optimization as a later A/B. SM64 demonstrates that an
-   optimized decompilation can run on PS2, but it does not prove that `-O3` is
-   safe for Perfect Dark or that EE compute is the current bottleneck.
+4. Treat compiler optimization as a measured A/B. CI emits separate `Og` and
+   `O2` game ELFs and embeds the profile in the runtime log. SM64 demonstrates
+   that an optimized decompilation can run on PS2, but it does not prove that
+   `-O3` is safe for Perfect Dark or that EE compute is the current bottleneck.
 5. Revisit IOP module footprint after the render critical path is usable. It
    can recover service memory, but it does not explain the measured GS FINISH
    time in title frames.
