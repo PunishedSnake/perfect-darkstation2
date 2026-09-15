@@ -131,7 +131,6 @@ struct Ps2TextureSamplerState {
     bool expanded_mirror_s;
     bool expanded_mirror_t;
     bool monochrome_rgb;
-    bool white_rgb;
 };
 
 struct Ps2TextureRegionClampState {
@@ -243,9 +242,6 @@ static bool s_logged_interference_scalar;
 static bool s_logged_interference_vector;
 static bool s_warned_independent_tex0_alpha_workspace;
 static bool s_warned_independent_tex0_alpha_modulate;
-#if !defined(PERFECT_DARK_PS2_ALPHA_TRILERP_DIAGNOSTIC)
-static bool s_logged_fast_complex_materials;
-#endif
 static bool s_checkpointed_unsupported_shader;
 static bool s_pending_unsupported_shader_checkpoint;
 static Ps2GsRenderTargetHandle s_alpha_trilerp_color_target;
@@ -550,9 +546,6 @@ static void ps2_upload_texture(const uint8_t *rgba32_buf, uint32_t width, uint32
         s_texture_sampler[handle].monochrome_rgb =
             gfxPs2Rgba32IsMonochrome(
                 rgba32_buf, width * height);
-        s_texture_sampler[handle].white_rgb =
-            gfxPs2Rgba32IsWhiteRgb(
-                rgba32_buf, width * height);
     }
 }
 
@@ -603,9 +596,6 @@ extern "C" bool gfxPs2UploadTmemTexture(
             s_texture_sampler[handle].monochrome_rgb =
                 gfxPs2Rgba32IsMonochrome(
                     view->texels, width * height);
-            s_texture_sampler[handle].white_rgb =
-                gfxPs2Rgba32IsWhiteRgb(
-                    view->texels, width * height);
         }
         if (!s_logged_native_rgba32) {
             sysLogPrintf(LOG_NOTE,
@@ -633,9 +623,6 @@ extern "C" bool gfxPs2UploadTmemTexture(
             s_texture_sampler[handle].monochrome_rgb =
                 gfxPs2N64Rgba16IsMonochrome(
                     view->texels, width * height);
-            s_texture_sampler[handle].white_rgb =
-                gfxPs2N64Rgba16IsWhiteRgb(
-                    view->texels, width * height);
         }
         if (!s_logged_native_rgba16) {
             sysLogPrintf(LOG_NOTE,
@@ -661,7 +648,6 @@ extern "C" bool gfxPs2UploadTmemTexture(
             handle, width, height, mirror_s, mirror_t);
         if (handle < PS2_GFX_TEXTURE_STATE_SLOTS) {
             s_texture_sampler[handle].monochrome_rgb = true;
-            s_texture_sampler[handle].white_rgb = false;
         }
         if (!s_logged_native_ia16) {
             sysLogPrintf(LOG_NOTE,
@@ -694,7 +680,6 @@ extern "C" bool gfxPs2UploadTmemTexture(
             handle, width, height, mirror_s, mirror_t);
         if (handle < PS2_GFX_TEXTURE_STATE_SLOTS) {
             s_texture_sampler[handle].monochrome_rgb = true;
-            s_texture_sampler[handle].white_rgb = false;
         }
         if (!s_logged_native_intensity[(uint32_t)encoding]) {
             sysLogPrintf(LOG_NOTE,
@@ -753,7 +738,6 @@ extern "C" bool gfxPs2UploadTmemTexture(
             }
         }
         s_texture_sampler[handle].monochrome_rgb = monochrome;
-        s_texture_sampler[handle].white_rgb = false;
     }
 
     bool *logged = ia16_palette
@@ -1271,68 +1255,6 @@ static void ps2_restore_alpha_trilerp_state(void)
     ps2_apply_texture_clamp(0);
 }
 
-#if !defined(PERFECT_DARK_PS2_ALPHA_TRILERP_DIAGNOSTIC)
-static void ps2_log_fast_complex_material_policy(void)
-{
-    if (!s_logged_fast_complex_materials) {
-        sysLogPrintf(LOG_NOTE,
-            "GfxPS2 proven material fast path active: white TEXEL0 RGB, exact direct alpha");
-        s_logged_fast_complex_materials = true;
-    }
-}
-
-static bool ps2_draw_independent_tex0_alpha_direct(uint32_t vertex_count)
-{
-    const Ps2GsTextureHandle handle = s_selected_texture[0];
-    const bool white_rgb = handle < PS2_GFX_TEXTURE_STATE_SLOTS &&
-        s_texture_sampler[handle].white_rgb;
-    if (!gfxPs2FastIndependentTex0AlphaEligible(
-            s_modulate,
-            s_shader->features.opt_texture_edge,
-            s_shader->features.opt_invisible,
-            white_rgb)) {
-        return false;
-    }
-
-    struct Ps2GsTexturedVertex *output = s_stq_vertices[0];
-    for (uint32_t i = 0u; i < vertex_count; ++i) {
-        const struct Ps2IndependentTex0AlphaVertex *vertex =
-            &s_independent_tex0_alpha_vertices[i];
-        output[i].rgbaq = ps2_pack_rgbaq(
-            (uint8_t)(((uint32_t)vertex->input[0] + 1u) >> 1u),
-            (uint8_t)(((uint32_t)vertex->input[1] + 1u) >> 1u),
-            (uint8_t)(((uint32_t)vertex->input[2] + 1u) >> 1u),
-            vertex->input[3], vertex->inv_w);
-        output[i].st = ps2_pack_st(
-            vertex->tex_u * vertex->inv_w,
-            vertex->tex_v * vertex->inv_w);
-        output[i].xyz2 = s_shader->features.opt_fog
-            ? ps2_pack_xyzf2(
-                vertex->x, vertex->y, vertex->z, vertex->fog)
-            : ps2_pack_xyz2(vertex->x, vertex->y, vertex->z);
-    }
-
-    /*
-     * The scanout target is PSMCT16 and exposes only A1, so destination-alpha
-     * reconstruction cannot carry the required 0..128 coverage. Use one
-     * conventional TEXEL0 * INPUT1 draw only after upload metadata proves that
-     * TEXEL0 RGB is constant white. Alpha, including the existing threshold
-     * test, and the independent INPUT1 RGB equation are therefore preserved.
-     */
-    ps2_log_fast_complex_material_policy();
-    ps2_restore_alpha_trilerp_state();
-    ps2GsCoreSetTextureAlpha(true);
-    ps2GsCoreSetFog(s_shader->features.opt_fog,
-        s_draw_fog_r, s_draw_fog_g, s_draw_fog_b);
-    ps2_apply_texture_clamp(0);
-    ps2GsCoreDrawTexturedTriangles(
-        s_selected_texture[0], output, vertex_count);
-    ps2_restore_alpha_trilerp_state();
-    ps2RendererStatsRecordFastDirectAlpha(vertex_count / 3u);
-    return true;
-}
-#endif
-
 static void ps2_make_independent_tex0_alpha_texture_triangle(
     const struct Ps2IndependentTex0AlphaVertex *source,
     int origin_x, int origin_y, struct Ps2GsTexturedVertex output[3])
@@ -1447,11 +1369,6 @@ static bool ps2_draw_independent_tex0_alpha_tile(
 
 static bool ps2_draw_independent_tex0_alpha(uint32_t vertex_count)
 {
-#if !defined(PERFECT_DARK_PS2_ALPHA_TRILERP_DIAGNOSTIC)
-    if (ps2_draw_independent_tex0_alpha_direct(vertex_count)) {
-        return true;
-    }
-#endif
     if (s_modulate) {
         if (!s_warned_independent_tex0_alpha_modulate) {
             sysLogPrintf(LOG_WARNING,
@@ -2701,56 +2618,10 @@ static bool ps2_draw_alpha_trilerp_tile(
         s_alpha_trilerp_color_target, composite, 3u, false);
 }
 
-static int ps2_alpha_trilerp_batch_endpoint(uint32_t vertex_count)
-{
-    if (vertex_count == 0u) {
-        return -1;
-    }
-
-    const uint8_t lod = s_alpha_trilerp_vertices[0].lod;
-    const int endpoint = lod == 0u ? 0 : (lod == 128u ? 1 : -1);
-    if (endpoint < 0) {
-        return -1;
-    }
-    for (uint32_t vertex = 1u; vertex < vertex_count; ++vertex) {
-        if (s_alpha_trilerp_vertices[vertex].lod != lod) {
-            return -1;
-        }
-    }
-    return endpoint;
-}
-
-static void ps2_draw_alpha_trilerp_endpoint(
-    const struct Ps2AlphaTrilerpVertex *vertices,
-    uint32_t vertex_count, int texture_index)
-{
-    struct Ps2GsTexturedVertex *output = s_stq_vertices[0];
-    for (uint32_t i = 0u; i < vertex_count; ++i) {
-        const struct Ps2AlphaTrilerpVertex *vertex = &vertices[i];
-        output[i].rgbaq = ps2_pack_rgbaq(
-            vertex->shade_r, vertex->shade_g,
-            vertex->shade_b, vertex->shade_a, vertex->inv_w);
-        output[i].st = ps2_pack_st(
-            vertex->tex_u[texture_index] * vertex->inv_w,
-            vertex->tex_v[texture_index] * vertex->inv_w);
-        output[i].xyz2 = s_shader->features.opt_fog
-            ? ps2_pack_xyzf2(
-                vertex->x, vertex->y, vertex->z, vertex->fog)
-            : ps2_pack_xyz2(vertex->x, vertex->y, vertex->z);
-    }
-
-    ps2_restore_alpha_trilerp_state();
-    ps2GsCoreSetTextureAlpha(true);
-    ps2GsCoreSetFog(s_shader->features.opt_fog,
-        s_draw_fog_r, s_draw_fog_g, s_draw_fog_b);
-    ps2_apply_texture_clamp(texture_index);
-    ps2GsCoreDrawTexturedTriangles(
-        s_selected_texture[texture_index], output, vertex_count);
-    ps2_restore_alpha_trilerp_state();
-}
-
 static bool ps2_draw_alpha_trilerp(uint32_t vertex_count)
 {
+    static uint32_t tiled_triangles, submitted_tiles;
+    static uint64_t report_time;
     if (s_modulate) {
         if (!s_warned_alpha_trilerp_modulate) {
             sysLogPrintf(LOG_WARNING,
@@ -2759,19 +2630,6 @@ static bool ps2_draw_alpha_trilerp(uint32_t vertex_count)
         }
         return false;
     }
-
-    const int batch_endpoint =
-        ps2_alpha_trilerp_batch_endpoint(vertex_count);
-    if (batch_endpoint >= 0 &&
-        !s_shader->features.opt_texture_edge &&
-        !s_shader->features.opt_invisible) {
-        ps2_draw_alpha_trilerp_endpoint(
-            s_alpha_trilerp_vertices, vertex_count, batch_endpoint);
-        ps2RendererStatsRecordAlphaTrilerp(
-            vertex_count / 3u, 0u, 0u);
-        return true;
-    }
-
     if (!ps2_ensure_alpha_trilerp_workspace()) {
         return false;
     }
@@ -2792,22 +2650,7 @@ static bool ps2_draw_alpha_trilerp(uint32_t vertex_count)
     };
 
     bool success = true;
-    uint32_t endpoint_triangles = 0u;
-    uint32_t tiled_triangles = 0u;
-    uint32_t submitted_tiles = 0u;
     for (uint32_t vertex = 0u; vertex < vertex_count && success; vertex += 3u) {
-        const int endpoint = gfxPs2TrilerpEndpoint(
-            s_alpha_trilerp_vertices[vertex].lod,
-            s_alpha_trilerp_vertices[vertex + 1u].lod,
-            s_alpha_trilerp_vertices[vertex + 2u].lod);
-        if (endpoint >= 0 && !s_shader->features.opt_texture_edge &&
-            !s_shader->features.opt_invisible) {
-            ps2_draw_alpha_trilerp_endpoint(
-                &s_alpha_trilerp_vertices[vertex], 3u, endpoint);
-            ++endpoint_triangles;
-            continue;
-        }
-
         struct Ps2GfxPassGraphTriangle geometry = {};
         for (uint32_t i = 0u; i < 3u; ++i) {
             geometry.x[i] = s_alpha_trilerp_vertices[vertex + i].x;
@@ -2832,8 +2675,13 @@ static bool ps2_draw_alpha_trilerp(uint32_t vertex_count)
     }
 
     ps2_restore_alpha_trilerp_state();
-    ps2RendererStatsRecordAlphaTrilerp(
-        endpoint_triangles, tiled_triangles, submitted_tiles);
+    const uint64_t now = sysGetMicroseconds();
+    if (now - report_time >= 5000000ULL) {
+        sysLogPrintf(LOG_NOTE,
+            "GfxPS2 trilerp cumulative: tiled=%u tiles=%u",
+            tiled_triangles, submitted_tiles);
+        report_time = now;
+    }
     if (!success && !s_warned_alpha_trilerp_workspace) {
         sysLogPrintf(LOG_ERROR,
             "GfxPS2 alpha-trilerp pass graph submission failed");
@@ -3475,18 +3323,6 @@ static void ps2_log_renderer_stats(
         (unsigned long long)stats.vu1_wait_max_microseconds,
         (unsigned long long)stats.vu1_wait_timeouts,
         (unsigned long long)stats.vu1_wait_errors);
-    sysLogPrintf(LOG_NOTE,
-        "GfxPS2 GS: finish_waits=%llu time=%llu us max=%llu us errors=%llu "
-        "alpha_trilerp_endpoint=%llu tiled=%llu tiles=%llu "
-        "fast_direct_alpha=%llu",
-        (unsigned long long)stats.gs_finish_wait_calls,
-        (unsigned long long)stats.gs_finish_wait_microseconds,
-        (unsigned long long)stats.gs_finish_wait_max_microseconds,
-        (unsigned long long)stats.gs_finish_wait_errors,
-        (unsigned long long)stats.alpha_trilerp_endpoint_triangles,
-        (unsigned long long)stats.alpha_trilerp_tiled_triangles,
-        (unsigned long long)stats.alpha_trilerp_tiles,
-        (unsigned long long)stats.fast_direct_alpha_triangles);
     if (checkpoint) {
         ps2LogCheckpointForce();
     }
@@ -3510,6 +3346,13 @@ static void ps2_end_frame(void)
         s_checkpointed_unsupported_shader = true;
     }
 
+    struct Ps2RendererStats stats;
+    ps2RendererStatsGet(&stats);
+    const bool early_snapshot = stats.frames == 1u ||
+        stats.frames == 60u || stats.frames == 120u;
+    if (early_snapshot || stats.frames % 300u == 0u) {
+        ps2_log_renderer_stats(stats, early_snapshot);
+    }
 }
 
 static void ps2_finish_render(void)

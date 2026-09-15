@@ -12,13 +12,6 @@ extern struct GfxRenderingAPI gfx_ps2_api;
 
 struct GfxRdpTmemLiveTextureView;
 
-/* Constant LOD endpoints collapse exact trilerp to one source texture. */
-static inline int gfxPs2TrilerpEndpoint(uint8_t a, uint8_t b, uint8_t c)
-{
-    if (a != b || a != c) return -1;
-    return a == 0u ? 0 : (a == 128u ? 1 : -1);
-}
-
 /* Backend-private cache variant for a physically expanded mirror period. */
 static inline uint8_t gfxPs2TextureMirrorVariant(uint8_t cms, uint8_t cmt)
 {
@@ -31,18 +24,6 @@ static inline uint8_t gfxPs2TextureMirrorVariant(uint8_t cms, uint8_t cmt)
 static inline uint32_t gfxPs2MaterialRgbChannelPasses(bool monochrome_rgb)
 {
     return monochrome_rgb ? 1u : 3u;
-}
-
-/*
- * Exact one-pass proof for RGB=INPUT1 and A=TEXEL0.a*INPUT1.a. GS MODULATE
- * can express both lanes only when TEXEL0 RGB is known to be constant white.
- */
-static inline bool gfxPs2FastIndependentTex0AlphaEligible(
-    bool destination_modulate, bool texture_edge, bool invisible,
-    bool texture_rgb_is_white)
-{
-    return !destination_modulate && !texture_edge && !invisible &&
-        texture_rgb_is_white;
 }
 
 /* Union of two normalized coverage values: B + A * (1 - B). */
@@ -66,22 +47,6 @@ static inline bool gfxPs2Rgba32IsMonochrome(
     return true;
 }
 
-static inline bool gfxPs2Rgba32IsWhiteRgb(
-    const uint8_t *rgba32, uint32_t texel_count)
-{
-    if (!rgba32 && texel_count != 0u) {
-        return false;
-    }
-    for (uint32_t i = 0u; i < texel_count; ++i) {
-        const uint8_t *texel = &rgba32[i * 4u];
-        if (texel[0] != 0xffu || texel[1] != 0xffu ||
-            texel[2] != 0xffu) {
-            return false;
-        }
-    }
-    return true;
-}
-
 static inline bool gfxPs2N64Rgba16IsMonochrome(
     const uint8_t *rgba5551_be, uint32_t texel_count)
 {
@@ -96,23 +61,6 @@ static inline bool gfxPs2N64Rgba16IsMonochrome(
         const uint16_t g = (texel >> 6u) & 0x1fu;
         const uint16_t b = (texel >> 1u) & 0x1fu;
         if (r != g || r != b) {
-            return false;
-        }
-    }
-    return true;
-}
-
-static inline bool gfxPs2N64Rgba16IsWhiteRgb(
-    const uint8_t *rgba5551_be, uint32_t texel_count)
-{
-    if (!rgba5551_be && texel_count != 0u) {
-        return false;
-    }
-    for (uint32_t i = 0u; i < texel_count; ++i) {
-        const uint16_t texel =
-            ((uint16_t)rgba5551_be[i * 2u] << 8u) |
-            rgba5551_be[i * 2u + 1u];
-        if ((texel & 0xfffeu) != 0xfffeu) {
             return false;
         }
     }

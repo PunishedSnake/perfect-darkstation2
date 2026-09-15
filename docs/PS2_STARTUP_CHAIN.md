@@ -235,10 +235,10 @@ at queued GS pass work.
 
 The exact alpha-bearing trilerp graph is especially expensive: each 128x64
 tile uses two CT32 scratch targets, several texture/composite passes and up to
-512 independent 8x2 channel-shuffle sprites. Constant LOD endpoints do not
-need that graph. They now collapse exactly to one selected texture, and a
-whole endpoint batch is emitted as one draw. Mixed batches retain the exact
-tiled path only for non-endpoint triangles.
+512 independent 8x2 channel-shuffle sprites. Constant LOD endpoints are
+theoretically reducible to one source texture, but the default correctness
+baseline deliberately retains the tiled graph for every factor after the
+endpoint A/B build failed the post-LEGAL hardware test.
 
 The `d1556ac4` Og/O2 hardware run exposed a regression in the later broad
 complex-material fallbacks: LEGAL text looked displaced and neither run
@@ -248,19 +248,24 @@ telemetry and do not distinguish a long first GS fence from a failed file-sink
 reopen. The matching visual regression nevertheless invalidates the unproved
 RGB substitutions.
 
-Non-endpoint alpha trilerp and independent-alpha trilerp now retain their exact
-tiled graphs in the normal build. The independent TEXEL0-alpha path may still
-collapse to one draw, including with ordinary alpha thresholding, but only when
-upload metadata proves that the texture RGB lanes are constant white. That is
-an equation proof: GS MODULATE preserves INPUT1 RGB and computes the required
-`TEXEL0.a * INPUT1.a`. Intensity fonts, CI/IA textures and every unproved
-texture stay on the exact CT32 path. Texture-edge/FBA, destination-colour
-modulation and invisible draws also remain explicit.
+The `a56bacda` test build retained exact tiled graphs for non-endpoint
+trilerp, while allowing endpoint collapse and a direct independent-alpha draw
+only for textures whose RGB lanes were proven white during upload. It also
+recorded endpoint, tile and GS FINISH counters outside the measured frame
+interval. Those remaining specializations still failed the hardware title
+test described below, so they are no longer active in the default build.
 
-Renderer telemetry now records cumulative endpoint triangles, tiled
-triangles, submitted graph tiles, and GS FINISH wait time. Periodic durable
-log publication happens after the measured frame interval so mass-storage
-close/reopen latency is not attributed to renderer work.
+The `a56bacda` Og hardware run on 2026-09-15 still displayed LEGAL but did not
+display the Rare, Nintendo 64 or Perfect Dark logos. Its durable log again
+ends at `stage reset complete; frame loop begin`, without a completed-frame
+snapshot. This rejects the proof-gated partial rollback as sufficient.
+
+The active renderer has therefore been returned to the `aaad5659`
+hardware-confirmed behavior. The endpoint trilerp collapse, white-texture
+direct-alpha path, GS FINISH timing wrapper and their extra hot-path counters
+are removed together. The C-safe integer checkpoint ABI and build-profile
+labelling remain because they do not alter draw or synchronization behavior.
+This is a correctness baseline, not a performance improvement.
 
 ## Fatal and hang interpretation
 
@@ -279,9 +284,10 @@ Use this distinction during bring-up:
 
 ## Remaining high-risk boundaries
 
-1. The title sequence is correct on confirmed retail hardware but remains too
-   slow to reach the menu in practical time. Non-endpoint alpha-trilerp tiles
-   and their channel shuffle are the leading measured target.
+1. The restored title sequence matches the last renderer state confirmed on
+   retail hardware, but requires a new hardware test. That known-good state was
+   too slow to reach the menu in practical time. Non-endpoint alpha-trilerp
+   tiles and their channel shuffle remain the leading measured target.
 2. Central Vtx/Mtx/colour allocations now fail before crossing their active
    frame arena, and the PS2 master display list is checked at frame phase
    boundaries. Direct display-list writers still need per-writer reservations

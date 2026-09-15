@@ -188,6 +188,12 @@ Emulators are useful for functional inspection. Timing, DMA ordering, VIF/VU
 hazards, GS FIFO behavior and device I/O must be accepted only after testing on
 real hardware.
 
+The 2026-09-15 `a56bacda` Og hardware test displayed LEGAL but no later title
+logos. The default game renderer is consequently restored to the
+`aaad5659` hardware-confirmed draw and GS synchronization behavior. Test the
+Og artifact first; only compare O2 after Rare, Nintendo 64 and Perfect Dark
+are visible again.
+
 ## More documentation
 
 - [Startup and first-frame chain](../../docs/PS2_STARTUP_CHAIN.md)

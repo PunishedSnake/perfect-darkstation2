@@ -10,7 +10,6 @@
 #include "gs_texture_convert.h"
 #include "gs_vu1_queue.h"
 #include "log_ps2.h"
-#include "ps2_renderer_stats.h"
 #include "system.h"
 
 #define PS2_GIF_PACKED 0u
@@ -547,21 +546,18 @@ extern "C" bool ps2GsNativeQueueWaitGs(void)
      * before submitting this token, then distinguish GIF completion from actual
      * GS completion by polling the privileged FINISH bit.
      */
-    const uint64_t start = sysGetMicroseconds();
-    bool success = ps2GsVu1QueueWaitIdle() &&
-        dmaKit_wait(DMA_CHANNEL_GIF, 0) >= 0;
-    if (success) {
-        GS_SETREG_CSR_FINISH(1);
-        dmaKit_send_ucab(DMA_CHANNEL_GIF, s_finish_ucab, 2);
-        success = dmaKit_wait(DMA_CHANNEL_GIF, 0) >= 0;
+    if (!ps2GsVu1QueueWaitIdle() ||
+        dmaKit_wait(DMA_CHANNEL_GIF, 0) < 0) {
+        return false;
     }
-    if (success) {
-        while (!(GS_CSR_FINISH)) {
-        }
+    GS_SETREG_CSR_FINISH(1);
+    dmaKit_send_ucab(DMA_CHANNEL_GIF, s_finish_ucab, 2);
+    if (dmaKit_wait(DMA_CHANNEL_GIF, 0) < 0) {
+        return false;
     }
-    ps2RendererStatsRecordGsFinishWait(
-        sysGetMicroseconds() - start, success);
-    return success;
+    while (!(GS_CSR_FINISH)) {
+    }
+    return true;
 }
 
 extern "C" bool ps2GsNativeQueuePresent(GSGLOBAL *gs)

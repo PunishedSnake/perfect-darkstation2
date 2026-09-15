@@ -76,7 +76,6 @@
 
 #ifdef PLATFORM_PS2
 #include "log_ps2.h"
-void gfxPs2LogRendererStats(int checkpoint);
 #endif
 
 extern u8 *g_MempHeap;
@@ -588,9 +587,6 @@ void mainLoop(void)
 						(unsigned int)(frameEnd - tickEnd),
 						(unsigned int)(frameEnd - frameStart));
 					frameTimingReport = frameEnd;
-					/* Publish coarse telemetry outside the measured frame path. */
-					gfxPs2LogRendererStats(false);
-					ps2LogCheckpoint();
 				}
 				if (g_Ps2TraceFirstFrame) {
 					mainRuntimeCheckpoint("first frame: present complete");
