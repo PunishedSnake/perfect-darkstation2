@@ -249,12 +249,15 @@ void sysInit(void)
     startUsec = timerUsec();
 
     /*
-     * Bring-up logging is active by default. --no-log is the explicit escape
-     * hatch for timing-sensitive experiments. Console output remains active.
+     * Bring-up logging is active by default. --no-log is the runtime escape
+     * hatch; the dedicated hardware A/B can also disable it at compile time.
+     * Console output remains active in both cases.
      */
+#ifndef PD_PS2_DISABLE_FILE_LOG_DEFAULT
     if (!sysArgCheck("--no-log")) {
         sysLogSetPath(LOG_FNAME);
     }
+#endif
 
     sysLogPrintf(LOG_NOTE, "Perfect DarkStation 2 logger online");
     sysLogPrintf(LOG_NOTE, "build commit: %s optimization=%s",

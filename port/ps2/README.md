@@ -81,6 +81,12 @@ CI publishes this as `pd-ps2-game-o2`. The runtime log records
 `optimization=Og` or `optimization=O2`; compare the two ELFs with the same ROM,
 configuration, scene and logging policy. Do not mix their measurements.
 
+CI also publishes `pd-ps2-game-nolog`, an `Og` hardware diagnostic built with
+`-DPD_PS2_FILE_LOG_DEFAULT=OFF`. It keeps console logging but never opens
+`pdps2.log`, separating renderer/scheduler progress from `mass:` filesystem
+flush and close/reopen behaviour. This is a diagnostic, not the default game
+configuration.
+
 The map file is a required build artifact. It records actual archive members,
 section contributions and discarded sections after `--gc-sections`; source
 presence in CMake alone is not proof that code survives the final link.

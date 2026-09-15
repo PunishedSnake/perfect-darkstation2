@@ -267,6 +267,20 @@ are removed together. The C-safe integer checkpoint ABI and build-profile
 labelling remain because they do not alter draw or synchronization behavior.
 This is a correctness baseline, not a performance improvement.
 
+The subsequent `46bc51e7` Og hardware run on 2026-09-15 still displayed LEGAL
+but did not display the Rare, Nintendo 64 or Perfect Dark logos. Its durable
+log again ends at `stage reset complete; frame loop begin`. The original
+`aaad5659` CI #245 game artifact remains the binary control because the current
+and historical ELFs differ only in the build-profile log/ABI changes and their
+resulting eight-byte text layout shift. Test that exact historical ELF from a
+clean directory before assigning the failure to renderer source.
+
+`pd-ps2-game-nolog` is the orthogonal filesystem control. It is the same `Og`
+source as the default game but does not open `pdps2.log`; console output remains
+enabled. If the historical ELF also fails while the no-log build progresses,
+the `mass:` file sink or its device state, rather than title rendering, is the
+active blocker.
+
 ## Fatal and hang interpretation
 
 On PS2, `sysFatalError` writes the final error, forces a log checkpoint, closes

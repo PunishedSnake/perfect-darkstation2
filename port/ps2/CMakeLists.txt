@@ -159,6 +159,10 @@ else()
     "PD_PS2_OPTIMIZATION must be Og or O2, got: ${PD_PS2_OPTIMIZATION}")
 endif()
 
+option(PD_PS2_FILE_LOG_DEFAULT
+  "Enable the mass:/host: file logger by default in the full game" ON
+)
+
 set(PD_PS2_CORRECTNESS_FLAGS
   ${PD_PS2_OPTIMIZATION_FLAG}
   -G0
@@ -181,6 +185,9 @@ set(PD_PS2_GAME_DEFINITIONS
   VERSION_ROMID="${PD_PS2_ROMID}"
   PD_PS2_OPTIMIZATION_PROFILE="${PD_PS2_OPTIMIZATION}"
 )
+if(NOT PD_PS2_FILE_LOG_DEFAULT)
+  list(APPEND PD_PS2_GAME_DEFINITIONS PD_PS2_DISABLE_FILE_LOG_DEFAULT=1)
+endif()
 
 # The game compile depends on generated enum headers even before any binary
 # asset payload is linked. Keep this headers-only: it exercises the real source
@@ -618,3 +625,4 @@ message(STATUS "Perfect Dark PS2 bootstrap root: ${PD_ROOT}")
 message(STATUS "Perfect Dark PS2 bootstrap gsKit: ${GSKIT}")
 message(STATUS "Perfect Dark PS2 bootstrap commit: ${PD_PS2_GIT_COMMIT}")
 message(STATUS "Perfect Dark PS2 EE optimization: ${PD_PS2_OPTIMIZATION}")
+message(STATUS "Perfect Dark PS2 default file logger: ${PD_PS2_FILE_LOG_DEFAULT}")
