@@ -282,6 +282,24 @@ visible progress after LEGAL. This isolates the apparent title regression to
 blocking filesystem logging on `mass:`, not the renderer or title state
 machine.
 
+The first menu/mission photographs from that run establish two separate visual
+fault classes. CI4 font glyphs are readable but contain repeatable displaced
+scanline groups on LEGAL, menu and HUD screens. Three-dimensional scenes also
+contain long triangles and disconnected textured slabs, while the game state,
+collision and HUD continue running. These observations do not support treating
+the result as one Z-buffer bug: the 2D corruption exists without world depth,
+and incorrect depth testing cannot manufacture new stretched triangle edges.
+
+CI now publishes `pd-ps2-game-safe` as a retail-hardware correctness control.
+It consumes the same authoritative TMEM view but lets the portable importer
+expand CI/IA/I 4-bit and 8-bit textures to CT32, removing native PSMT4/PSMT8
+IMAGE, TBW and CLUT layout from the font experiment. It also compiles the full
+game without the VU1/PATH1 transform define, forcing the existing EE/PATH3
+fallback for geometry. The normal artifact is unchanged. Text and geometry are
+independent visual checks even in this combined control: corrected glyph rows
+implicate indexed residency, while removal of stretched triangles implicates
+the VU1 transform path.
+
 The normal game build therefore keeps the file sink disabled. Console logging
 remains active, `--file-log` opts into `pdps2.log`, and CI retains a separate
 `pd-ps2-game-filelog` artifact for controlled diagnostics. No frame-critical

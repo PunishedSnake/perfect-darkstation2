@@ -657,6 +657,25 @@ extern "C" bool gfxPs2UploadTmemTexture(
         return true;
     }
 
+#if !defined(PERFECT_DARK_PS2_NATIVE_INDEXED_TEXTURES)
+    /*
+     * Retail-hardware correctness control. The portable Fast3D importer
+     * expands these formats to RGBA32 after this function returns false.
+     * Keeping this gate at the native residency boundary preserves the same
+     * authoritative TMEM bytes, dimensions and cache identity while removing
+     * PSMT4/PSMT8 IMAGE/TBW/CLUT layout from the experiment.
+     */
+    if (((format == PS2_GFX_N64_FMT_IA ||
+          format == PS2_GFX_N64_FMT_I) &&
+         (size == PS2_GFX_N64_SIZ_4B ||
+          size == PS2_GFX_N64_SIZ_8B)) ||
+        (format == PS2_GFX_N64_FMT_CI &&
+         (size == PS2_GFX_N64_SIZ_4B ||
+          size == PS2_GFX_N64_SIZ_8B))) {
+        return false;
+    }
+#endif
+
     if ((format == PS2_GFX_N64_FMT_IA ||
          format == PS2_GFX_N64_FMT_I) &&
         (size == PS2_GFX_N64_SIZ_4B ||
@@ -3266,8 +3285,18 @@ static void ps2_init(void)
     ps2_reset_viewport();
 
     sysLogPrintf(LOG_NOTE,
-        "GfxPS2 init: shaders=%d translate_batch=%d native fog/alpha-test exact one-pass recipes",
-        PS2_GFX_MAX_SHADERS, PS2_GFX_TRANSLATE_VERTS);
+        "GfxPS2 init: shaders=%d translate_batch=%d indexed=%s geometry=%s",
+        PS2_GFX_MAX_SHADERS, PS2_GFX_TRANSLATE_VERTS,
+#if defined(PERFECT_DARK_PS2_NATIVE_INDEXED_TEXTURES)
+        "native",
+#else
+        "rgba32-compat",
+#endif
+#if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
+        "vu1-path1");
+#else
+        "ee-path3");
+#endif
 }
 
 static void ps2_on_resize(void)

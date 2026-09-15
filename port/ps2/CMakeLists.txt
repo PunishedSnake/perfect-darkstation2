@@ -17,6 +17,14 @@ option(PD_PS2_VU1_COLOR_DIAGNOSTIC
   "Enable VU1 textured transforms, A+D transport and runtime hardware A/B"
   OFF
 )
+option(PD_PS2_GAME_VU1
+  "Use the VU1/PATH1 transform path in the full game"
+  ON
+)
+option(PD_PS2_NATIVE_INDEXED_TEXTURES
+  "Keep exact CI/IA/I textures in native GS PSMT4/PSMT8 residency"
+  ON
+)
 if(PD_PS2_ALPHA_TRILERP_DIAGNOSTIC AND PD_PS2_VU1_COLOR_DIAGNOSTIC)
   message(FATAL_ERROR "Select one hardware diagnostic per build directory")
 endif()
@@ -598,8 +606,17 @@ target_compile_options(pd_ps2_game PRIVATE
 target_compile_definitions(pd_ps2_game PRIVATE
   ${PD_PS2_GAME_DEFINITIONS}
   PD_PS2_GIT_COMMIT="${PD_PS2_GIT_COMMIT}"
-  PERFECT_DARK_PS2_VU1_COLOR_BATCH=1
 )
+if(PD_PS2_GAME_VU1)
+  target_compile_definitions(pd_ps2_game PRIVATE
+    PERFECT_DARK_PS2_VU1_COLOR_BATCH=1
+  )
+endif()
+if(PD_PS2_NATIVE_INDEXED_TEXTURES)
+  target_compile_definitions(pd_ps2_game PRIVATE
+    PERFECT_DARK_PS2_NATIVE_INDEXED_TEXTURES=1
+  )
+endif()
 target_link_directories(pd_ps2_game PRIVATE "${GSKIT}/lib")
 set(PD_PS2_GAME_LINK_MAP "${CMAKE_CURRENT_BINARY_DIR}/pd-ps2-game.map")
 target_link_options(pd_ps2_game PRIVATE
