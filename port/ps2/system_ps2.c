@@ -32,6 +32,10 @@
 #define PD_PS2_OPTIMIZATION_PROFILE "unknown"
 #endif
 
+#ifndef PD_PS2_FILE_LOG_DEFAULT
+#define PD_PS2_FILE_LOG_DEFAULT 0
+#endif
+
 static s32 sysArgc;
 static const char **sysArgv;
 static u64 startUsec;
@@ -249,15 +253,16 @@ void sysInit(void)
     startUsec = timerUsec();
 
     /*
-     * Bring-up logging is active by default. --no-log is the runtime escape
-     * hatch; the dedicated hardware A/B can also disable it at compile time.
-     * Console output remains active in both cases.
+     * Retail hardware proves that synchronous stdio against mass: can stop
+     * frame progress. Keep the file sink opt-in; console output stays active.
+     * The compile-time default exists only for the dedicated CI A/B artifact.
      */
-#ifndef PD_PS2_DISABLE_FILE_LOG_DEFAULT
-    if (!sysArgCheck("--no-log")) {
+    const bool fileLogRequested =
+        PD_PS2_FILE_LOG_DEFAULT || sysArgCheck("--file-log");
+
+    if (fileLogRequested && !sysArgCheck("--no-log")) {
         sysLogSetPath(LOG_FNAME);
     }
-#endif
 
     sysLogPrintf(LOG_NOTE, "Perfect DarkStation 2 logger online");
     sysLogPrintf(LOG_NOTE, "build commit: %s optimization=%s",

@@ -55,7 +55,7 @@ survived on retail hardware and should not be changed casually.
 | --- | --- | --- | --- |
 | 1 | PS2SDK CRT/linker | Enters the ELF at `_start`, establishes the C runtime and invokes constructors. | Toolchain/ABI failure, normally no application log. |
 | 2 | `port/src/main.c` | Parses arguments and starts the crash/logger layer. | Continue only when logging is optional. |
-| 3 | `port/ps2/system_ps2.c` | Derives the launch-device base path, initializes PS2 platform services and opens `pdps2.log`. | Fatal hold for required services. |
+| 3 | `port/ps2/system_ps2.c` | Derives the launch-device base path, initializes PS2 platform services and optionally opens `pdps2.log`. | Fatal hold for required services. |
 | 4 | `port/src/fs.c` | Selects base/save directories and validates filesystem access. | Fatal hold. |
 | 5 | `port/src/config.c` | Registers defaults, loads `pd.ini`, or creates a default file when none exists. | Invalid individual values fall back to registered defaults; required I/O errors are logged. |
 | 6 | `port/ps2/input_ps2.c` | Initializes SIF/RPC, PADMAN and DualShock 2 state. | Warning and continued boot so controller failure is diagnosable. |
@@ -275,11 +275,17 @@ and historical ELFs differ only in the build-profile log/ABI changes and their
 resulting eight-byte text layout shift. Test that exact historical ELF from a
 clean directory before assigning the failure to renderer source.
 
-`pd-ps2-game-nolog` is the orthogonal filesystem control. It is the same `Og`
-source as the default game but does not open `pdps2.log`; console output remains
-enabled. If the historical ELF also fails while the no-log build progresses,
-the `mass:` file sink or its device state, rather than title rendering, is the
-active blocker.
+**POTWIERDZONE, retail PS2, 2026-09-15:** `pd-ps2-game-nolog` passed LEGAL,
+rendered the Rare, Nintendo 64 and Perfect Dark logos, entered the main menu
+and loaded missions. The same source with the file sink enabled stopped making
+visible progress after LEGAL. This isolates the apparent title regression to
+blocking filesystem logging on `mass:`, not the renderer or title state
+machine.
+
+The normal game build therefore keeps the file sink disabled. Console logging
+remains active, `--file-log` opts into `pdps2.log`, and CI retains a separate
+`pd-ps2-game-filelog` artifact for controlled diagnostics. No frame-critical
+path may rely on synchronous filesystem progress.
 
 ## Fatal and hang interpretation
 
@@ -298,10 +304,9 @@ Use this distinction during bring-up:
 
 ## Remaining high-risk boundaries
 
-1. The restored title sequence matches the last renderer state confirmed on
-   retail hardware, but requires a new hardware test. That known-good state was
-   too slow to reach the menu in practical time. Non-endpoint alpha-trilerp
-   tiles and their channel shuffle remain the leading measured target.
+1. Title, menu and mission execution now progress on retail hardware with the
+   file sink disabled. Texture/material fidelity and missing effects, rather
+   than startup reachability, are the primary renderer problem.
 2. Central Vtx/Mtx/colour allocations now fail before crossing their active
    frame arena, and the PS2 master display list is checked at frame phase
    boundaries. Direct display-list writers still need per-writer reservations
@@ -322,8 +327,7 @@ Use this distinction during bring-up:
 
 ## Hardware log checklist
 
-For the next title test, preserve the complete `pdps2.log`. The first missing
-line in the Rare-logo sequence identifies whether the remaining failure is in
-file materialization, model preprocessing/instantiation, relation building,
-the first model display list, or submission to GS. Also record whether the
-machine held, reset or returned to OSD.
+For normal hardware tests, record the ELF checksum, scene, visible corruption
+and whether menu/mission progress remains intact. Enable `pdps2.log` only in a
+controlled diagnostic run; its synchronous `mass:` path is known to stop frame
+progress on the tested console/storage combination.

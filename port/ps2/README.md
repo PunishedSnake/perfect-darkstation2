@@ -11,20 +11,20 @@ contains the portable Perfect Dark runtime, ROM-backed assets, DualShock 2
 input, SPU2 output, Fast3D command translation, the native GS backend and VU1
 microprograms.
 
-Real hardware has historically confirmed on `aaad5659`:
+Real hardware has confirmed through the 2026-09-15 no-file-log build:
 
 - system, filesystem and logger startup;
 - bounded loading of the NTSC-final ROM data segment;
 - GS presentation and the diagnostic renderer;
 - DualShock 2 discovery and corrected stick extrema;
 - the legal screen followed by the Rare, Nintendo 64 and Perfect Dark logos;
+- the main menu and mission loading;
 - EEPROM creation through the portable libultra interface.
 
-The later `d1556ac4` Og/O2 comparison exposed a renderer regression at LEGAL,
-before the later logos. The broad direct-TEXEL0 approximations have therefore
-been removed from the normal build. The title sequence remains far below its
-frame deadline and has not reached the menu in a practical hardware run. This
-is not a playable release.
+The title, menu and missions still contain major texture, material and effect
+errors. This is not a playable release. The earlier apparent post-LEGAL hang
+was isolated to synchronous file logging on the launch device, not to title
+progress or GS presentation.
 
 ## Required files
 
@@ -81,11 +81,10 @@ CI publishes this as `pd-ps2-game-o2`. The runtime log records
 `optimization=Og` or `optimization=O2`; compare the two ELFs with the same ROM,
 configuration, scene and logging policy. Do not mix their measurements.
 
-CI also publishes `pd-ps2-game-nolog`, an `Og` hardware diagnostic built with
-`-DPD_PS2_FILE_LOG_DEFAULT=OFF`. It keeps console logging but never opens
-`pdps2.log`, separating renderer/scheduler progress from `mass:` filesystem
-flush and close/reopen behaviour. This is a diagnostic, not the default game
-configuration.
+The normal Og and O2 game artifacts keep file logging disabled. CI publishes
+`pd-ps2-game-filelog`, built with `-DPD_PS2_FILE_LOG_DEFAULT=ON`, only for
+controlled diagnostics. It reproduces the blocking `mass:` path and must not
+be used as the normal hardware build.
 
 The map file is a required build artifact. It records actual archive members,
 section contributions and discarded sections after `--gc-sections`; source
@@ -125,7 +124,8 @@ publishes both game variants together with their linker maps.
 | `--boot-stage <number>` | Start at a selected stage number. |
 | `--skip-intro` | Start at CI training instead of the title sequence. |
 | `--no-sound` | Disable the game audio heap and output. |
-| `--no-log` | Disable the file log for timing experiments. |
+| `--file-log` | Opt in to the blocking `pdps2.log` filesystem sink. |
+| `--no-log` | Force the file sink off, including in the filelog CI build. |
 | `--profile <number>` | Select a player profile where supported. |
 
 Input or SPU2 startup failure is non-fatal. A failed SPU2 backend automatically
@@ -182,23 +182,21 @@ the complete execution path.
 
 For each run record:
 
-- ELF SHA-256 and embedded commit shown in `pdps2.log`;
+- ELF SHA-256 and embedded commit when console capture is available;
 - console model, launch device and loader;
-- exact last durable `runtime:` or `title:` checkpoint;
+- exact last durable `runtime:` or `title:` checkpoint for filelog diagnostics;
 - whether the console held, returned to OSD, or reset;
 - a photograph for visual corruption;
-- `pdps2.log`, `pd.ini`, and `eeprom.bin` when created;
+- `pdps2.log` when explicitly enabled, plus `pd.ini` and `eeprom.bin`;
 - Triangle/Select renderer snapshots when the frame loop is alive.
 
 Emulators are useful for functional inspection. Timing, DMA ordering, VIF/VU
 hazards, GS FIFO behavior and device I/O must be accepted only after testing on
 real hardware.
 
-The 2026-09-15 `a56bacda` Og hardware test displayed LEGAL but no later title
-logos. The default game renderer is consequently restored to the
-`aaad5659` hardware-confirmed draw and GS synchronization behavior. Test the
-Og artifact first; only compare O2 after Rare, Nintendo 64 and Perfect Dark
-are visible again.
+The 2026-09-15 no-file-log hardware test reached every title logo, the main
+menu and mission loading. Use the normal Og artifact as the correctness
+baseline. Compare O2 only against the same scene and storage configuration.
 
 ## More documentation
 

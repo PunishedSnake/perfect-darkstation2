@@ -391,16 +391,16 @@ jobs:
           mips64r5900el-ps2-elf-size build-ps2-o2/pd-ps2-game.elf
           test -z "$(mips64r5900el-ps2-elf-nm -u build-ps2-o2/pd-ps2-game.elf)"
 
-      - name: Build file-logger-free hardware A/B
+      - name: Build blocking file-logger hardware A/B
         run: |
-          cmake -S port/ps2 -B build-ps2-nolog -G Ninja \
+          cmake -S port/ps2 -B build-ps2-filelog -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/port/ps2/ps2dev-toolchain.cmake" \
-            -DPD_PS2_FILE_LOG_DEFAULT=OFF
-          cmake --build build-ps2-nolog --target pd_ps2_game -j2 --verbose
-          test -f build-ps2-nolog/pd-ps2-game.elf
-          test -s build-ps2-nolog/pd-ps2-game.map
-          mips64r5900el-ps2-elf-size build-ps2-nolog/pd-ps2-game.elf
-          test -z "$(mips64r5900el-ps2-elf-nm -u build-ps2-nolog/pd-ps2-game.elf)"
+            -DPD_PS2_FILE_LOG_DEFAULT=ON
+          cmake --build build-ps2-filelog --target pd_ps2_game -j2 --verbose
+          test -f build-ps2-filelog/pd-ps2-game.elf
+          test -s build-ps2-filelog/pd-ps2-game.map
+          mips64r5900el-ps2-elf-size build-ps2-filelog/pd-ps2-game.elf
+          test -z "$(mips64r5900el-ps2-elf-nm -u build-ps2-filelog/pd-ps2-game.elf)"
 
       - name: Build alpha-trilerp hardware diagnostic
         run: |
@@ -457,13 +457,13 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Upload file-logger-free hardware A/B
+      - name: Upload blocking file-logger hardware A/B
         uses: actions/upload-artifact@v4
         with:
-          name: pd-ps2-game-nolog
+          name: pd-ps2-game-filelog
           path: |
-            build-ps2-nolog/pd-ps2-game.elf
-            build-ps2-nolog/pd-ps2-game.map
+            build-ps2-filelog/pd-ps2-game.elf
+            build-ps2-filelog/pd-ps2-game.map
           if-no-files-found: error
           retention-days: 14
 

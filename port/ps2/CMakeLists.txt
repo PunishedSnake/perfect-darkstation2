@@ -160,8 +160,13 @@ else()
 endif()
 
 option(PD_PS2_FILE_LOG_DEFAULT
-  "Enable the mass:/host: file logger by default in the full game" ON
+  "Enable the blocking mass:/host: file logger by default in the full game" OFF
 )
+if(PD_PS2_FILE_LOG_DEFAULT)
+  set(PD_PS2_FILE_LOG_DEFAULT_VALUE 1)
+else()
+  set(PD_PS2_FILE_LOG_DEFAULT_VALUE 0)
+endif()
 
 set(PD_PS2_CORRECTNESS_FLAGS
   ${PD_PS2_OPTIMIZATION_FLAG}
@@ -184,10 +189,8 @@ set(PD_PS2_GAME_DEFINITIONS
   VERSION=2
   VERSION_ROMID="${PD_PS2_ROMID}"
   PD_PS2_OPTIMIZATION_PROFILE="${PD_PS2_OPTIMIZATION}"
+  PD_PS2_FILE_LOG_DEFAULT=${PD_PS2_FILE_LOG_DEFAULT_VALUE}
 )
-if(NOT PD_PS2_FILE_LOG_DEFAULT)
-  list(APPEND PD_PS2_GAME_DEFINITIONS PD_PS2_DISABLE_FILE_LOG_DEFAULT=1)
-endif()
 
 # The game compile depends on generated enum headers even before any binary
 # asset payload is linked. Keep this headers-only: it exercises the real source

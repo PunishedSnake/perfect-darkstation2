@@ -46,7 +46,10 @@ The console/file log additionally reports the decompressed data-segment size, ex
 
 ## Active bring-up logger
 
-Bring-up logging is enabled by default. The prototype mirrors human-readable logs to stdout/stderr and to `pdps2.log` beside the ELF when a writable filesystem sink is available.
+Console logging is enabled by default. File logging is opt-in because retail
+hardware proved that synchronous `mass:` writes can stop game-frame progress.
+Pass `--file-log`, or use the dedicated `pd-ps2-game-filelog` CI artifact, to
+mirror human-readable logs to `pdps2.log` beside the ELF.
 
 Current PS2SDK does not implement `fsync()`. On filesystem-backed launchers such as `mass:`, flushing a still-open stdio stream is therefore not a sufficient durability contract for an ongoing logger. The PS2 backend uses coarse durable checkpoints that:
 
@@ -59,8 +62,8 @@ limited to at most 10 Hz. Real-hardware `mass:` logs stopped after a determinist
 sequence containing many dense reopen operations. Explicit
 controller-triggered renderer snapshots and fatal errors bypass the throttle so
 their final counters receive a durable close. Checkpoints must not be moved into
-frame or other hot paths. `--no-log` disables the file sink for timing-sensitive
-experiments while console output remains available.
+frame or other hot paths. `--no-log` overrides even the filelog diagnostic
+build and disables the filesystem sink.
 
 ## Real-hardware observations
 
