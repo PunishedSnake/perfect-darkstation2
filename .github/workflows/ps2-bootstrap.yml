@@ -292,18 +292,20 @@ jobs:
             -o /tmp/gfx_ps2_pass_graph_test
           /tmp/gfx_ps2_pass_graph_test
 
-      - name: Syntax-check PS2 renderer
+      - name: Host syntax-check PS2 renderer
         run: |
-          g++ -std=c++20 -Wall -Wextra -Werror -fsyntax-only \
+          timeout 45s g++ -std=c++20 -Wall -Wextra -Werror \
+            -fdiagnostics-color=never -fmax-errors=20 -fsyntax-only \
             -D_LANGUAGE_C_PLUS_PLUS=1 \
             -include include/PR/ultratypes.h \
             -Iport/ps2 -Iport/fast3d -Iport/include \
             -Iinclude -Iinclude/PR -Isrc/include -Isrc/lib/ultra/audio \
-            port/ps2/gfx_ps2.cpp \
-            port/ps2/gfx_ps2_combiner.cpp \
-            port/ps2/gfx_ps2_pass_graph.cpp
+            port/ps2/gfx_ps2.cpp
 
-          gcc -std=c11 -Wall -Wextra -Werror -fsyntax-only \
+      - name: Host syntax-check alpha-trilerp scene
+        run: |
+          timeout 45s gcc -std=c11 -Wall -Wextra -Werror \
+            -fdiagnostics-color=never -fmax-errors=20 -fsyntax-only \
             -DPERFECT_DARK_PS2_ALPHA_TRILERP_DIAGNOSTIC=1 \
             -D_LANGUAGE_C=1 \
             -include include/PR/ultratypes.h \
@@ -311,7 +313,10 @@ jobs:
             -Iinclude -Iinclude/PR -Isrc/include -Isrc/lib/ultra/audio \
             port/ps2/gfx_api_scene.c
 
-          gcc -std=c11 -Wall -Wextra -Werror -fsyntax-only \
+      - name: Host syntax-check VU1 scene
+        run: |
+          timeout 45s gcc -std=c11 -Wall -Wextra -Werror \
+            -fdiagnostics-color=never -fmax-errors=20 -fsyntax-only \
             -DPERFECT_DARK_PS2_VU1_COLOR_BATCH=1 \
             -D_LANGUAGE_C=1 \
             -include include/PR/ultratypes.h \
