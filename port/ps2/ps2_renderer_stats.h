@@ -43,7 +43,6 @@ struct Ps2RendererStats {
     uint64_t alpha_trilerp_tiled_triangles;
     uint64_t alpha_trilerp_tiles;
     uint64_t fast_direct_alpha_triangles;
-    uint64_t fast_base_texel0_triangles;
 };
 
 void ps2RendererStatsReset(void);
@@ -65,8 +64,7 @@ void ps2RendererStatsRecordGsFinishWait(uint64_t microseconds, bool success);
 void ps2RendererStatsRecordAlphaTrilerp(
     uint32_t endpoint_triangles, uint32_t tiled_triangles,
     uint32_t tile_count);
-void ps2RendererStatsRecordFastComplexMaterial(
-    uint32_t direct_alpha_triangles, uint32_t base_texel0_triangles);
+void ps2RendererStatsRecordFastDirectAlpha(uint32_t triangles);
 void ps2RendererStatsGet(struct Ps2RendererStats *stats);
 
 #ifdef __cplusplus

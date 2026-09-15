@@ -240,12 +240,22 @@ need that graph. They now collapse exactly to one selected texture, and a
 whole endpoint batch is emitted as one draw. Mixed batches retain the exact
 tiled path only for non-endpoint triangles.
 
-The full-game independent-alpha fast path also keeps ordinary RDP alpha
-thresholding in the same single GS draw. The threshold tests the already
-modulated `TEXEL0.a * INPUT1.a`, so a CT32 scratch target and per-tile
-composite do not add correctness for that case. Texture-edge/FBA,
-destination-colour modulation and invisible draws remain on their explicit
-paths because their state equations are different.
+The `d1556ac4` Og/O2 hardware run exposed a regression in the later broad
+complex-material fallbacks: LEGAL text looked displaced and neither run
+reached the Rare, Nintendo 64 or Perfect Dark logos. Both logs stop after
+`stage reset complete; frame loop begin`, so they contain no completed-frame
+telemetry and do not distinguish a long first GS fence from a failed file-sink
+reopen. The matching visual regression nevertheless invalidates the unproved
+RGB substitutions.
+
+Non-endpoint alpha trilerp and independent-alpha trilerp now retain their exact
+tiled graphs in the normal build. The independent TEXEL0-alpha path may still
+collapse to one draw, including with ordinary alpha thresholding, but only when
+upload metadata proves that the texture RGB lanes are constant white. That is
+an equation proof: GS MODULATE preserves INPUT1 RGB and computes the required
+`TEXEL0.a * INPUT1.a`. Intensity fonts, CI/IA textures and every unproved
+texture stay on the exact CT32 path. Texture-edge/FBA, destination-colour
+modulation and invisible draws also remain explicit.
 
 Renderer telemetry now records cumulative endpoint triangles, tiled
 triangles, submitted graph tiles, and GS FINISH wait time. Periodic durable

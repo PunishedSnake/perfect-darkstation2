@@ -36,12 +36,12 @@ as fixes or approximations.
 
 | Area | SM64 PS2 | Perfect DarkStation 2 | Decision |
 | --- | --- | --- | --- |
-| Combiner policy | Small fixed dispatch, including magic shader IDs | Semantic recipe planner plus exact and fast graphs | Keep semantic planner; adopt a bounded one-pass full-game policy for measured expensive recipes |
+| Combiner policy | Small fixed dispatch, including magic shader IDs | Semantic recipe planner plus exact graphs and proof-gated fast paths | Keep semantic planner; specialize only when runtime state proves the GS equation equivalent |
 | Geometry submission | CPU viewport conversion and one gsKit primitive packet per triangle | Batches of up to 81 textured vertices through VIF1/VU1 PATH1, with PATH3 fallback | Keep the Perfect Dark path |
 | State traffic | Writes TEST/CLAMP/TEX state around most draw calls | Project-owned 64-bit GS register shadow suppresses unchanged writes | Keep the Perfect Dark path |
 | Texture source | Linear EE staging cache | Authoritative TMEM view with native CT16/CT32/T4/T8 formats | Keep the Perfect Dark path |
 | VRAM lifetime | gsKit manager; complete VRAM clear on Fast3D flush | Transactional residency and fence-delayed block retirement | Keep the Perfect Dark path |
-| Complex materials | One or two approximate passes | Exact tiled graphs can require many passes and channel shuffles | Preserve exact graphs in the diagnostic ELF; use measured approximations in the full game |
+| Complex materials | One or two approximate passes | Exact tiled graphs can require many passes and channel shuffles | Keep exact graphs by default; admit one-pass replacements only with a content/state proof |
 | Build optimization | Unconditionally `-O3` for PS2 | `-Og` correctness baseline plus separately published `-O2` A/B | Compare both on identical hardware workload; do not adopt SM64's `-O3` blindly |
 | IOP footprint | Loads only required modules | Own startup and embedded `audsrv.irx` | Compare active IRX and IOP memory after graphics reaches its frame target |
 
@@ -49,13 +49,16 @@ as fixes or approximations.
 
 1. Classify the real material vocabulary and dispatch once per batch. Perfect
    Dark already does this semantically; the next gains come from removing
-   costly graphs for recipes that tolerate a documented full-game fallback.
+   costly graphs only when material and texture metadata prove an equivalent
+   GS equation.
 2. Keep native source formats native. Both ports prove CT16 residency for
    RGBA5551; Perfect Dark extends this to live TMEM, CI and IA/I formats.
-3. Maintain separate correctness and playability policies. Perfect Dark's
-   alpha-trilerp diagnostic should remain exact, while the normal game build
-   may select one-pass approximations that retain depth, alpha-test, fog and
-   visibility semantics.
+3. Do not promote a visual approximation into the normal build before retail
+   validation. The `d1556ac4` hardware run regressed the LEGAL bitmap and did
+   not reach the later logos after broad direct-TEXEL0 fallbacks were enabled.
+   The normal game therefore keeps exact non-endpoint trilerp graphs. A direct
+   independent-alpha draw is allowed only when upload metadata proves constant
+   white texture RGB.
 4. Treat compiler optimization as a measured A/B. CI emits separate `Og` and
    `O2` game ELFs and embeds the profile in the runtime log. SM64 demonstrates
    that an optimized decompilation can run on PS2, but it does not prove that
@@ -81,7 +84,8 @@ The `aaad5659` real-hardware log attributes only 17.154 ms of the first title
 frame to EE translation, while the whole frame is 217.705 ms and a later
 `schedEndFrame` reaches 650.209 ms. Therefore the authoritative next step is
 still removal of avoidable GS pass work, not a compiler-flag or VU rewrite.
-The ordinary alpha-threshold variant of the independent TEXEL0-alpha material
-can use the existing one-draw fallback: the GS tests the final
-`TEXEL0.a * INPUT1.a` result directly, so the scratch target adds no alpha
-correctness.
+The alpha-threshold test itself is compatible with a one-draw independent
+TEXEL0-alpha material because GS tests the final `TEXEL0.a * INPUT1.a` value.
+That does not prove the RGB equation. The direct path is exact only when upload
+metadata additionally proves constant-white TEXEL0 RGB; intensity fonts and
+unproven textures retain the CT32 graph.

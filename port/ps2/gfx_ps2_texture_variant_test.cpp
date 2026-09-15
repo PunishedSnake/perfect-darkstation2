@@ -15,10 +15,16 @@ int main(void)
     assert(gfxPs2TrilerpEndpoint(255u, 255u, 255u) == -1);
     assert(gfxPs2MaterialRgbChannelPasses(true) == 1u);
     assert(gfxPs2MaterialRgbChannelPasses(false) == 3u);
-    assert(gfxPs2FastIndependentTex0AlphaEligible(false, false, false));
-    assert(!gfxPs2FastIndependentTex0AlphaEligible(true, false, false));
-    assert(!gfxPs2FastIndependentTex0AlphaEligible(false, true, false));
-    assert(!gfxPs2FastIndependentTex0AlphaEligible(false, false, true));
+    assert(gfxPs2FastIndependentTex0AlphaEligible(
+        false, false, false, true));
+    assert(!gfxPs2FastIndependentTex0AlphaEligible(
+        false, false, false, false));
+    assert(!gfxPs2FastIndependentTex0AlphaEligible(
+        true, false, false, true));
+    assert(!gfxPs2FastIndependentTex0AlphaEligible(
+        false, true, false, true));
+    assert(!gfxPs2FastIndependentTex0AlphaEligible(
+        false, false, true, true));
     assert(gfxPs2CoverageUnion(0.0f, 0.0f) == 0.0f);
     assert(gfxPs2CoverageUnion(1.0f, 0.25f) == 1.0f);
     assert(gfxPs2CoverageUnion(0.5f, 0.25f) == 0.625f);
@@ -30,12 +36,22 @@ int main(void)
     assert(gfxPs2Rgba32IsMonochrome(monochrome32, 2u));
     assert(!gfxPs2Rgba32IsMonochrome(colored32, 1u));
     assert(!gfxPs2Rgba32IsMonochrome(NULL, 1u));
+    const uint8_t white32[] = {
+        0xffu, 0xffu, 0xffu, 0u, 0xffu, 0xffu, 0xffu, 0x80u,
+    };
+    assert(gfxPs2Rgba32IsWhiteRgb(white32, 2u));
+    assert(!gfxPs2Rgba32IsWhiteRgb(monochrome32, 2u));
+    assert(!gfxPs2Rgba32IsWhiteRgb(NULL, 1u));
 
     const uint8_t monochrome16[] = { 0xffu, 0xffu, 0x84u, 0x21u };
     const uint8_t colored16[] = { 0xf8u, 0x01u };
     assert(gfxPs2N64Rgba16IsMonochrome(monochrome16, 2u));
     assert(!gfxPs2N64Rgba16IsMonochrome(colored16, 1u));
     assert(!gfxPs2N64Rgba16IsMonochrome(NULL, 1u));
+    const uint8_t white16[] = { 0xffu, 0xffu, 0xffu, 0xfeu };
+    assert(gfxPs2N64Rgba16IsWhiteRgb(white16, 2u));
+    assert(!gfxPs2N64Rgba16IsWhiteRgb(monochrome16, 2u));
+    assert(!gfxPs2N64Rgba16IsWhiteRgb(NULL, 1u));
 
     assert(gfxPs2TextureMirrorVariant(0u, 0u) == 0u);
     assert(gfxPs2TextureMirrorVariant(1u, 0u) == 1u);

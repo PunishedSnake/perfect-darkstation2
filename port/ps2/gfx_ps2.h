@@ -34,15 +34,15 @@ static inline uint32_t gfxPs2MaterialRgbChannelPasses(bool monochrome_rgb)
 }
 
 /*
- * Full-game approximation for RGB=INPUT1 and A=TEXEL0.a*INPUT1.a.
- * A conventional textured GS draw preserves that alpha exactly, including
- * ordinary alpha-threshold testing. Texture-edge/FBA and destination-colour
- * modulation have different state equations and keep their explicit graphs.
+ * Exact one-pass proof for RGB=INPUT1 and A=TEXEL0.a*INPUT1.a. GS MODULATE
+ * can express both lanes only when TEXEL0 RGB is known to be constant white.
  */
 static inline bool gfxPs2FastIndependentTex0AlphaEligible(
-    bool destination_modulate, bool texture_edge, bool invisible)
+    bool destination_modulate, bool texture_edge, bool invisible,
+    bool texture_rgb_is_white)
 {
-    return !destination_modulate && !texture_edge && !invisible;
+    return !destination_modulate && !texture_edge && !invisible &&
+        texture_rgb_is_white;
 }
 
 /* Union of two normalized coverage values: B + A * (1 - B). */
@@ -66,6 +66,22 @@ static inline bool gfxPs2Rgba32IsMonochrome(
     return true;
 }
 
+static inline bool gfxPs2Rgba32IsWhiteRgb(
+    const uint8_t *rgba32, uint32_t texel_count)
+{
+    if (!rgba32 && texel_count != 0u) {
+        return false;
+    }
+    for (uint32_t i = 0u; i < texel_count; ++i) {
+        const uint8_t *texel = &rgba32[i * 4u];
+        if (texel[0] != 0xffu || texel[1] != 0xffu ||
+            texel[2] != 0xffu) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static inline bool gfxPs2N64Rgba16IsMonochrome(
     const uint8_t *rgba5551_be, uint32_t texel_count)
 {
@@ -80,6 +96,23 @@ static inline bool gfxPs2N64Rgba16IsMonochrome(
         const uint16_t g = (texel >> 6u) & 0x1fu;
         const uint16_t b = (texel >> 1u) & 0x1fu;
         if (r != g || r != b) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static inline bool gfxPs2N64Rgba16IsWhiteRgb(
+    const uint8_t *rgba5551_be, uint32_t texel_count)
+{
+    if (!rgba5551_be && texel_count != 0u) {
+        return false;
+    }
+    for (uint32_t i = 0u; i < texel_count; ++i) {
+        const uint16_t texel =
+            ((uint16_t)rgba5551_be[i * 2u] << 8u) |
+            rgba5551_be[i * 2u + 1u];
+        if ((texel & 0xfffeu) != 0xfffeu) {
             return false;
         }
     }

@@ -11,7 +11,7 @@ contains the portable Perfect Dark runtime, ROM-backed assets, DualShock 2
 input, SPU2 output, Fast3D command translation, the native GS backend and VU1
 microprograms.
 
-Real hardware has confirmed:
+Real hardware has historically confirmed on `aaad5659`:
 
 - system, filesystem and logger startup;
 - bounded loading of the NTSC-final ROM data segment;
@@ -20,9 +20,11 @@ Real hardware has confirmed:
 - the legal screen followed by the Rare, Nintendo 64 and Perfect Dark logos;
 - EEPROM creation through the portable libultra interface.
 
-The title models render correctly, but the sequence remains far below its frame
-deadline and has not reached the menu in a practical hardware run. This is not
-a playable release.
+The later `d1556ac4` Og/O2 comparison exposed a renderer regression at LEGAL,
+before the later logos. The broad direct-TEXEL0 approximations have therefore
+been removed from the normal build. The title sequence remains far below its
+frame deadline and has not reached the menu in a practical hardware run. This
+is not a playable release.
 
 ## Required files
 
