@@ -283,6 +283,8 @@ jobs:
             -o /tmp/gfx_ps2_combiner_test
           /tmp/gfx_ps2_combiner_test
 
+      - name: Test PS2 pass graph
+        run: |
           g++ -std=c++20 -Wall -Wextra -Werror \
             -Iport/ps2 \
             port/ps2/gfx_ps2_pass_graph.cpp \
@@ -290,6 +292,8 @@ jobs:
             -o /tmp/gfx_ps2_pass_graph_test
           /tmp/gfx_ps2_pass_graph_test
 
+      - name: Syntax-check PS2 renderer
+        run: |
           g++ -std=c++20 -Wall -Wextra -Werror -fsyntax-only \
             -D_LANGUAGE_C_PLUS_PLUS=1 \
             -include include/PR/ultratypes.h \
