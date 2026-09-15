@@ -33,6 +33,18 @@ static inline uint32_t gfxPs2MaterialRgbChannelPasses(bool monochrome_rgb)
     return monochrome_rgb ? 1u : 3u;
 }
 
+/*
+ * Full-game approximation for RGB=INPUT1 and A=TEXEL0.a*INPUT1.a.
+ * A conventional textured GS draw preserves that alpha exactly, including
+ * ordinary alpha-threshold testing. Texture-edge/FBA and destination-colour
+ * modulation have different state equations and keep their explicit graphs.
+ */
+static inline bool gfxPs2FastIndependentTex0AlphaEligible(
+    bool destination_modulate, bool texture_edge, bool invisible)
+{
+    return !destination_modulate && !texture_edge && !invisible;
+}
+
 /* Union of two normalized coverage values: B + A * (1 - B). */
 static inline float gfxPs2CoverageUnion(float a, float b)
 {

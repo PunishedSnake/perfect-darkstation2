@@ -240,6 +240,13 @@ need that graph. They now collapse exactly to one selected texture, and a
 whole endpoint batch is emitted as one draw. Mixed batches retain the exact
 tiled path only for non-endpoint triangles.
 
+The full-game independent-alpha fast path also keeps ordinary RDP alpha
+thresholding in the same single GS draw. The threshold tests the already
+modulated `TEXEL0.a * INPUT1.a`, so a CT32 scratch target and per-tile
+composite do not add correctness for that case. Texture-edge/FBA,
+destination-colour modulation and invisible draws remain on their explicit
+paths because their state equations are different.
+
 Renderer telemetry now records cumulative endpoint triangles, tiled
 triangles, submitted graph tiles, and GS FINISH wait time. Periodic durable
 log publication happens after the measured frame interval so mass-storage

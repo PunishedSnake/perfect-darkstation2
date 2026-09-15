@@ -1270,9 +1270,10 @@ static void ps2_log_fast_complex_material_policy(void)
 
 static bool ps2_draw_independent_tex0_alpha_direct(uint32_t vertex_count)
 {
-    if (s_modulate || s_shader->features.opt_texture_edge ||
-        s_shader->features.opt_alpha_threshold ||
-        s_shader->features.opt_invisible) {
+    if (!gfxPs2FastIndependentTex0AlphaEligible(
+            s_modulate,
+            s_shader->features.opt_texture_edge,
+            s_shader->features.opt_invisible)) {
         return false;
     }
 
@@ -1297,8 +1298,9 @@ static bool ps2_draw_independent_tex0_alpha_direct(uint32_t vertex_count)
     /*
      * The scanout target is PSMCT16 and exposes only A1, so destination-alpha
      * reconstruction cannot carry the required 0..128 coverage. Use one
-     * conventional TEXEL0 * INPUT1 draw. It is exact for alpha and for white
-     * mask textures, and remains a bounded approximation for intensity masks.
+     * conventional TEXEL0 * INPUT1 draw. It is exact for alpha, including the
+     * existing GS alpha-threshold test, and for white mask textures. It remains
+     * a bounded RGB approximation for intensity masks.
      */
     ps2_log_fast_complex_material_policy();
     ps2_restore_alpha_trilerp_state();

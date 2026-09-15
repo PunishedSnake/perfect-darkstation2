@@ -15,6 +15,10 @@ int main(void)
     assert(gfxPs2TrilerpEndpoint(255u, 255u, 255u) == -1);
     assert(gfxPs2MaterialRgbChannelPasses(true) == 1u);
     assert(gfxPs2MaterialRgbChannelPasses(false) == 3u);
+    assert(gfxPs2FastIndependentTex0AlphaEligible(false, false, false));
+    assert(!gfxPs2FastIndependentTex0AlphaEligible(true, false, false));
+    assert(!gfxPs2FastIndependentTex0AlphaEligible(false, true, false));
+    assert(!gfxPs2FastIndependentTex0AlphaEligible(false, false, true));
     assert(gfxPs2CoverageUnion(0.0f, 0.0f) == 0.0f);
     assert(gfxPs2CoverageUnion(1.0f, 0.25f) == 1.0f);
     assert(gfxPs2CoverageUnion(0.5f, 0.25f) == 0.625f);

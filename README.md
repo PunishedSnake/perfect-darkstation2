@@ -22,6 +22,9 @@ To run the port, you must already have a Perfect Dark ROM, specifically one of t
 > [PS2 quick start](port/ps2/README.md),
 > [startup chain](docs/PS2_STARTUP_CHAIN.md), and
 > [code/file audit](docs/PS2_CODE_AND_FILE_AUDIT.md) for the exact frontier.
+> The [SM64 PS2 comparison](docs/PS2_SM64_PORT_COMPARISON.md) records which
+> techniques are reusable and which older backend shortcuts are intentionally
+> not copied.
 
 ## Status
 
