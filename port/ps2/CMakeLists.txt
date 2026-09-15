@@ -287,6 +287,7 @@ add_executable(pd_ps2_bootstrap
   gs_alpha_equation.cpp
   gs_frame_mask.cpp
   gs_command_budget.cpp
+  gs_clip.cpp
   gs_core.cpp
   gs_native_queue.cpp
   gs_render_target_layout.cpp
@@ -558,6 +559,7 @@ set(PD_PS2_GAME_RENDERER_SOURCES
   gs_alpha_equation.cpp
   gs_frame_mask.cpp
   gs_command_budget.cpp
+  gs_clip.cpp
   gs_core.cpp
   gs_native_queue.cpp
   gs_render_target_layout.cpp

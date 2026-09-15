@@ -9,6 +9,7 @@
 #include "gfx_ps2.h"
 #include "gfx_ps2_combiner.h"
 #include "gfx_ps2_pass_graph.h"
+#include "gs_clip.h"
 #include "gs_core.h"
 #include "gs_vu1_batch.h"
 #include "gs_vu1_transform.h"
@@ -100,6 +101,10 @@
 #define PS2_GFX_N64_SIZ_32B 3u
 #define PS2_GFX_N64_TT_RGBA16 (2u << 14)
 #define PS2_GFX_N64_TT_IA16 (3u << 14)
+
+static_assert(PS2_GFX_TRANSLATE_VERTS >=
+    PS2_GS_CLIP_MAX_OUTPUT_VERTICES,
+    "one clipped triangle must fit in the translation batch");
 
 /* GS packed-register IDs consumed by the packet-ready core boundary. */
 #define PS2_GS_REG_RGBAQ 0x01u
@@ -266,6 +271,8 @@ static struct Ps2IndependentTex0AlphaVertex
     s_independent_tex0_alpha_vertices[PS2_GFX_TRANSLATE_VERTS];
 static struct Ps2InterferenceVertex
     s_interference_vertices[PS2_GFX_TRANSLATE_VERTS];
+static float s_clipped_vbo[
+    PS2_GFX_TRANSLATE_VERTS * PS2_GS_CLIP_MAX_VERTEX_FLOATS];
 
 static const char *ps2_get_name(void)
 {
@@ -2709,7 +2716,8 @@ static bool ps2_draw_alpha_trilerp(uint32_t vertex_count)
     return success;
 }
 
-static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_vbo_num_tris)
+static void ps2_draw_triangles_unclipped(float buf_vbo[],
+    size_t buf_vbo_len, size_t buf_vbo_num_tris)
 {
     if (!ps2GsCoreIsReady() || !s_shader || !buf_vbo || buf_vbo_num_tris == 0) {
         return;
@@ -3226,6 +3234,48 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_v
     if (invisible) {
         ps2GsCoreSetColorWrite(true);
         ps2GsCoreSetAlphaWrite(true);
+    }
+}
+
+static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len,
+    size_t buf_vbo_num_tris)
+{
+    if (!ps2GsCoreIsReady() || !s_shader || !buf_vbo ||
+        buf_vbo_num_tris == 0u) {
+        return;
+    }
+
+    const size_t stride = ps2_vbo_stride(s_shader);
+    const size_t source_vertices = buf_vbo_num_tris * 3u;
+    if (stride < 4u || stride > PS2_GS_CLIP_MAX_VERTEX_FLOATS ||
+        buf_vbo_len < source_vertices * stride) {
+        return;
+    }
+
+    size_t buffered_vertices = 0u;
+    for (size_t triangle = 0u; triangle < buf_vbo_num_tris; ++triangle) {
+        if (PS2_GFX_TRANSLATE_VERTS - buffered_vertices <
+            PS2_GS_CLIP_MAX_OUTPUT_VERTICES) {
+            ps2_draw_triangles_unclipped(s_clipped_vbo,
+                buffered_vertices * stride, buffered_vertices / 3u);
+            buffered_vertices = 0u;
+        }
+
+        size_t clipped_vertices = 0u;
+        const bool clipped = ps2GsClipTriangle(
+            &buf_vbo[triangle * 3u * stride], stride,
+            &s_clipped_vbo[buffered_vertices * stride],
+            PS2_GFX_TRANSLATE_VERTS - buffered_vertices,
+            &clipped_vertices);
+        if (!clipped) {
+            continue;
+        }
+        buffered_vertices += clipped_vertices;
+    }
+
+    if (buffered_vertices != 0u) {
+        ps2_draw_triangles_unclipped(s_clipped_vbo,
+            buffered_vertices * stride, buffered_vertices / 3u);
     }
 }
 

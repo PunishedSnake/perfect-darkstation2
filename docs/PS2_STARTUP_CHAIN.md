@@ -300,6 +300,23 @@ independent visual checks even in this combined control: corrected glyph rows
 implicate indexed residency, while removal of stretched triangles implicates
 the VU1 transform path.
 
+Source comparison with the SM64 PS2 port identified a missing prerequisite in
+that initial A/B: SM64 explicitly enables six-plane homogeneous clipping for
+PS2 because the GS does not provide the desktop GPU clip stage. Perfect Dark's
+frontend only rejected triangles wholly outside one shared plane. The PS2
+backend then divided partially visible triangles by W and clamped the resulting
+screen coordinates to the GS range, which can turn an eye-plane crossing into
+the photographed full-screen spikes.
+
+The PS2 backend now clips every triangle against `-W <= X,Y <= W` and
+`0 <= Z <= W` before either the EE/PATH3 or VU1/PATH1 transform. Newly created
+vertices interpolate the complete active VBO record, including UV, fog and
+combiner inputs, and are triangulated into bounded batches. Host tests cover
+near-plane attribute interpolation, negative-W input, complete rejection,
+insufficient output capacity and 10,000 deterministic random triangles. This
+fix is shared by both geometry transports; the older pre-clip `safe` artifact
+remains useful only for isolating indexed texture residency and VU1 behavior.
+
 The normal game build therefore keeps the file sink disabled. Console logging
 remains active, `--file-log` opts into `pdps2.log`, and CI retains a separate
 `pd-ps2-game-filelog` artifact for controlled diagnostics. No frame-critical

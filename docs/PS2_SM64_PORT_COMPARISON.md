@@ -18,6 +18,8 @@ The SM64 port connects the shared Fast3D frontend to a compact gsKit backend in
 `src/pc/gfx/gfx_ps2_rapi.c`:
 
 - shader IDs are classified into ten fixed draw functions;
+- `GFX_MANUAL_CLIPPING` clips triangles against all six homogeneous frustum
+  planes before the PS2 backend performs the perspective divide;
 - common combiners become one direct GS pass;
 - the two-texture mode becomes two ordered passes;
 - RGBA5551 and RGBA8888 upload as CT16 and CT32 respectively;
@@ -37,7 +39,7 @@ as fixes or approximations.
 | Area | SM64 PS2 | Perfect DarkStation 2 | Decision |
 | --- | --- | --- | --- |
 | Combiner policy | Small fixed dispatch, including magic shader IDs | Semantic recipe planner plus exact graphs and proof-gated fast paths | Keep semantic planner; specialize only when runtime state proves the GS equation equivalent |
-| Geometry submission | CPU viewport conversion and one gsKit primitive packet per triangle | Batches of up to 81 textured vertices through VIF1/VU1 PATH1, with PATH3 fallback | Keep the Perfect Dark path |
+| Geometry submission | Six-plane homogeneous clipping in Fast3D, then CPU viewport conversion and one gsKit primitive packet per triangle | Six-plane homogeneous clipping at the backend boundary, then batches of up to 81 textured vertices through VIF1/VU1 PATH1, with PATH3 fallback | Borrow SM64's clipping rule; retain Perfect Dark's batched transport |
 | State traffic | Writes TEST/CLAMP/TEX state around most draw calls | Project-owned 64-bit GS register shadow suppresses unchanged writes | Keep the Perfect Dark path |
 | Texture source | Linear EE staging cache | Authoritative TMEM view with native CT16/CT32/T4/T8 formats | Keep the Perfect Dark path |
 | VRAM lifetime | gsKit manager; complete VRAM clear on Fast3D flush | Transactional residency and fence-delayed block retirement | Keep the Perfect Dark path |
@@ -47,23 +49,28 @@ as fixes or approximations.
 
 ## Reusable lessons
 
-1. Classify the real material vocabulary and dispatch once per batch. Perfect
+1. A raster backend without hardware clipping must clip before dividing by W.
+   SM64 already enables a Sutherland-Hodgman clipper specifically for PS2.
+   Perfect Dark now applies the same six-plane rule to the final VBO, which
+   also preserves its larger shader vocabulary by interpolating every active
+   attribute rather than only position, UV and shade.
+2. Classify the real material vocabulary and dispatch once per batch. Perfect
    Dark already does this semantically; the next gains come from removing
    costly graphs only when material and texture metadata prove an equivalent
    GS equation.
-2. Keep native source formats native. Both ports prove CT16 residency for
+3. Keep native source formats native. Both ports prove CT16 residency for
    RGBA5551; Perfect Dark extends this to live TMEM, CI and IA/I formats.
-3. Do not promote a visual approximation into the normal build before retail
+4. Do not promote a visual approximation into the normal build before retail
    validation. The `d1556ac4` hardware run regressed the LEGAL bitmap and did
    not reach the later logos after broad direct-TEXEL0 fallbacks were enabled.
    The normal game therefore keeps exact non-endpoint trilerp graphs. A direct
    independent-alpha draw is allowed only when upload metadata proves constant
    white texture RGB.
-4. Treat compiler optimization as a measured A/B. CI emits separate `Og` and
+5. Treat compiler optimization as a measured A/B. CI emits separate `Og` and
    `O2` game ELFs and embeds the profile in the runtime log. SM64 demonstrates
    that an optimized decompilation can run on PS2, but it does not prove that
    `-O3` is safe for Perfect Dark or that EE compute is the current bottleneck.
-5. Revisit IOP module footprint after the render critical path is usable. It
+6. Revisit IOP module footprint after the render critical path is usable. It
    can recover service memory, but it does not explain the measured GS FINISH
    time in title frames.
 
@@ -82,8 +89,11 @@ as fixes or approximations.
 
 The `aaad5659` real-hardware log attributes only 17.154 ms of the first title
 frame to EE translation, while the whole frame is 217.705 ms and a later
-`schedEndFrame` reaches 650.209 ms. Therefore the authoritative next step is
-still removal of avoidable GS pass work, not a compiler-flag or VU rewrite.
+`schedEndFrame` reaches 650.209 ms. That remains evidence against treating
+compiler flags as the primary performance fix. The later playable hardware
+run exposed stretched triangles, and source comparison then found SM64's
+PS2-only manual clipper missing from Perfect Dark's newer Fast3D frontend.
+Correct clipping is therefore a prerequisite before further geometry timing.
 The alpha-threshold test itself is compatible with a one-draw independent
 TEXEL0-alpha material because GS tests the final `TEXEL0.a * INPUT1.a` value.
 That does not prove the RGB equation. The direct path is exact only when upload
