@@ -384,6 +384,34 @@ controls. `geometry-no-cull` bypasses only Fast3D face culling;
 against the repaired `geometry-baseline`. Do not promote either bypass to the
 normal renderer: they are fault-isolation controls, not visual fixes.
 
+**POTWIERDZONE, retail PS2, 2026-09-16:** after the state-independent clear
+fix, `geometry-baseline` displays the mission map. Some submitted models still
+cover the entire view at particular camera angles and can cover the weapon or
+UI. The same occluders appear in `geometry-baseline`, `geometry-no-depth` and
+`geometry-no-cull`. This rejects ordinary GS depth comparison and Fast3D face
+culling as the cause of that diagnostic-only ordering symptom.
+
+**CURRENT IMPLEMENTATION:** the original geometry baseline deliberately
+forced every draw to an opaque palette, including alpha-blended, texture-edge
+and invisible/depth-only draws. That turns legitimate masks, screen effects
+and transparent planes into false solid occluders. CI now publishes two
+narrower controls:
+
+| Artifact | Accepted draws | Fragment source |
+| --- | --- | --- |
+| `pd-ps2-game-geometry-opaque` | Opaque-only geometry | Six-colour palette |
+| `pd-ps2-game-material-opaque` | Opaque-only geometry | Direct `TEXEL0`, or palette when untextured |
+
+Both use the corrected clear, homogeneous clipper, normal depth state and
+EE/PATH3 transform. The first tests whether the apparent full-screen models
+were created solely by flattening transparent/invisible draw classes. The
+second bypasses combiner recipes and material pass graphs while preserving
+texture upload, selection, STQ and clamp. **HIPOTEZA DO TESTU:** recognizable
+world textures in `material-opaque` would place the normal build's black world
+after texture residency, in combiner/pass planning; corrupted or absent direct
+textures would keep the fault in texture materialization, selection or GS
+sampling.
+
 The normal game build therefore keeps the file sink disabled. Console logging
 remains active, `--file-log` opts into `pdps2.log`, and CI retains a separate
 `pd-ps2-game-filelog` artifact for controlled diagnostics. No frame-critical

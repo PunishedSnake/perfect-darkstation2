@@ -54,6 +54,13 @@ static inline uint32_t gfxPs2MaterialRgbChannelPasses(bool monochrome_rgb)
     return monochrome_rgb ? 1u : 3u;
 }
 
+/* Opaque diagnostics exclude draws whose visibility depends on alpha state. */
+static inline bool gfxPs2OpaqueDiagnosticSkips(
+    bool alpha_blend, bool texture_edge, bool invisible)
+{
+    return alpha_blend || texture_edge || invisible;
+}
+
 /* Union of two normalized coverage values: B + A * (1 - B). */
 static inline float gfxPs2CoverageUnion(float a, float b)
 {

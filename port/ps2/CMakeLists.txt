@@ -29,6 +29,14 @@ option(PD_PS2_GEOMETRY_BASELINE_DIAGNOSTIC
   "Render game triangles as untextured diagnostic colors"
   OFF
 )
+option(PD_PS2_OPAQUE_GEOMETRY_DIAGNOSTIC
+  "Render only opaque game triangles as untextured diagnostic colors"
+  OFF
+)
+option(PD_PS2_OPAQUE_MATERIAL_DIAGNOSTIC
+  "Render only opaque game triangles with direct TEXEL0 materials"
+  OFF
+)
 option(PD_PS2_DISABLE_CULLING_DIAGNOSTIC
   "Disable Fast3D triangle culling in the PS2 generated frontend"
   OFF
@@ -634,6 +642,18 @@ endif()
 if(PD_PS2_GEOMETRY_BASELINE_DIAGNOSTIC)
   target_compile_definitions(pd_ps2_game PRIVATE
     PERFECT_DARK_PS2_GEOMETRY_BASELINE=1
+  )
+endif()
+if(PD_PS2_OPAQUE_GEOMETRY_DIAGNOSTIC)
+  target_compile_definitions(pd_ps2_game PRIVATE
+    PERFECT_DARK_PS2_GEOMETRY_BASELINE=1
+    PERFECT_DARK_PS2_OPAQUE_DIAGNOSTIC=1
+  )
+endif()
+if(PD_PS2_OPAQUE_MATERIAL_DIAGNOSTIC)
+  target_compile_definitions(pd_ps2_game PRIVATE
+    PERFECT_DARK_PS2_MATERIAL_BASELINE=1
+    PERFECT_DARK_PS2_OPAQUE_DIAGNOSTIC=1
   )
 endif()
 if(PD_PS2_DISABLE_CULLING_DIAGNOSTIC)

@@ -259,7 +259,8 @@ static uint8_t s_draw_texture_edge_reference =
 
 static struct Ps2GsTexturedVertex s_stq_vertices[2][PS2_GFX_TRANSLATE_VERTS];
 static struct Ps2GsColorVertex s_color_vertices[PS2_GFX_TRANSLATE_VERTS];
-#if defined(PERFECT_DARK_PS2_GEOMETRY_BASELINE)
+#if defined(PERFECT_DARK_PS2_GEOMETRY_BASELINE) || \
+    defined(PERFECT_DARK_PS2_MATERIAL_BASELINE)
 static const uint8_t s_geometry_baseline_palette[][3] = {
     { 0x80u, 0x20u, 0x20u },
     { 0x20u, 0x80u, 0x20u },
@@ -2757,7 +2758,8 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
                 s_pending_unsupported_shader_checkpoint = true;
             }
         }
-#if !defined(PERFECT_DARK_PS2_GEOMETRY_BASELINE)
+#if !defined(PERFECT_DARK_PS2_GEOMETRY_BASELINE) && \
+    !defined(PERFECT_DARK_PS2_MATERIAL_BASELINE)
         return;
 #endif
     }
@@ -2795,7 +2797,21 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
         PS2_PASS_GRAPH_INTERFERENCE &&
         s_shader->plan.color_recipe ==
             PS2_COLOR_TEX0_MUL_TEX1_MUL_INPUT1;
-#if !defined(PERFECT_DARK_PS2_GEOMETRY_BASELINE)
+#if defined(PERFECT_DARK_PS2_MATERIAL_BASELINE)
+    (void)alpha_trilerp;
+    (void)independent_alpha_trilerp;
+    (void)independent_tex0_alpha;
+    (void)opaque_trilerp;
+    (void)opaque_input1_tex0_lerp;
+    (void)texture_factor_lerp;
+    (void)interference;
+#endif
+#if defined(PERFECT_DARK_PS2_MATERIAL_BASELINE)
+    if (s_shader->features.used_textures[0] &&
+        !ps2GsCoreTextureReady(s_selected_texture[0])) {
+        return;
+    }
+#elif !defined(PERFECT_DARK_PS2_GEOMETRY_BASELINE)
     if (s_shader->plan.textured &&
         (!ps2GsCoreTextureReady(s_selected_texture[0]) ||
          ((opaque_trilerp || alpha_trilerp ||
@@ -2806,8 +2822,18 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
     }
 #endif
 
+#if defined(PERFECT_DARK_PS2_OPAQUE_DIAGNOSTIC)
+    if (gfxPs2OpaqueDiagnosticSkips(
+            s_alpha_blend,
+            s_shader->features.opt_texture_edge,
+            s_shader->features.opt_invisible)) {
+        return;
+    }
+#endif
+
     bool fog_color_emitted = false;
-#if defined(PERFECT_DARK_PS2_GEOMETRY_BASELINE)
+#if defined(PERFECT_DARK_PS2_GEOMETRY_BASELINE) || \
+    defined(PERFECT_DARK_PS2_MATERIAL_BASELINE)
     const bool texture_edge = false;
     const bool invisible = false;
 #else
@@ -2994,10 +3020,19 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
                     ca = 0x80;
                     break;
             }
+#if defined(PERFECT_DARK_PS2_MATERIAL_BASELINE)
+            (void)fog_factor;
+            (void)cr;
+            (void)cg;
+            (void)cb;
+            (void)ca;
+#endif
 
             struct Ps2GsPackedReg packed_position;
-#if defined(PERFECT_DARK_PS2_GEOMETRY_BASELINE)
+#if defined(PERFECT_DARK_PS2_GEOMETRY_BASELINE) || \
+    defined(PERFECT_DARK_PS2_MATERIAL_BASELINE)
             packed_position = ps2_pack_xyz2(sx, sy, iz);
+#if defined(PERFECT_DARK_PS2_GEOMETRY_BASELINE)
             const size_t palette_index =
                 ((base_vertex + i) / 3u) %
                 (sizeof(s_geometry_baseline_palette) /
@@ -3009,6 +3044,26 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
                 0x80u, 0.0f);
             s_color_vertices[i].xyz2 = packed_position;
 #else
+            if (s_shader->features.used_textures[0]) {
+                s_stq_vertices[0][i].rgbaq = ps2_pack_rgbaq(
+                    0x80u, 0x80u, 0x80u, 0x80u, inv_w);
+                s_stq_vertices[0][i].st = ps2_pack_st(
+                    tex_u[0] * inv_w, tex_v[0] * inv_w);
+                s_stq_vertices[0][i].xyz2 = packed_position;
+            } else {
+                const size_t palette_index =
+                    ((base_vertex + i) / 3u) %
+                    (sizeof(s_geometry_baseline_palette) /
+                     sizeof(s_geometry_baseline_palette[0]));
+                s_color_vertices[i].rgbaq = ps2_pack_rgbaq(
+                    s_geometry_baseline_palette[palette_index][0],
+                    s_geometry_baseline_palette[palette_index][1],
+                    s_geometry_baseline_palette[palette_index][2],
+                    0x80u, 0.0f);
+                s_color_vertices[i].xyz2 = packed_position;
+            }
+#endif
+#else
             if (s_shader->features.opt_fog) {
                 packed_position = ps2_pack_xyzf2(
                     sx, sy, iz, ps2_fog_coefficient(fog_factor));
@@ -3017,6 +3072,7 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
             }
 #endif
 
+#if !defined(PERFECT_DARK_PS2_MATERIAL_BASELINE)
             if (independent_tex0_alpha) {
                 struct Ps2IndependentTex0AlphaVertex *vertex =
                     &s_independent_tex0_alpha_vertices[i];
@@ -3229,6 +3285,7 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
                 s_color_vertices[i].rgbaq = ps2_pack_rgbaq(cr, cg, cb, ca, 0.0f);
                 s_color_vertices[i].xyz2 = packed_position;
             }
+#endif
         }
         ps2RendererStatsRecordTranslation(
             (uint32_t)batch_vertices,
@@ -3243,6 +3300,23 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
         ps2GsCoreSetAlphaWrite(true);
         ps2GsCoreDrawColorTriangles(
             s_color_vertices, (uint32_t)batch_vertices);
+#elif defined(PERFECT_DARK_PS2_MATERIAL_BASELINE)
+        ps2GsCoreSetFog(false, 0u, 0u, 0u);
+        ps2GsCoreSetAlphaTest(false, 0u);
+        ps2GsCoreSetAlphaBlend(false);
+        ps2GsCoreSetFramebufferAlphaForce(false);
+        ps2GsCoreSetColorWrite(true);
+        ps2GsCoreSetAlphaWrite(true);
+        if (s_shader->features.used_textures[0]) {
+            ps2GsCoreSetTextureAlpha(false);
+            ps2_apply_texture_clamp(0);
+            ps2GsCoreDrawTexturedTriangles(
+                s_selected_texture[0], s_stq_vertices[0],
+                (uint32_t)batch_vertices);
+        } else {
+            ps2GsCoreDrawColorTriangles(
+                s_color_vertices, (uint32_t)batch_vertices);
+        }
 #else
         if (independent_tex0_alpha) {
             (void)ps2_draw_independent_tex0_alpha(
