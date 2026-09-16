@@ -412,6 +412,27 @@ after texture residency, in combiner/pass planning; corrupted or absent direct
 textures would keep the fault in texture materialization, selection or GS
 sampling.
 
+**POTWIERDZONE, retail PS2, 2026-09-16:** `geometry-opaque` removes the
+camera-angle-dependent full-screen occluder, but also removes much of the game
+because Perfect Dark marks a large fraction of its draws with alpha, texture
+edge or invisible behavior. This identifies the occluder as one of those draw
+classes rather than ordinary opaque geometry. `material-opaque` displays
+recognizable TEXEL0 data on Joanna, the menu computer, Carrington doors and a
+character model. The world is no longer uniformly black, although most draws
+are still intentionally filtered. Texture upload, selection, STQ and GS
+sampling therefore work for real game assets; the dominant black-world fault
+lies later in RGB combiner/pass planning. Slight horizontal striping or texel
+misalignment remains a separate sampling/layout defect.
+
+**CURRENT IMPLEMENTATION:** CI now also publishes
+`pd-ps2-game-material-alpha`. It continues to bypass RGB combiner recipes and
+complex colour pass graphs, but retains source alpha blending, alpha threshold,
+texture-edge rejection, invisible/depth-only writes and TEXEL0 alpha. For an
+unsupported alpha graph it uses a conservative TEXEL0/input-alpha visibility
+approximation instead of forcing the draw opaque. **HIPOTEZA DO TESTU:** this
+build should retain most of the world while avoiding the false opaque screen
+mask. It is a diagnostic visibility baseline, not an exact material renderer.
+
 The normal game build therefore keeps the file sink disabled. Console logging
 remains active, `--file-log` opts into `pdps2.log`, and CI retains a separate
 `pd-ps2-game-filelog` artifact for controlled diagnostics. No frame-critical

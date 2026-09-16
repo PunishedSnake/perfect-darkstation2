@@ -468,6 +468,18 @@ jobs:
           mips64r5900el-ps2-elf-size build-ps2-material-opaque/pd-ps2-game.elf
           test -z "$(mips64r5900el-ps2-elf-nm -u build-ps2-material-opaque/pd-ps2-game.elf)"
 
+      - name: Build alpha-preserving direct-material diagnostic
+        run: |
+          cmake -S port/ps2 -B build-ps2-material-alpha -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/port/ps2/ps2dev-toolchain.cmake" \
+            -DPD_PS2_GAME_VU1=OFF \
+            -DPD_PS2_ALPHA_MATERIAL_DIAGNOSTIC=ON
+          cmake --build build-ps2-material-alpha --target pd_ps2_game -j2 --verbose
+          test -f build-ps2-material-alpha/pd-ps2-game.elf
+          test -s build-ps2-material-alpha/pd-ps2-game.map
+          mips64r5900el-ps2-elf-size build-ps2-material-alpha/pd-ps2-game.elf
+          test -z "$(mips64r5900el-ps2-elf-nm -u build-ps2-material-alpha/pd-ps2-game.elf)"
+
       - name: Build untextured no-cull diagnostic
         run: |
           cmake -S port/ps2 -B build-ps2-geometry-no-cull -G Ninja \
@@ -606,6 +618,16 @@ jobs:
           path: |
             build-ps2-material-opaque/pd-ps2-game.elf
             build-ps2-material-opaque/pd-ps2-game.map
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload alpha-preserving direct-material diagnostic
+        uses: actions/upload-artifact@v4
+        with:
+          name: pd-ps2-game-material-alpha
+          path: |
+            build-ps2-material-alpha/pd-ps2-game.elf
+            build-ps2-material-alpha/pd-ps2-game.map
           if-no-files-found: error
           retention-days: 14
 

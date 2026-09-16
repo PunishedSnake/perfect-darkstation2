@@ -899,6 +899,63 @@ static uint8_t ps2_texture_alpha_fragment_component(float v)
     return (uint8_t)out;
 }
 
+#if defined(PERFECT_DARK_PS2_MATERIAL_BASELINE)
+static bool ps2_material_baseline_texture_alpha(
+    const struct ShaderProgram *shader)
+{
+    return shader && gfxPs2DirectMaterialUsesTextureAlpha(
+        shader->plan.supported,
+        shader->plan.texture_alpha,
+        shader->features.opt_alpha,
+        shader->features.used_textures[0]);
+}
+
+static uint8_t ps2_material_baseline_fragment_alpha(
+    const struct ShaderProgram *shader, const float input[3][4])
+{
+    if (!shader || !shader->features.opt_alpha) {
+        return 0x80u;
+    }
+
+    switch (shader->plan.alpha_recipe) {
+        case PS2_ALPHA_ZERO:
+            return 0x00u;
+        case PS2_ALPHA_OPAQUE:
+        case PS2_ALPHA_ONE:
+            return 0x80u;
+        case PS2_ALPHA_INPUT1:
+            return ps2_modulate_component(input[0][3]);
+        case PS2_ALPHA_TEX0:
+            return 0x40u;
+        case PS2_ALPHA_TEX0_MUL_INPUT1:
+            return ps2_texture_alpha_fragment_component(input[0][3]);
+        case PS2_ALPHA_TEX1_MUL_INPUT1:
+            return ps2_modulate_component(input[0][3]);
+        case PS2_ALPHA_INPUT1_MUL_INPUT2:
+            return ps2_modulate_component(input[0][3] * input[1][3]);
+        case PS2_ALPHA_TEX0_MUL_INPUT1_MUL_INPUT2:
+        case PS2_ALPHA_TEX0_MUL_TEX1_MUL_INPUT1:
+            return ps2_texture_alpha_fragment_component(
+                input[0][3] * input[1][3]);
+        case PS2_ALPHA_INPUT1_PLUS_INPUT2_EDGE:
+            return ps2_modulate_component(
+                gfxPs2CoverageUnion(input[0][3], input[1][3]));
+        case PS2_ALPHA_INPUT1_INV_INPUT1_MUL_INPUT2:
+            return ps2_modulate_component(
+                input[0][3] * (1.0f - input[0][3]) * input[1][3]);
+        case PS2_ALPHA_TEX0_MUL_INPUT1_MINUS_INPUT2_PLUS_INPUT3_EDGE:
+        case PS2_ALPHA_INPUT2_INPUT1_LERP_TEX0:
+        case PS2_ALPHA_INPUT2_INPUT1_COVERAGE_LERP_TEX0:
+            return 0x40u;
+        case PS2_ALPHA_UNSUPPORTED:
+        default:
+            return ps2_material_baseline_texture_alpha(shader)
+                ? ps2_texture_alpha_fragment_component(input[0][3])
+                : ps2_modulate_component(input[0][3]);
+    }
+}
+#endif
+
 static uint8_t ps2_fog_coefficient(float fast3d_factor)
 {
     const float source_weight = 1.0f - ps2_clampf(fast3d_factor, 0.0f, 1.0f);
@@ -2832,8 +2889,20 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
 #endif
 
     bool fog_color_emitted = false;
+#if defined(PERFECT_DARK_PS2_MATERIAL_BASELINE) && \
+    !defined(PERFECT_DARK_PS2_OPAQUE_DIAGNOSTIC)
+    ps2GsCoreSetAlphaTest(
+        s_shader->features.opt_alpha_threshold,
+        s_shader->features.opt_alpha_threshold
+            ? PS2_GFX_ALPHA_THRESHOLD : 0u);
+    ps2GsCoreSetAlphaBlend(s_alpha_blend);
+    ps2GsCoreSetFramebufferAlphaForce(false);
+    ps2GsCoreSetColorWrite(true);
+    ps2GsCoreSetAlphaWrite(true);
+#endif
 #if defined(PERFECT_DARK_PS2_GEOMETRY_BASELINE) || \
-    defined(PERFECT_DARK_PS2_MATERIAL_BASELINE)
+    (defined(PERFECT_DARK_PS2_MATERIAL_BASELINE) && \
+     defined(PERFECT_DARK_PS2_OPAQUE_DIAGNOSTIC))
     const bool texture_edge = false;
     const bool invisible = false;
 #else
@@ -3025,7 +3094,11 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
             (void)cr;
             (void)cg;
             (void)cb;
+#if defined(PERFECT_DARK_PS2_OPAQUE_DIAGNOSTIC)
             (void)ca;
+#else
+            ca = ps2_material_baseline_fragment_alpha(s_shader, input);
+#endif
 #endif
 
             struct Ps2GsPackedReg packed_position;
@@ -3046,7 +3119,13 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
 #else
             if (s_shader->features.used_textures[0]) {
                 s_stq_vertices[0][i].rgbaq = ps2_pack_rgbaq(
-                    0x80u, 0x80u, 0x80u, 0x80u, inv_w);
+                    0x80u, 0x80u, 0x80u,
+#if defined(PERFECT_DARK_PS2_OPAQUE_DIAGNOSTIC)
+                    0x80u,
+#else
+                    ca,
+#endif
+                    inv_w);
                 s_stq_vertices[0][i].st = ps2_pack_st(
                     tex_u[0] * inv_w, tex_v[0] * inv_w);
                 s_stq_vertices[0][i].xyz2 = packed_position;
@@ -3059,7 +3138,12 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
                     s_geometry_baseline_palette[palette_index][0],
                     s_geometry_baseline_palette[palette_index][1],
                     s_geometry_baseline_palette[palette_index][2],
-                    0x80u, 0.0f);
+#if defined(PERFECT_DARK_PS2_OPAQUE_DIAGNOSTIC)
+                    0x80u,
+#else
+                    ca,
+#endif
+                    0.0f);
                 s_color_vertices[i].xyz2 = packed_position;
             }
 #endif
@@ -3302,18 +3386,27 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
             s_color_vertices, (uint32_t)batch_vertices);
 #elif defined(PERFECT_DARK_PS2_MATERIAL_BASELINE)
         ps2GsCoreSetFog(false, 0u, 0u, 0u);
+#if defined(PERFECT_DARK_PS2_OPAQUE_DIAGNOSTIC)
         ps2GsCoreSetAlphaTest(false, 0u);
         ps2GsCoreSetAlphaBlend(false);
         ps2GsCoreSetFramebufferAlphaForce(false);
         ps2GsCoreSetColorWrite(true);
         ps2GsCoreSetAlphaWrite(true);
+#endif
         if (s_shader->features.used_textures[0]) {
-            ps2GsCoreSetTextureAlpha(false);
+            ps2GsCoreSetTextureAlpha(
+#if defined(PERFECT_DARK_PS2_OPAQUE_DIAGNOSTIC)
+                false
+#else
+                ps2_material_baseline_texture_alpha(s_shader)
+#endif
+            );
             ps2_apply_texture_clamp(0);
             ps2GsCoreDrawTexturedTriangles(
                 s_selected_texture[0], s_stq_vertices[0],
                 (uint32_t)batch_vertices);
         } else {
+            ps2GsCoreSetTextureAlpha(false);
             ps2GsCoreDrawColorTriangles(
                 s_color_vertices, (uint32_t)batch_vertices);
         }

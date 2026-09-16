@@ -12,6 +12,14 @@ int main(void)
     assert(gfxPs2OpaqueDiagnosticSkips(true, false, false));
     assert(gfxPs2OpaqueDiagnosticSkips(false, true, false));
     assert(gfxPs2OpaqueDiagnosticSkips(false, false, true));
+    assert(gfxPs2DirectMaterialUsesTextureAlpha(
+        true, true, false, false));
+    assert(!gfxPs2DirectMaterialUsesTextureAlpha(
+        true, false, true, true));
+    assert(gfxPs2DirectMaterialUsesTextureAlpha(
+        false, false, true, true));
+    assert(!gfxPs2DirectMaterialUsesTextureAlpha(
+        false, false, false, true));
     assert(gfxPs2CoverageUnion(0.0f, 0.0f) == 0.0f);
     assert(gfxPs2CoverageUnion(1.0f, 0.25f) == 1.0f);
     assert(gfxPs2CoverageUnion(0.5f, 0.25f) == 0.625f);

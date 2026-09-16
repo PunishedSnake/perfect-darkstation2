@@ -61,6 +61,16 @@ static inline bool gfxPs2OpaqueDiagnosticSkips(
     return alpha_blend || texture_edge || invisible;
 }
 
+/* Unsupported direct-material draws retain TEXEL0 alpha when available. */
+static inline bool gfxPs2DirectMaterialUsesTextureAlpha(
+    bool plan_supported, bool plan_texture_alpha,
+    bool alpha_output, bool texture0_used)
+{
+    return plan_supported
+        ? plan_texture_alpha
+        : alpha_output && texture0_used;
+}
+
 /* Union of two normalized coverage values: B + A * (1 - B). */
 static inline float gfxPs2CoverageUnion(float a, float b)
 {
