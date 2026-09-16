@@ -53,6 +53,11 @@ int main(void)
     assert(gfxPs2TextureCoordinateScale(7u, true) == 14.0f / 16.0f);
     assert(gfxPs2TextureCoordinateScale(512u, true) == 1.0f);
 
+    assert(gfxPs2TopLeftY(240, 0, 240) == 0);
+    assert(gfxPs2TopLeftY(240, 120, 120) == 0);
+    assert(gfxPs2TopLeftY(240, 0, 120) == 120);
+    assert(gfxPs2TopLeftY(448, 48, 200) == 200);
+
     uint16_t clamp_max = UINT16_MAX;
     assert(gfxPs2TextureRegionClampMax(7.5f / 8.0f, 8u, &clamp_max));
     assert(clamp_max == 7u);

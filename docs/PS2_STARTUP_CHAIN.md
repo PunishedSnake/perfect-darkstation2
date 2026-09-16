@@ -433,6 +433,21 @@ approximation instead of forcing the draw opaque. **HIPOTEZA DO TESTU:** this
 build should retain most of the world while avoiding the false opaque screen
 mask. It is a diagnostic visibility baseline, not an exact material renderer.
 
+**CURRENT IMPLEMENTATION:** the renderer correctness pass found two backend
+contract violations below material planning. Fast3D supplies viewport and
+scissor rectangles in bottom-left-origin coordinates, while GS screen space is
+top-left-origin; partial rectangles were therefore applied to the vertically
+mirrored strip even though full-screen state appeared correct. The PS2 adapter
+now converts both rectangles before projection, native SCISSOR programming and
+pass-graph tiling. Separately, `depth_test=false` previously left `TEST.ZTE`
+enabled with `ZTST=ALWAYS`, allowing `depth_update=true` to write invisible Z.
+Depth-disabled draws now disable ZTE and force `ZBUF.ZMSK`, matching the
+portable/OpenGL contract. Both transformations have host regression tests.
+
+See `PS2_RENDERER_CORRECTNESS_AUDIT.md` for the reviewed texture/state
+contracts and the remaining destination-colour, decal-depth, filtering and
+combiner gaps.
+
 The normal game build therefore keeps the file sink disabled. Console logging
 remains active, `--file-log` opts into `pdps2.log`, and CI retains a separate
 `pd-ps2-game-filelog` artifact for controlled diagnostics. No frame-critical

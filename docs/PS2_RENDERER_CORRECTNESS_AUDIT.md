@@ -1,0 +1,107 @@
+# PS2 renderer correctness audit
+
+Date: 2026-09-16
+
+This audit follows the real-hardware results through the `material-alpha`
+diagnostic. It separates proven backend-contract defects from visual
+hypotheses so another broad diagnostic build cannot accidentally hide the
+fault it is meant to isolate.
+
+## Confirmed defects fixed by this pass
+
+### Fast3D area origin versus GS area origin
+
+**POTWIERDZONE:** `GfxRenderingAPI::set_viewport` and `set_scissor` receive the
+same bottom-left-origin areas consumed by OpenGL. The GS viewport translation,
+native `SCISSOR` register and tiled pass graphs use top-left screen space.
+
+The PS2 backend previously copied the Fast3D Y coordinate verbatim. A
+full-screen area happened to survive because both origins produce zero, while
+every partial viewport or scissor selected its vertically mirrored strip. The
+adapter now converts
+
+```text
+top_y = target_height - bottom_y - area_height
+```
+
+before storing either area. Host tests cover full-screen and partial regions.
+
+### Disabled depth testing still wrote Z
+
+**POTWIERDZONE:** the portable/OpenGL contract disables both depth comparison
+and depth writes when `depth_test` is false. The PS2 backend previously kept
+`TEST.ZTE` enabled, selected `ZTST=ALWAYS`, and copied `depth_update` directly
+to `ZBUF.ZMSK`. A nominally depth-disabled draw could therefore overwrite Z
+across its coverage and reject later world, weapon or UI geometry.
+
+`ps2GsCoreSetDepthMode` now disables `ZTE` and masks Z writes unless a depth
+buffer exists and depth testing is enabled. The effective test/write truth
+table is host-tested.
+
+## Contracts reviewed without a new defect
+
+- **CURRENT IMPLEMENTATION:** NPOT Fast3D coordinates are normalized against
+  the logical upload and rescaled to the power-of-two `TEX0.TW/TH` extent.
+- **CURRENT IMPLEMENTATION:** mirrored power-of-two residency uses a reflected
+  two-period upload while ST retains the original logical period.
+- **CURRENT IMPLEMENTATION:** shader clamp metadata is decoded from the
+  last-texel centre into integer GS `REGION_CLAMP` maxima without truncating
+  values outside the 10-bit register contract.
+- **CURRENT IMPLEMENTATION:** texture upload `TBW` uses 64-pixel units and
+  rounds PSMT4/PSMT8 buffers to an even unit count, matching their 128-pixel
+  page width.
+- **CURRENT IMPLEMENTATION:** RGBA16, RGBA32, IA16, CI4/CI8 and I/IA indexed
+  conversions have byte-level host tests, including T4 nibble order and CSM1
+  palette permutation.
+- **CURRENT IMPLEMENTATION:** clear packets override and restore TEST, FRAME,
+  ZBUF and SCISSOR instead of inheriting the previous material.
+- **CURRENT IMPLEMENTATION:** CT32 RGB/alpha write lanes and CT16 aggregate
+  masks are host-tested. Alpha-only multipass writes no longer mask all lanes.
+- **CURRENT IMPLEMENTATION:** alpha threshold 8/256 is converted to 4/128, and
+  texture-edge `> 0.19` is quantized to `GEQUAL 25/128`.
+- **CURRENT IMPLEMENTATION:** pass-graph wrappers restore the default render
+  target and persistent framebuffer/depth/scissor state after success or an
+  internal failure.
+
+## Remaining correctness gaps
+
+1. **POTWIERDZONE:** `G_MODULATE_EXT` means `source * destination` in the
+   portable backend. Complex PS2 pass graphs reject it explicitly, but the
+   direct path currently enables ordinary source-over blending instead. An
+   exact GS implementation needs owned framebuffer feedback or a material-
+   specific channel graph. It must not be replaced with another approximate
+   blend equation.
+2. **POTWIERDZONE:** `ZMODE_DEC` selects polygon offset in the OpenGL backend.
+   The PS2 adapter currently ignores `zmode`; decals can therefore fight or
+   disappear at equal depth. A reversed-Z bias needs a bounded hardware A/B.
+3. **POTWIERDZONE:** unsupported combiner recipes are still dropped. Renderer
+   visibility cannot be complete until the hardware log inventories the
+   remaining recipe IDs and their triangle counts.
+4. **POTWIERDZONE:** mip generation/sampling and the portable framebuffer-copy
+   API are not implemented.
+5. **HIPOTEZA DO TESTU:** the slight striping reported on recognizable
+   textures is filter fidelity rather than row pitch. The PS2 path maps N64
+   filtered draws to GS bilinear sampling; it does not implement the portable
+   three-point reconstruction. A point-versus-linear A/B should precede any
+   coordinate bias.
+6. **HIPOTEZA DO TESTU:** remaining LEGAL glyph corruption may have been caused
+   by the partial viewport/scissor origin defect. If it survives this fix,
+   isolate texture-rectangle/copy-cycle coordinates separately from ordinary
+   triangle text.
+7. **INFERENCJA:** Fast3D performs face culling before the backend homogeneous
+   clipper. Eye-plane-crossing triangles can therefore be rejected before the
+   PS2 clipper can repair them. Moving culling after clipping requires an
+   explicit winding contract and should be tested separately.
+
+## Next hardware acceptance test
+
+Use the ordinary Og artifact first. Record only these deltas:
+
+- whether LEGAL glyphs changed;
+- whether partial-screen effects appear in the correct vertical region;
+- whether camera-angle-dependent world/weapon/UI occlusion remains;
+- whether Carrington and the first mission retain more geometry;
+- whether texture striping changes at all.
+
+An unchanged stripe pattern alongside fixed visibility would confirm that
+filter fidelity is independent from the viewport/depth defects.

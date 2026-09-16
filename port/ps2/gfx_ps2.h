@@ -48,6 +48,13 @@ static inline float gfxPs2TextureCoordinateScale(
     return (float)physical_extent / (float)tex0_extent;
 }
 
+/* Fast3D/OpenGL areas use a bottom-left origin; GS uses a top-left origin. */
+static inline int gfxPs2TopLeftY(
+    int target_height, int bottom_y, int area_height)
+{
+    return target_height - bottom_y - area_height;
+}
+
 /* Exact runtime proof used to select the one-channel material graph. */
 static inline uint32_t gfxPs2MaterialRgbChannelPasses(bool monochrome_rgb)
 {

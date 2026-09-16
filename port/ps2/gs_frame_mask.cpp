@@ -42,3 +42,15 @@ extern "C" uint8_t ps2GsClearDepthWriteMask(
 {
     return clear_depth && has_depth_buffer ? 0u : 1u;
 }
+
+extern "C" bool ps2GsDepthTestEnabled(
+    bool depth_test, bool has_depth_buffer)
+{
+    return depth_test && has_depth_buffer;
+}
+
+extern "C" bool ps2GsDepthWriteEnabled(
+    bool depth_test, bool depth_update, bool has_depth_buffer)
+{
+    return depth_test && depth_update && has_depth_buffer;
+}

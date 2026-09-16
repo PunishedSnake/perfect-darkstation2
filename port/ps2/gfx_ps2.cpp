@@ -843,18 +843,21 @@ static void ps2_set_depth_range(float znear, float zfar)
 static void ps2_set_viewport(int x, int y, int width, int height)
 {
     s_viewport.x = x;
-    s_viewport.y = y;
+    s_viewport.y = gfxPs2TopLeftY(
+        ps2GsCoreGetHeight(), y, height);
     s_viewport.width = width;
     s_viewport.height = height;
 }
 
 static void ps2_set_scissor(int x, int y, int width, int height)
 {
+    const int top_y = gfxPs2TopLeftY(
+        ps2GsCoreGetHeight(), y, height);
     s_scissor.x = x;
-    s_scissor.y = y;
+    s_scissor.y = top_y;
     s_scissor.width = width;
     s_scissor.height = height;
-    ps2GsCoreSetScissor(x, y, width, height);
+    ps2GsCoreSetScissor(x, top_y, width, height);
 }
 
 static void ps2_set_use_alpha(bool use_alpha, bool modulate)

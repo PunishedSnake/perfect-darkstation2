@@ -39,11 +39,24 @@ static void test_clear_is_independent_from_draw_masks(void)
     assert(ps2GsClearDepthWriteMask(true, false) == 1u);
 }
 
+static void test_disabled_depth_test_cannot_write_depth(void)
+{
+    assert(ps2GsDepthTestEnabled(true, true));
+    assert(!ps2GsDepthTestEnabled(false, true));
+    assert(!ps2GsDepthTestEnabled(true, false));
+
+    assert(ps2GsDepthWriteEnabled(true, true, true));
+    assert(!ps2GsDepthWriteEnabled(true, false, true));
+    assert(!ps2GsDepthWriteEnabled(false, true, true));
+    assert(!ps2GsDepthWriteEnabled(true, true, false));
+}
+
 int main(void)
 {
     test_ct32_independent_lanes();
     test_ct16_aggregate_contract();
     test_clear_is_independent_from_draw_masks();
+    test_disabled_depth_test_cannot_write_depth();
     puts("gs_frame_mask tests passed");
     return 0;
 }

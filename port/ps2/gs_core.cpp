@@ -1030,8 +1030,13 @@ extern "C" void ps2GsCoreSetDepthMode(bool depth_test, bool depth_update, bool d
         return;
     }
 
-    s_gs->Test->ZTST = (depth_test && depth_compare) ? 2 : 1;
-    s_depth_update = depth_update;
+    const bool has_depth_buffer = s_gs->ZBuffering == GS_SETTING_ON;
+    const bool test_enabled = ps2GsDepthTestEnabled(
+        depth_test, has_depth_buffer);
+    s_gs->Test->ZTE = test_enabled ? GS_SETTING_ON : GS_SETTING_OFF;
+    s_gs->Test->ZTST = (test_enabled && depth_compare) ? 2 : 1;
+    s_depth_update = ps2GsDepthWriteEnabled(
+        depth_test, depth_update, has_depth_buffer);
 
     if (s_frame_building) {
         ps2GsCoreEmitTest();
