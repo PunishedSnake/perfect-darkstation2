@@ -895,16 +895,17 @@ extern "C" void ps2GsCoreClear(bool clear_color, bool clear_depth)
     }
 
     /*
-     * Preserve the previous gsKit clear contract for the correctness baseline:
-     * either requested clear draws the black full-screen sprite sequence while
-     * Z comparison is forced ALWAYS, then restores the current TEST register.
-     * Fog is explicitly disabled for the clear primitive so persistent material
-     * state from the previous frame cannot tint the render target.
+     * A clear is independent from the preceding material. OpenGL temporarily
+     * forces the requested write masks and disables scissor/testing; mirror
+     * that contract explicitly instead of inheriting FRAME, ZBUF or TEST.
      */
     const uint32_t target_width = ps2GsCoreTargetWidth();
     const uint32_t target_height = ps2GsCoreTargetHeight();
     const uint32_t slices = (target_width + 63u) / 64u;
-    const uint32_t register_count = 4u + slices * 2u;
+    const bool has_depth_buffer = s_gs->ZBuffering &&
+        s_active_render_target == PS2_GS_RENDER_TARGET_DEFAULT;
+    const uint32_t register_count =
+        8u + (has_depth_buffer ? 2u : 0u) + slices * 2u;
     struct Ps2GsPackedReg *p = ps2GsCoreReserve(register_count);
     if (!p) {
         return;
@@ -912,19 +913,44 @@ extern "C" void ps2GsCoreClear(bool clear_color, bool clear_depth)
 
     uint32_t out = 0;
     const uint64_t restored_test = ps2GsCoreCurrentTestValue(-1);
+    const uint64_t restored_frame = GS_SETREG_FRAME_1(
+        ps2GsCoreTargetVram() / PS2_GS_FRAMEBUFFER_ALIGNMENT,
+        ps2GsCoreTargetFbw(), ps2GsCoreTargetPsm(),
+        ps2GsCoreFrameMask());
+    const uint64_t clear_frame = GS_SETREG_FRAME_1(
+        ps2GsCoreTargetVram() / PS2_GS_FRAMEBUFFER_ALIGNMENT,
+        ps2GsCoreTargetFbw(), ps2GsCoreTargetPsm(),
+        ps2GsClearFrameWriteMask(clear_color));
+    const uint64_t restored_scissor = GS_SETREG_SCISSOR(
+        s_scissor_x0, s_scissor_x1, s_scissor_y0, s_scissor_y1);
+    const uint64_t clear_scissor = GS_SETREG_SCISSOR(
+        0u, target_width - 1u, 0u, target_height - 1u);
+    const uint64_t clear_test = GS_SETREG_TEST(
+        0, PS2_GS_ATST_ALWAYS, 0, PS2_GS_AFAIL_KEEP,
+        0, 0, has_depth_buffer ? 1 : 0, 1);
+    const uint64_t restored_zbuf = has_depth_buffer
+        ? GS_SETREG_ZBUF(
+            s_gs->ZBuffer / 8192, s_gs->PSMZ,
+            s_depth_update ? 0 : 1)
+        : 0u;
+    const uint64_t clear_zbuf = has_depth_buffer
+        ? GS_SETREG_ZBUF(
+            s_gs->ZBuffer / 8192, s_gs->PSMZ,
+            ps2GsClearDepthWriteMask(clear_depth, true))
+        : 0u;
     const uint64_t clear_prim = GS_SETREG_PRIM(
         GS_PRIM_PRIM_SPRITE,
-        0,
-        0,
-        0,
-        s_gs->PrimAlphaEnable,
-        s_gs->PrimAAEnable,
-        0,
-        s_gs->PrimContext,
-        0);
-    ps2GsCoreWriteReg(&p[out++],
-        ps2GsCoreCurrentTestValue(1),
-        GS_TEST_1 + s_gs->PrimContext);
+        0, 0, 0, 0, 0, 0, s_gs->PrimContext, 0);
+    ps2GsCoreWriteReg(
+        &p[out++], clear_test, GS_TEST_1 + s_gs->PrimContext);
+    ps2GsCoreWriteReg(
+        &p[out++], clear_frame, GS_FRAME_1 + s_gs->PrimContext);
+    if (has_depth_buffer) {
+        ps2GsCoreWriteReg(
+            &p[out++], clear_zbuf, GS_ZBUF_1 + s_gs->PrimContext);
+    }
+    ps2GsCoreWriteReg(
+        &p[out++], clear_scissor, GS_SCISSOR_1 + s_gs->PrimContext);
     ps2GsCoreWriteReg(&p[out++],
         clear_prim,
         GS_PRIM);
@@ -944,9 +970,24 @@ extern "C" void ps2GsCoreClear(bool clear_color, bool clear_depth)
             ps2GsCoreMakeXyz2(x1, (int)target_height, 0), GS_XYZ2);
     }
 
-    ps2GsCoreWriteReg(&p[out++],
-        restored_test,
-        GS_TEST_1 + s_gs->PrimContext);
+    ps2GsCoreWriteReg(
+        &p[out++], restored_frame, GS_FRAME_1 + s_gs->PrimContext);
+    if (has_depth_buffer) {
+        ps2GsCoreWriteReg(
+            &p[out++], restored_zbuf, GS_ZBUF_1 + s_gs->PrimContext);
+    }
+    ps2GsCoreWriteReg(
+        &p[out++], restored_scissor, GS_SCISSOR_1 + s_gs->PrimContext);
+    ps2GsCoreWriteReg(
+        &p[out++], restored_test, GS_TEST_1 + s_gs->PrimContext);
+    ps2GsStateShadowCommit(
+        &s_state_shadow, PS2_GS_STATE_FRAME, restored_frame);
+    if (has_depth_buffer) {
+        ps2GsStateShadowCommit(
+            &s_state_shadow, PS2_GS_STATE_ZBUF, restored_zbuf);
+    }
+    ps2GsStateShadowCommit(
+        &s_state_shadow, PS2_GS_STATE_SCISSOR, restored_scissor);
     ps2GsStateShadowCommit(
         &s_state_shadow, PS2_GS_STATE_TEST, restored_test);
     ps2GsStateShadowCommit(

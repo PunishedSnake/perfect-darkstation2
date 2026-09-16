@@ -30,10 +30,20 @@ static void test_ct16_aggregate_contract(void)
     assert(ps2GsFrameWriteMask(0u, false, true) == 0xffffffffu);
 }
 
+static void test_clear_is_independent_from_draw_masks(void)
+{
+    assert(ps2GsClearFrameWriteMask(true) == 0u);
+    assert(ps2GsClearFrameWriteMask(false) == UINT32_MAX);
+    assert(ps2GsClearDepthWriteMask(true, true) == 0u);
+    assert(ps2GsClearDepthWriteMask(false, true) == 1u);
+    assert(ps2GsClearDepthWriteMask(true, false) == 1u);
+}
+
 int main(void)
 {
     test_ct32_independent_lanes();
     test_ct16_aggregate_contract();
+    test_clear_is_independent_from_draw_masks();
     puts("gs_frame_mask tests passed");
     return 0;
 }

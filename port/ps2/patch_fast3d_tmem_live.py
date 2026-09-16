@@ -54,6 +54,17 @@ def patch(source: str) -> str:
 
     source = replace_once(
         source,
+        "    if ((rsp.geometry_mode & G_CULL_BOTH) != 0) {\n",
+        "    if ((rsp.geometry_mode & G_CULL_BOTH) != 0\n"
+        "#if defined(PERFECT_DARK_PS2_DISABLE_CULLING)\n"
+        "        && false\n"
+        "#endif\n"
+        "    ) {\n",
+        "PS2 culling diagnostic gate",
+    )
+
+    source = replace_once(
+        source,
         "static void gfx_dp_set_texture_image(uint32_t format, uint32_t size, uint32_t width, uint32_t tex_flags, const void* addr) {\n"
         "    rdp.texture_to_load.addr = (const uint8_t*)addr;\n",
         "static void gfx_dp_set_texture_image(uint32_t format, uint32_t size, uint32_t width, uint32_t tex_flags, const void* addr) {\n"

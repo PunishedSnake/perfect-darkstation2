@@ -817,11 +817,20 @@ static void ps2_set_depth_mode(bool depth_test, bool depth_update, bool depth_co
     (void)depth_source_prim;
     (void)zmode;
 
+#if defined(PERFECT_DARK_PS2_DISABLE_DEPTH)
+    (void)depth_test;
+    (void)depth_update;
+    (void)depth_compare;
+    s_depth_test = false;
+    s_depth_update = false;
+    s_depth_compare = false;
+    ps2GsCoreSetDepthMode(false, false, false);
+#else
     s_depth_test = depth_test;
     s_depth_update = depth_update;
     s_depth_compare = depth_compare;
     ps2GsCoreSetDepthMode(depth_test, depth_update, depth_compare);
-
+#endif
 }
 
 static void ps2_set_depth_range(float znear, float zfar)
@@ -3363,9 +3372,15 @@ static void ps2_init(void)
     s_active_texture_tile = 0;
     s_depth_near = 0.0f;
     s_depth_far = 1.0f;
+#if defined(PERFECT_DARK_PS2_DISABLE_DEPTH)
+    s_depth_test = false;
+    s_depth_update = false;
+    s_depth_compare = false;
+#else
     s_depth_test = true;
     s_depth_update = true;
     s_depth_compare = true;
+#endif
     s_alpha_blend = false;
     s_modulate = false;
     s_sampler_cms[0] = s_sampler_cms[1] = 0;
@@ -3389,6 +3404,9 @@ static void ps2_init(void)
     ps2GsCoreSetColorWrite(true);
     ps2GsCoreSetFog(false, 0u, 0u, 0u);
     ps2GsCoreSetTextureAlpha(false);
+#if defined(PERFECT_DARK_PS2_DISABLE_DEPTH)
+    ps2GsCoreSetDepthMode(false, false, false);
+#endif
     ps2_reset_viewport();
 
     sysLogPrintf(LOG_NOTE,

@@ -360,6 +360,30 @@ output belongs to texture/material planning. If it remains absent or retains
 the same spikes, investigate common positions, culling and depth state before
 adding another combiner approximation.
 
+**POTWIERDZONE, retail PS2, 2026-09-16:** the NPOT STQ correction fixes text
+in the menu and gameplay HUD, but LEGAL remains corrupted. The normal build
+otherwise retains the black world and earlier geometry faults. The untextured
+geometry baseline renders the mission transition as solid geometry without
+the characteristic spikes, but Carrington and loaded missions remain mostly
+black, with only a few weapon or scene triangles appearing. This proves that
+material graphs are not the only visibility failure. LEGAL now belongs to a
+narrower texture/TMEM case than the corrected menu and HUD glyphs.
+
+**CURRENT IMPLEMENTATION:** `ps2GsCoreClear(false, true)` previously inherited
+the preceding draw's `ZBUF.ZMSK`, alpha/destination tests and scissor. A depth
+clear issued after `Z_UPD=0` therefore wrote no depth at all. Conversely, a
+colour-only clear could overwrite Z when depth writes happened to be enabled.
+Stale reversed-Z values can reject distant world surfaces while allowing a few
+near weapon triangles, matching the hardware symptom. Clear packets now force
+independent FRAME/ZBUF masks, full-target scissor, disabled alpha/destination
+tests and unblended sprites, then restore every persistent register.
+
+**HIPOTEZA DO TESTU:** CI publishes two additional untextured EE/PATH3
+controls. `geometry-no-cull` bypasses only Fast3D face culling;
+`geometry-no-depth` bypasses only GS depth testing and writes. Compare both
+against the repaired `geometry-baseline`. Do not promote either bypass to the
+normal renderer: they are fault-isolation controls, not visual fixes.
+
 The normal game build therefore keeps the file sink disabled. Console logging
 remains active, `--file-log` opts into `pdps2.log`, and CI retains a separate
 `pd-ps2-game-filelog` artifact for controlled diagnostics. No frame-critical

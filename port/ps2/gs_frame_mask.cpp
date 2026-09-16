@@ -31,3 +31,14 @@ extern "C" uint32_t ps2GsFrameWriteMask(
     }
     return mask;
 }
+
+extern "C" uint32_t ps2GsClearFrameWriteMask(bool clear_color)
+{
+    return clear_color ? 0u : UINT32_MAX;
+}
+
+extern "C" uint8_t ps2GsClearDepthWriteMask(
+    bool clear_depth, bool has_depth_buffer)
+{
+    return clear_depth && has_depth_buffer ? 0u : 1u;
+}

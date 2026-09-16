@@ -24,6 +24,10 @@ enum Ps2GsColorWriteChannel {
 uint32_t ps2GsFrameWriteMask(uint8_t color_channels, bool alpha_write,
     bool target_ct16);
 
+/* Independent clear masks: a clear must not inherit the preceding draw. */
+uint32_t ps2GsClearFrameWriteMask(bool clear_color);
+uint8_t ps2GsClearDepthWriteMask(bool clear_depth, bool has_depth_buffer);
+
 #ifdef __cplusplus
 }
 #endif

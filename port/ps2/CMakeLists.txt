@@ -29,6 +29,14 @@ option(PD_PS2_GEOMETRY_BASELINE_DIAGNOSTIC
   "Render game triangles as untextured diagnostic colors"
   OFF
 )
+option(PD_PS2_DISABLE_CULLING_DIAGNOSTIC
+  "Disable Fast3D triangle culling in the PS2 generated frontend"
+  OFF
+)
+option(PD_PS2_DISABLE_DEPTH_DIAGNOSTIC
+  "Disable GS depth testing and writes in the full game"
+  OFF
+)
 if(PD_PS2_ALPHA_TRILERP_DIAGNOSTIC AND PD_PS2_VU1_COLOR_DIAGNOSTIC)
   message(FATAL_ERROR "Select one hardware diagnostic per build directory")
 endif()
@@ -626,6 +634,16 @@ endif()
 if(PD_PS2_GEOMETRY_BASELINE_DIAGNOSTIC)
   target_compile_definitions(pd_ps2_game PRIVATE
     PERFECT_DARK_PS2_GEOMETRY_BASELINE=1
+  )
+endif()
+if(PD_PS2_DISABLE_CULLING_DIAGNOSTIC)
+  target_compile_definitions(pd_ps2_game PRIVATE
+    PERFECT_DARK_PS2_DISABLE_CULLING=1
+  )
+endif()
+if(PD_PS2_DISABLE_DEPTH_DIAGNOSTIC)
+  target_compile_definitions(pd_ps2_game PRIVATE
+    PERFECT_DARK_PS2_DISABLE_DEPTH=1
   )
 endif()
 target_link_directories(pd_ps2_game PRIVATE "${GSKIT}/lib")
