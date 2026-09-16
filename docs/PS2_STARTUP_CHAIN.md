@@ -332,6 +332,34 @@ to isolate indexed GS residency. All three contain the same homogeneous
 clipper, so a remaining difference is no longer attributable to eye-plane
 crossings.
 
+**POTWIERDZONE, retail PS2, 2026-09-16:** all three corners above and the
+previous O2 artifact produce the same glyph corruption, black world and
+stretched geometry as the original photographs. This rejects VU1/PATH1,
+native indexed residency, compiler optimization and the missing homogeneous
+clipper as primary causes of the photographed output. The expanded CT32 path
+still consumes the same materialized TMEM view, so this result does not prove
+that the upstream TMEM model is correct.
+
+**CURRENT IMPLEMENTATION:** Fast3D emits texture coordinates normalized to
+the logical uploaded width and height, while GS STQ addressing uses the
+power-of-two extents encoded by `TEX0.TW/TH`. The backend previously forwarded
+those values unchanged. A 7-pixel glyph therefore addressed an 8-pixel GS
+extent, and analogous NPOT dimensions sampled padding or the following row.
+The renderer now scales each axis by `logical_extent / 2^ceil(log2(extent))`
+after accounting for a physically expanded mirror period. Host tests cover
+POT, NPOT, mirrored and zero-sized contracts. **HIPOTEZA DO TESTU:** this exact
+correction should change the repeatable font and icon corruption; it is not
+claimed to repair black world materials or stretched geometry.
+
+CI also publishes `pd-ps2-game-geometry-baseline`. It accepts supported and
+unsupported shader recipes but renders every submitted triangle with an
+untextured six-colour diagnostic palette through EE/PATH3. Alpha test,
+blending, fog and material pass graphs are disabled while depth and the common
+clip/viewport path remain active. If world geometry appears there, the black
+output belongs to texture/material planning. If it remains absent or retains
+the same spikes, investigate common positions, culling and depth state before
+adding another combiner approximation.
+
 The normal game build therefore keeps the file sink disabled. Console logging
 remains active, `--file-log` opts into `pdps2.log`, and CI retains a separate
 `pd-ps2-game-filelog` artifact for controlled diagnostics. No frame-critical

@@ -20,6 +20,34 @@ static inline uint8_t gfxPs2TextureMirrorVariant(uint8_t cms, uint8_t cmt)
     return mirror_s | mirror_t;
 }
 
+/*
+ * Fast3D supplies normalized coordinates relative to the uploaded logical
+ * extent. GS STQ normalizes against TEX0.TW/TH, whose extent is the next power
+ * of two. Keep the logical last texel at the same coordinate for NPOT uploads.
+ */
+static inline float gfxPs2TextureCoordinateScale(
+    uint32_t logical_extent, bool expanded_mirror)
+{
+    if (logical_extent == 0u) {
+        return 1.0f;
+    }
+
+    uint32_t physical_extent = logical_extent;
+    if (expanded_mirror && physical_extent <= 512u) {
+        physical_extent *= 2u;
+    }
+
+    uint32_t tex0_extent = 1u;
+    while (tex0_extent < physical_extent && tex0_extent < 1024u) {
+        tex0_extent <<= 1u;
+    }
+    if (physical_extent > tex0_extent) {
+        physical_extent = tex0_extent;
+    }
+
+    return (float)physical_extent / (float)tex0_extent;
+}
+
 /* Exact runtime proof used to select the one-channel material graph. */
 static inline uint32_t gfxPs2MaterialRgbChannelPasses(bool monochrome_rgb)
 {

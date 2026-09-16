@@ -259,6 +259,16 @@ static uint8_t s_draw_texture_edge_reference =
 
 static struct Ps2GsTexturedVertex s_stq_vertices[2][PS2_GFX_TRANSLATE_VERTS];
 static struct Ps2GsColorVertex s_color_vertices[PS2_GFX_TRANSLATE_VERTS];
+#if defined(PERFECT_DARK_PS2_GEOMETRY_BASELINE)
+static const uint8_t s_geometry_baseline_palette[][3] = {
+    { 0x80u, 0x20u, 0x20u },
+    { 0x20u, 0x80u, 0x20u },
+    { 0x20u, 0x20u, 0x80u },
+    { 0x80u, 0x80u, 0x20u },
+    { 0x20u, 0x80u, 0x80u },
+    { 0x80u, 0x20u, 0x80u },
+};
+#endif
 #if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
 static struct Ps2GsVu1TransformVertex
     s_vu1_transform_vertices[PS2_GFX_TRANSLATE_VERTS];
@@ -2738,7 +2748,9 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
                 s_pending_unsupported_shader_checkpoint = true;
             }
         }
+#if !defined(PERFECT_DARK_PS2_GEOMETRY_BASELINE)
         return;
+#endif
     }
 
     const size_t stride = ps2_vbo_stride(s_shader);
@@ -2774,6 +2786,7 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
         PS2_PASS_GRAPH_INTERFERENCE &&
         s_shader->plan.color_recipe ==
             PS2_COLOR_TEX0_MUL_TEX1_MUL_INPUT1;
+#if !defined(PERFECT_DARK_PS2_GEOMETRY_BASELINE)
     if (s_shader->plan.textured &&
         (!ps2GsCoreTextureReady(s_selected_texture[0]) ||
          ((opaque_trilerp || alpha_trilerp ||
@@ -2782,10 +2795,16 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
           !ps2GsCoreTextureReady(s_selected_texture[1])))) {
         return;
     }
+#endif
 
     bool fog_color_emitted = false;
+#if defined(PERFECT_DARK_PS2_GEOMETRY_BASELINE)
+    const bool texture_edge = false;
+    const bool invisible = false;
+#else
     const bool texture_edge = s_shader->features.opt_texture_edge;
     const bool invisible = s_shader->features.opt_invisible;
+#endif
     if (invisible) {
         ps2GsCoreSetColorWrite(false);
         ps2GsCoreSetAlphaWrite(false);
@@ -2799,6 +2818,25 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
         ps2GsCoreSetAlphaTest(true, PS2_GFX_TEXTURE_EDGE_THRESHOLD);
         ps2GsCoreSetFramebufferAlphaForce(true);
         ps2GsCoreSetAlphaBlend(false);
+    }
+    float texture_coordinate_scale_s[2] = { 1.0f, 1.0f };
+    float texture_coordinate_scale_t[2] = { 1.0f, 1.0f };
+    for (int t = 0; t < 2; ++t) {
+        if (!s_shader->features.used_textures[t]) {
+            continue;
+        }
+        const Ps2GsTextureHandle handle = s_selected_texture[t];
+        if (handle >= PS2_GFX_TEXTURE_STATE_SLOTS) {
+            continue;
+        }
+        const struct Ps2TextureSamplerState *sampler =
+            &s_texture_sampler[handle];
+        texture_coordinate_scale_s[t] = gfxPs2TextureCoordinateScale(
+            sampler->logical_width, sampler->expanded_mirror_s) *
+            (sampler->expanded_mirror_s ? 0.5f : 1.0f);
+        texture_coordinate_scale_t[t] = gfxPs2TextureCoordinateScale(
+            sampler->logical_height, sampler->expanded_mirror_t) *
+            (sampler->expanded_mirror_t ? 0.5f : 1.0f);
     }
     size_t base_vertex = 0;
     while (base_vertex < vertex_count) {
@@ -2840,14 +2878,8 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
                     continue;
                 }
                 const Ps2GsTextureHandle handle = s_selected_texture[t];
-                const bool mirror_s =
-                    handle < PS2_GFX_TEXTURE_STATE_SLOTS &&
-                    s_texture_sampler[handle].expanded_mirror_s;
-                const bool mirror_t =
-                    handle < PS2_GFX_TEXTURE_STATE_SLOTS &&
-                    s_texture_sampler[handle].expanded_mirror_t;
-                tex_u[t] = src[pos++] * (mirror_s ? 0.5f : 1.0f);
-                tex_v[t] = src[pos++] * (mirror_t ? 0.5f : 1.0f);
+                tex_u[t] = src[pos++] * texture_coordinate_scale_s[t];
+                tex_v[t] = src[pos++] * texture_coordinate_scale_t[t];
                 if (s_shader->features.clamp[t][0]) {
                     const float bound = src[pos++];
                     if (i == 0u) {
@@ -2955,12 +2987,26 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
             }
 
             struct Ps2GsPackedReg packed_position;
+#if defined(PERFECT_DARK_PS2_GEOMETRY_BASELINE)
+            packed_position = ps2_pack_xyz2(sx, sy, iz);
+            const size_t palette_index =
+                ((base_vertex + i) / 3u) %
+                (sizeof(s_geometry_baseline_palette) /
+                 sizeof(s_geometry_baseline_palette[0]));
+            s_color_vertices[i].rgbaq = ps2_pack_rgbaq(
+                s_geometry_baseline_palette[palette_index][0],
+                s_geometry_baseline_palette[palette_index][1],
+                s_geometry_baseline_palette[palette_index][2],
+                0x80u, 0.0f);
+            s_color_vertices[i].xyz2 = packed_position;
+#else
             if (s_shader->features.opt_fog) {
                 packed_position = ps2_pack_xyzf2(
                     sx, sy, iz, ps2_fog_coefficient(fog_factor));
             } else {
                 packed_position = ps2_pack_xyz2(sx, sy, iz);
             }
+#endif
 
             if (independent_tex0_alpha) {
                 struct Ps2IndependentTex0AlphaVertex *vertex =
@@ -3179,6 +3225,16 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
             (uint32_t)batch_vertices,
             sysGetMicroseconds() - translation_start);
 
+#if defined(PERFECT_DARK_PS2_GEOMETRY_BASELINE)
+        ps2GsCoreSetFog(false, 0u, 0u, 0u);
+        ps2GsCoreSetAlphaTest(false, 0u);
+        ps2GsCoreSetAlphaBlend(false);
+        ps2GsCoreSetFramebufferAlphaForce(false);
+        ps2GsCoreSetColorWrite(true);
+        ps2GsCoreSetAlphaWrite(true);
+        ps2GsCoreDrawColorTriangles(
+            s_color_vertices, (uint32_t)batch_vertices);
+#else
         if (independent_tex0_alpha) {
             (void)ps2_draw_independent_tex0_alpha(
                 (uint32_t)batch_vertices);
@@ -3219,6 +3275,7 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
         } else {
             ps2GsCoreDrawColorTriangles(s_color_vertices, (uint32_t)batch_vertices);
         }
+#endif
 
         base_vertex += batch_vertices;
     }

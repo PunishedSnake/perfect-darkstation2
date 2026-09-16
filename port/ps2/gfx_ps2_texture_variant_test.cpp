@@ -33,6 +33,14 @@ int main(void)
     assert(gfxPs2TextureMirrorVariant(3u, 0u) == 1u);
     assert(gfxPs2TextureMirrorVariant(0u, 3u) == 2u);
 
+    assert(gfxPs2TextureCoordinateScale(0u, false) == 1.0f);
+    assert(gfxPs2TextureCoordinateScale(8u, false) == 1.0f);
+    assert(gfxPs2TextureCoordinateScale(7u, false) == 7.0f / 8.0f);
+    assert(gfxPs2TextureCoordinateScale(33u, false) == 33.0f / 64.0f);
+    assert(gfxPs2TextureCoordinateScale(8u, true) == 1.0f);
+    assert(gfxPs2TextureCoordinateScale(7u, true) == 14.0f / 16.0f);
+    assert(gfxPs2TextureCoordinateScale(512u, true) == 1.0f);
+
     uint16_t clamp_max = UINT16_MAX;
     assert(gfxPs2TextureRegionClampMax(7.5f / 8.0f, 8u, &clamp_max));
     assert(clamp_max == 7u);

@@ -25,6 +25,10 @@ option(PD_PS2_NATIVE_INDEXED_TEXTURES
   "Keep exact CI/IA/I textures in native GS PSMT4/PSMT8 residency"
   ON
 )
+option(PD_PS2_GEOMETRY_BASELINE_DIAGNOSTIC
+  "Render game triangles as untextured diagnostic colors"
+  OFF
+)
 if(PD_PS2_ALPHA_TRILERP_DIAGNOSTIC AND PD_PS2_VU1_COLOR_DIAGNOSTIC)
   message(FATAL_ERROR "Select one hardware diagnostic per build directory")
 endif()
@@ -617,6 +621,11 @@ endif()
 if(PD_PS2_NATIVE_INDEXED_TEXTURES)
   target_compile_definitions(pd_ps2_game PRIVATE
     PERFECT_DARK_PS2_NATIVE_INDEXED_TEXTURES=1
+  )
+endif()
+if(PD_PS2_GEOMETRY_BASELINE_DIAGNOSTIC)
+  target_compile_definitions(pd_ps2_game PRIVATE
+    PERFECT_DARK_PS2_GEOMETRY_BASELINE=1
   )
 endif()
 target_link_directories(pd_ps2_game PRIVATE "${GSKIT}/lib")
