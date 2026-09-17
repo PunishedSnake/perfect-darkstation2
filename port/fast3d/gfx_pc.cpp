@@ -1,5 +1,6 @@
 #define NOMINMAX
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -7,15 +8,12 @@
 #include <cassert>
 #include <cstdio>
 
+#if !defined(PLATFORM_PS2)
+#include <list>
 #include <map>
-#include <set>
 #include <unordered_map>
 #include <vector>
-#include <list>
-#include <stack>
-#include <string>
-#include <iostream>
-#include <memory>
+#endif
 #include <limits>
 
 #ifndef _LANGUAGE_C
@@ -62,6 +60,17 @@ uintptr_t gfxFramebuffer;
 #define TEXTURE_CACHE_MAX_SIZE 1024
 #endif
 
+#if defined(PLATFORM_PS2)
+/*
+ * N64 TMEM stores at most 4096 source bytes.  The widest expansion performed
+ * by the compatibility importers is I4/CI4 -> RGBA32: 8192 texels, or 32 KiB.
+ * Keep a second 32 KiB as an explicit guard margin without inheriting the
+ * desktop backend's max_texture_dimension^2 allocation (4 MiB on GS).
+ */
+enum { PS2_TEXTURE_UPLOAD_SCRATCH_SIZE = 64 * 1024 };
+static_assert(TEXTURE_CACHE_MAX_SIZE > 0, "PS2 texture cache must not be empty");
+#endif
+
 #define C0(pos, width) ((cmd->words.w0 >> (pos)) & ((1U << width) - 1))
 #define C1(pos, width) ((cmd->words.w1 >> (pos)) & ((1U << width) - 1))
 
@@ -84,11 +93,21 @@ struct LoadedVertex {
     uint8_t clip_rej;
 };
 
+#if defined(PLATFORM_PS2)
+static struct {
+    TextureCacheNode nodes[TEXTURE_CACHE_MAX_SIZE];
+    uint32_t free_texture_ids[TEXTURE_CACHE_MAX_SIZE];
+    size_t free_texture_id_count;
+    size_t size;
+    uint64_t lru_clock;
+} gfx_texture_cache;
+#else
 static struct {
     TextureCacheMap map;
     std::list<TextureCacheMapIter> lru;
     std::vector<uint32_t> free_texture_ids;
 } gfx_texture_cache;
+#endif
 
 struct ColorCombiner {
     uint64_t shader_id0;
@@ -98,10 +117,48 @@ struct ColorCombiner {
     uint8_t shader_input_mapping[2][7];
 };
 
+#if defined(PLATFORM_PS2)
+enum { PS2_COLOR_COMBINER_CACHE_SIZE = 256 };
+static_assert(PS2_COLOR_COMBINER_CACHE_SIZE > 0, "PS2 combiner cache must not be empty");
+
+struct Ps2ColorCombinerEntry {
+    ColorCombinerKey key;
+    struct ColorCombiner combiner;
+    uint64_t lru_stamp;
+    bool occupied;
+};
+
+static Ps2ColorCombinerEntry color_combiner_pool[PS2_COLOR_COMBINER_CACHE_SIZE];
+static struct ColorCombiner* prev_combiner;
+static ColorCombinerKey prev_combiner_key{};
+static uint64_t color_combiner_lru_clock;
+#else
 static std::map<ColorCombinerKey, struct ColorCombiner> color_combiner_pool;
 static std::map<ColorCombinerKey, struct ColorCombiner>::iterator prev_combiner = color_combiner_pool.end();
+#endif
 
 static uint8_t* tex_upload_buffer = nullptr;
+#if defined(PLATFORM_PS2)
+static size_t tex_upload_buffer_size;
+
+static void ps2_ensure_texture_upload_scratch(size_t source_size, size_t expansion) {
+    if (expansion == 0 || source_size > SIZE_MAX / expansion) {
+        abort();
+    }
+    const size_t required_size = source_size * expansion;
+
+    if (required_size <= tex_upload_buffer_size) {
+        return;
+    }
+
+    uint8_t* resized = (uint8_t*)realloc(tex_upload_buffer, required_size);
+    if (resized == nullptr) {
+        abort();
+    }
+    tex_upload_buffer = resized;
+    tex_upload_buffer_size = required_size;
+}
+#endif
 
 static struct RSP {
     float modelview_matrix_stack[11][4][4];
@@ -246,8 +303,21 @@ struct FBInfo {
 };
 
 static bool fbActive = 0;
+#if defined(PLATFORM_PS2)
+enum { PS2_FRAMEBUFFER_INFO_COUNT = 16 };
+static_assert(PS2_FRAMEBUFFER_INFO_COUNT > 0, "PS2 framebuffer table must not be empty");
+
+struct Ps2FramebufferInfo {
+    int id;
+    FBInfo info;
+    bool occupied;
+};
+
+static Ps2FramebufferInfo framebuffers[PS2_FRAMEBUFFER_INFO_COUNT];
+#else
 static std::map<int, FBInfo>::iterator active_fb;
 static std::map<int, FBInfo> framebuffers;
+#endif
 
 static constexpr float clampf(const float x, const float min, const float max) {
     return (x < min) ? min : (x > max) ? max : x;
@@ -497,6 +567,45 @@ static void gfx_generate_cc(struct ColorCombiner* comb, const ColorCombinerKey& 
 }
 
 static struct ColorCombiner* gfx_lookup_or_create_color_combiner(const ColorCombinerKey& key) {
+#if defined(PLATFORM_PS2)
+    if (prev_combiner != nullptr && prev_combiner_key == key) {
+        return prev_combiner;
+    }
+
+    Ps2ColorCombinerEntry* free_entry = nullptr;
+    Ps2ColorCombinerEntry* oldest_entry = nullptr;
+
+    for (size_t i = 0; i < PS2_COLOR_COMBINER_CACHE_SIZE; ++i) {
+        Ps2ColorCombinerEntry* entry = &color_combiner_pool[i];
+
+        if (entry->occupied) {
+            if (entry->key == key) {
+                entry->lru_stamp = ++color_combiner_lru_clock;
+                prev_combiner_key = key;
+                prev_combiner = &entry->combiner;
+                return prev_combiner;
+            }
+
+            if (oldest_entry == nullptr || entry->lru_stamp < oldest_entry->lru_stamp) {
+                oldest_entry = entry;
+            }
+        } else if (free_entry == nullptr) {
+            free_entry = entry;
+        }
+    }
+
+    gfx_flush();
+    Ps2ColorCombinerEntry* entry = free_entry != nullptr ? free_entry : oldest_entry;
+    assert(entry != nullptr);
+    entry->key = key;
+    entry->combiner = {};
+    entry->lru_stamp = ++color_combiner_lru_clock;
+    entry->occupied = true;
+    gfx_generate_cc(&entry->combiner, key);
+    prev_combiner_key = key;
+    prev_combiner = &entry->combiner;
+    return prev_combiner;
+#else
     if (prev_combiner != color_combiner_pool.end() && prev_combiner->first == key) {
         return &prev_combiner->second;
     }
@@ -509,20 +618,94 @@ static struct ColorCombiner* gfx_lookup_or_create_color_combiner(const ColorComb
     prev_combiner = color_combiner_pool.insert(std::make_pair(key, ColorCombiner())).first;
     gfx_generate_cc(&prev_combiner->second, key);
     return &prev_combiner->second;
+#endif
 }
 
 void gfx_texture_cache_clear() {
     gfx_flush();
+#if defined(PLATFORM_PS2)
+    for (size_t i = 0; i < TEXTURE_CACHE_MAX_SIZE; ++i) {
+        TextureCacheNode* node = &gfx_texture_cache.nodes[i];
+
+        if (node->occupied) {
+            assert(gfx_texture_cache.free_texture_id_count < TEXTURE_CACHE_MAX_SIZE);
+            gfx_texture_cache.free_texture_ids[gfx_texture_cache.free_texture_id_count++] =
+                node->second.texture_id;
+            node->occupied = false;
+        }
+    }
+    gfx_texture_cache.size = 0;
+#else
     for (const auto& entry : gfx_texture_cache.map) {
         gfx_texture_cache.free_texture_ids.push_back(entry.second.texture_id);
     }
     gfx_texture_cache.map.clear();
     gfx_texture_cache.lru.clear();
+#endif
     rdp.textures_changed[0] = rdp.textures_changed[1] = true;
     memset(rendering_state.textures, 0, sizeof(rendering_state.textures));
 }
 
 static bool gfx_texture_cache_lookup(int i, const TextureCacheKey& key) {
+#if defined(PLATFORM_PS2)
+    TextureCacheNode** selected = &rendering_state.textures[i];
+    TextureCacheNode* free_node = nullptr;
+    TextureCacheNode* oldest_node = nullptr;
+
+    for (size_t index = 0; index < TEXTURE_CACHE_MAX_SIZE; ++index) {
+        TextureCacheNode* node = &gfx_texture_cache.nodes[index];
+
+        if (node->occupied) {
+            if (node->first == key) {
+                node->lru_stamp = ++gfx_texture_cache.lru_clock;
+                gfx_rapi->select_texture(i, node->second.texture_id, node->second.linear_filter);
+                *selected = node;
+                return true;
+            }
+
+            if (oldest_node == nullptr || node->lru_stamp < oldest_node->lru_stamp) {
+                oldest_node = node;
+            }
+        } else if (free_node == nullptr) {
+            free_node = node;
+        }
+    }
+
+    TextureCacheNode* node = free_node;
+    uint32_t texture_id;
+
+    if (node == nullptr) {
+        node = oldest_node;
+        assert(node != nullptr);
+        texture_id = node->second.texture_id;
+
+        for (int slot = 0; slot < SHADER_MAX_TEXTURES; ++slot) {
+            if (rendering_state.textures[slot] == node) {
+                rendering_state.textures[slot] = nullptr;
+                rdp.textures_changed[slot] = true;
+            }
+        }
+    } else {
+        ++gfx_texture_cache.size;
+
+        if (gfx_texture_cache.free_texture_id_count != 0) {
+            texture_id = gfx_texture_cache.free_texture_ids[--gfx_texture_cache.free_texture_id_count];
+        } else {
+            texture_id = gfx_rapi->new_texture();
+        }
+    }
+
+    node->first = key;
+    node->second = {};
+    node->second.texture_id = texture_id;
+    node->lru_stamp = ++gfx_texture_cache.lru_clock;
+    node->occupied = true;
+
+    gfx_rapi->select_texture(i, texture_id, false);
+    gfx_rapi->set_sampler_parameters(i, false, 0, 0, rdp.tex_lod);
+    *selected = node;
+    return false;
+#else
     TextureCacheMap::iterator it = gfx_texture_cache.map.find(key);
     TextureCacheNode** n = &rendering_state.textures[i];
 
@@ -559,6 +742,7 @@ static bool gfx_texture_cache_lookup(int i, const TextureCacheKey& key) {
     gfx_rapi->set_sampler_parameters(i, false, 0, 0, rdp.tex_lod);
     *n = node;
     return false;
+#endif
 }
 
 void gfx_texture_cache_delete(const uint8_t* orig_addr) {
@@ -571,6 +755,20 @@ void gfx_texture_cache_delete(const uint8_t* orig_addr) {
         }
     }
 
+#if defined(PLATFORM_PS2)
+    for (size_t i = 0; i < TEXTURE_CACHE_MAX_SIZE; ++i) {
+        TextureCacheNode* node = &gfx_texture_cache.nodes[i];
+
+        if (node->occupied && !node->first.content_identity_valid &&
+            node->first.texture_addr == orig_addr) {
+            assert(gfx_texture_cache.free_texture_id_count < TEXTURE_CACHE_MAX_SIZE);
+            gfx_texture_cache.free_texture_ids[gfx_texture_cache.free_texture_id_count++] =
+                node->second.texture_id;
+            node->occupied = false;
+            --gfx_texture_cache.size;
+        }
+    }
+#else
     while (gfx_texture_cache.map.bucket_count() > 0) {
         TextureCacheKey key = { orig_addr, { 0 }, 0, 0 }; // bucket index only depends on the address
         size_t bucket = gfx_texture_cache.map.bucket(key);
@@ -588,6 +786,7 @@ void gfx_texture_cache_delete(const uint8_t* orig_addr) {
             break;
         }
     }
+#endif
 }
 
 void gfx_texture_cache_delete_range(const uint8_t* start, const uint8_t* end) {
@@ -602,6 +801,20 @@ void gfx_texture_cache_delete_range(const uint8_t* start, const uint8_t* end) {
         }
     }
 
+#if defined(PLATFORM_PS2)
+    for (size_t i = 0; i < TEXTURE_CACHE_MAX_SIZE; ++i) {
+        TextureCacheNode* node = &gfx_texture_cache.nodes[i];
+
+        if (node->occupied && !node->first.content_identity_valid &&
+            node->first.texture_addr >= start && node->first.texture_addr < end) {
+            assert(gfx_texture_cache.free_texture_id_count < TEXTURE_CACHE_MAX_SIZE);
+            gfx_texture_cache.free_texture_ids[gfx_texture_cache.free_texture_id_count++] =
+                node->second.texture_id;
+            node->occupied = false;
+            --gfx_texture_cache.size;
+        }
+    }
+#else
     for (auto it = gfx_texture_cache.map.begin(); it != gfx_texture_cache.map.end(); ) {
         if (it->first.texture_addr >= start && it->first.texture_addr < end) {
             gfx_texture_cache.lru.erase(it->second.lru_location);
@@ -611,6 +824,7 @@ void gfx_texture_cache_delete_range(const uint8_t* start, const uint8_t* end) {
             ++it;
         }
     }
+#endif
 }
 
 static void import_texture_rgba16(int tile, const LoadedTexture& loaded_texture, bool gen_mipmaps) {
@@ -622,6 +836,10 @@ static void import_texture_rgba16(int tile, const LoadedTexture& loaded_texture,
     // SUPPORT_CHECK(full_image_line_size_bytes == line_size_bytes);
     // TODO: this trips in some places with a garbage size in full_image_line_size_bytes
     // probably wherever framebuffer effects are used
+
+#if defined(PLATFORM_PS2)
+    ps2_ensure_texture_upload_scratch(size_bytes, 2u);
+#endif
 
     uint8_t *dest = tex_upload_buffer;
     for (uint32_t i = 0; i < size_bytes / 2; i++, dest += 4) {
@@ -652,6 +870,10 @@ static void import_texture_rgba32(int tile, const LoadedTexture& loaded_texture,
     const uint32_t line_size_bytes = loaded_texture.line_size_bytes;
     SUPPORT_CHECK(full_image_line_size_bytes == line_size_bytes);
 
+#if defined(PLATFORM_PS2)
+    ps2_ensure_texture_upload_scratch(size_bytes, 1u);
+#endif
+
     uint32_t *dest = (uint32_t *)tex_upload_buffer;
     const uint32_t *src = (const uint32_t *)addr;
     for (uint32_t i = 0; i < size_bytes; i += 4, ++dest, ++src) {
@@ -672,6 +894,10 @@ static void import_texture_ia4(int tile, const LoadedTexture& loaded_texture, bo
         loaded_texture.full_image_line_size_bytes;
     const uint32_t line_size_bytes = loaded_texture.line_size_bytes;
     SUPPORT_CHECK(full_image_line_size_bytes == line_size_bytes);
+
+#if defined(PLATFORM_PS2)
+    ps2_ensure_texture_upload_scratch(size_bytes, 8u);
+#endif
 
     uint8_t *dest = tex_upload_buffer;
     for (uint32_t i = 0; i < size_bytes * 2; i++, dest += 4) {
@@ -702,6 +928,10 @@ static void import_texture_ia8(int tile, const LoadedTexture& loaded_texture, bo
     const uint32_t line_size_bytes = loaded_texture.line_size_bytes;
     SUPPORT_CHECK(full_image_line_size_bytes == line_size_bytes);
 
+#if defined(PLATFORM_PS2)
+    ps2_ensure_texture_upload_scratch(size_bytes, 4u);
+#endif
+
     uint8_t *dest = tex_upload_buffer;
     for (uint32_t i = 0; i < size_bytes; i++, dest += 4) {
         const uint8_t intensity = SCALE_4_8(addr[i] >> 4);
@@ -727,6 +957,10 @@ static void import_texture_ia16(int tile, const LoadedTexture& loaded_texture, b
         loaded_texture.full_image_line_size_bytes;
     const uint32_t line_size_bytes = loaded_texture.line_size_bytes;
     SUPPORT_CHECK(full_image_line_size_bytes == line_size_bytes);
+
+#if defined(PLATFORM_PS2)
+    ps2_ensure_texture_upload_scratch(size_bytes, 2u);
+#endif
 
     uint8_t *dest = tex_upload_buffer;
     for (uint32_t i = 0; i < size_bytes / 2; i++, dest += 4) {
@@ -754,6 +988,10 @@ static void import_texture_i4(int tile, const LoadedTexture& loaded_texture, boo
     const uint32_t line_size_bytes = loaded_texture.line_size_bytes;
     SUPPORT_CHECK(full_image_line_size_bytes == line_size_bytes);
 
+#if defined(PLATFORM_PS2)
+    ps2_ensure_texture_upload_scratch(size_bytes, 8u);
+#endif
+
     uint8_t *dest = tex_upload_buffer;
     for (uint32_t i = 0; i < size_bytes * 2; i++, dest += 4) {
         const uint8_t byte = addr[i / 2];
@@ -780,6 +1018,10 @@ static void import_texture_i8(int tile, const LoadedTexture& loaded_texture, boo
         loaded_texture.full_image_line_size_bytes;
     const uint32_t line_size_bytes = loaded_texture.line_size_bytes;
     SUPPORT_CHECK(full_image_line_size_bytes == line_size_bytes);
+
+#if defined(PLATFORM_PS2)
+    ps2_ensure_texture_upload_scratch(size_bytes, 4u);
+#endif
 
     uint8_t *dest = tex_upload_buffer;
     for (uint32_t i = 0; i < size_bytes; i++, dest += 4) {
@@ -829,6 +1071,10 @@ static void import_texture_ci4(int tile, const LoadedTexture& loaded_texture, bo
     const uint16_t* palette = (const uint16_t *)(rdp.palette + pal_idx * 16); // 16 pixel entries, 16 bits each
     SUPPORT_CHECK(full_image_line_size_bytes == line_size_bytes);
 
+#if defined(PLATFORM_PS2)
+    ps2_ensure_texture_upload_scratch(size_bytes, 8u);
+#endif
+
     for (uint32_t i = 0; i < size_bytes * 2; i++) {
         const uint8_t byte = addr[i / 2];
         const uint8_t idx = (byte >> (4 - (i % 2) * 4)) & 0xf;
@@ -853,6 +1099,10 @@ static void import_texture_ci8(int tile, const LoadedTexture& loaded_texture, bo
     const uint32_t full_image_line_size_bytes =
         loaded_texture.full_image_line_size_bytes;
     const uint32_t line_size_bytes = loaded_texture.line_size_bytes;
+
+#if defined(PLATFORM_PS2)
+    ps2_ensure_texture_upload_scratch(size_bytes, 4u);
+#endif
 
     for (uint32_t i = 0, j = 0; i < size_bytes; j += full_image_line_size_bytes - line_size_bytes) {
         for (uint32_t k = 0; k < line_size_bytes; i++, k++, j++) {
@@ -2584,9 +2834,17 @@ extern "C" void gfx_init(const GfxInitSettings *settings) {
     }
 
     if (tex_upload_buffer == nullptr) {
+#if defined(PLATFORM_PS2)
+        tex_upload_buffer = (uint8_t*)malloc(PS2_TEXTURE_UPLOAD_SCRATCH_SIZE);
+        tex_upload_buffer_size = PS2_TEXTURE_UPLOAD_SCRATCH_SIZE;
+#else
         // We cap texture max to 8k, because why would you need more?
         int max_tex_size = std::min(8192, gfx_rapi->get_max_texture_size());
         tex_upload_buffer = (uint8_t*)malloc(max_tex_size * max_tex_size * 4);
+#endif
+        if (tex_upload_buffer == nullptr) {
+            abort();
+        }
     }
 
     rsp.lookat[0].dir[0] = rsp.lookat[1].dir[1] = 0x7F;
@@ -2623,8 +2881,34 @@ extern "C" void gfx_start_frame(void) {
     gfx_current_game_window_viewport.height = gfx_current_dimensions.height;
 
     if (gfx_current_dimensions.height != gfx_prev_dimensions.height) {
+#if defined(PLATFORM_PS2)
+        for (size_t i = 0; i < PS2_FRAMEBUFFER_INFO_COUNT; ++i) {
+            Ps2FramebufferInfo* entry = &framebuffers[i];
+            if (!entry->occupied) {
+                continue;
+            }
+            FBInfo* fb = &entry->info;
+            uint32_t width, height;
+            if (fb->autoresize) {
+                if (fb->upscale) {
+                    width = fb->orig_width;
+                    height = fb->orig_height;
+                    gfx_adjust_width_height_for_scale(width, height);
+                } else {
+                    // assume this is a fullscreen fb
+                    width = gfx_current_dimensions.width;
+                    height = gfx_current_dimensions.height;
+                }
+                if (width != fb->applied_width || height != fb->applied_height) {
+                    gfx_rapi->update_framebuffer_parameters(entry->id, width, height, 1, true, true, true, true);
+                    fb->applied_width = width;
+                    fb->applied_height = height;
+                }
+            }
+        }
+#else
         for (auto& fb : framebuffers) {
-            uint32_t width, height, msaa;
+            uint32_t width, height;
             if (fb.second.autoresize) {
                 if (fb.second.upscale) {
                     width = fb.second.orig_width;
@@ -2642,6 +2926,7 @@ extern "C" void gfx_start_frame(void) {
                 }
             }
         }
+#endif
     }
     gfx_prev_dimensions = gfx_current_dimensions;
 
@@ -2743,8 +3028,14 @@ extern "C" void reset_texture_state() {
         rendering_state.shader_program = nullptr;
     }
     gfx_rapi->clear_shaders();
+#if defined(PLATFORM_PS2)
+    memset(color_combiner_pool, 0, sizeof(color_combiner_pool));
+    prev_combiner = nullptr;
+    color_combiner_lru_clock = 0;
+#else
     color_combiner_pool.clear();
     prev_combiner = color_combiner_pool.end();
+#endif
 }
 
 extern "C" void gfx_set_texture_filter(enum FilteringMode mode) {
@@ -2783,13 +3074,34 @@ extern "C" void gfx_resize_framebuffer(int fb, uint32_t width, uint32_t height, 
         gfx_rapi->update_framebuffer_parameters(fb, width, height, 1, true, true, true, true);
     }
 
+#if defined(PLATFORM_PS2)
+    Ps2FramebufferInfo* free_entry = nullptr;
+    for (size_t i = 0; i < PS2_FRAMEBUFFER_INFO_COUNT; ++i) {
+        if (framebuffers[i].occupied && framebuffers[i].id == fb) {
+            free_entry = &framebuffers[i];
+            break;
+        }
+        if (!framebuffers[i].occupied && free_entry == nullptr) {
+            free_entry = &framebuffers[i];
+        }
+    }
+    if (free_entry == nullptr) {
+        abort();
+    }
+    free_entry->id = fb;
+    free_entry->info = { orig_width, orig_height, width, height, (bool)upscale, (bool)autoresize };
+    free_entry->occupied = true;
+#else
     framebuffers[fb] = { orig_width, orig_height, width, height, (bool)upscale, (bool)autoresize };
+#endif
 }
 
 extern "C" void gfx_set_framebuffer(int fb, float noise_scale) {
     gfx_rapi->start_draw_to_framebuffer(fb, noise_scale);
     gfx_rapi->clear_framebuffer(true, true);
+#if !defined(PLATFORM_PS2)
     active_fb = framebuffers.find(fb);
+#endif
 }
 
 extern "C" void gfx_copy_framebuffer(int fb_dst, int fb_src, int left, int top, int use_back) {
@@ -2814,5 +3126,7 @@ extern "C" void gfx_copy_framebuffer(int fb_dst, int fb_src, int left, int top, 
 
 extern "C" void gfx_reset_framebuffer(void) {
     gfx_rapi->start_draw_to_framebuffer(0, (float)gfx_current_dimensions.height / SCREEN_HEIGHT);
+#if !defined(PLATFORM_PS2)
     active_fb = framebuffers.end();
+#endif
 }

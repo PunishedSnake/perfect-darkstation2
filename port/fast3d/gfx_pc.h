@@ -4,9 +4,12 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <unordered_map>
-#include <list>
 #include <cstddef>
+
+#if !defined(PLATFORM_PS2)
+#include <list>
+#include <unordered_map>
+#endif
 
 #include <PR/gbi.h>
 
@@ -71,20 +74,37 @@ struct TextureCacheKey {
     };
 };
 
-typedef std::unordered_map<TextureCacheKey, struct TextureCacheValue, TextureCacheKey::Hasher> TextureCacheMap;
-typedef std::pair<const TextureCacheKey, struct TextureCacheValue> TextureCacheNode;
-
 struct TextureCacheValue {
     uint32_t texture_id;
     uint8_t cms, cmt;
     bool linear_filter;
 
+#if !defined(PLATFORM_PS2)
     std::list<struct TextureCacheMapIter>::iterator lru_location;
+#endif
 };
+
+#if defined(PLATFORM_PS2)
+/*
+ * The PS2 cache has a fixed 64-entry budget.  Keeping its nodes contiguous
+ * avoids libstdc++'s unordered_map/list allocation graph and gives the R5900 a
+ * small, predictable working set.  The portable desktop backend retains its
+ * existing unbounded STL representation below.
+ */
+struct TextureCacheNode {
+    TextureCacheKey first;
+    TextureCacheValue second;
+    uint64_t lru_stamp;
+    bool occupied;
+};
+#else
+typedef std::unordered_map<TextureCacheKey, struct TextureCacheValue, TextureCacheKey::Hasher> TextureCacheMap;
+typedef std::pair<const TextureCacheKey, struct TextureCacheValue> TextureCacheNode;
 
 struct TextureCacheMapIter {
     TextureCacheMap::iterator it;
 };
+#endif
 
 extern "C" {
 

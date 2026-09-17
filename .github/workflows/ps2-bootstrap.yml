@@ -389,6 +389,16 @@ jobs:
             build-ps2/pd-ps2-game.elf | grep -E '\bsqrt\.s\b'
           test -z "$(mips64r5900el-ps2-elf-nm -u build-ps2/pd-ps2-game.elf)"
 
+      - name: Reject dynamic STL containers in PS2 runtime
+        run: |
+          if grep -Eq 'libstdc\+\+\.a\((list|tree|hashtable|functexcept|eh_|bad_alloc)' \
+              build-ps2/pd-ps2-game.map; then
+            echo "PS2 runtime pulled dynamic STL container/exception support:" >&2
+            grep -E 'libstdc\+\+\.a\((list|tree|hashtable|functexcept|eh_|bad_alloc)' \
+              build-ps2/pd-ps2-game.map | sort -u >&2
+            exit 1
+          fi
+
       - name: Build optimized full game A/B
         run: |
           cmake -S port/ps2 -B build-ps2-o2 -G Ninja \
