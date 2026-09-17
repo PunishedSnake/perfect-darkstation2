@@ -94,15 +94,19 @@ void utilsInit(void)
 		for (i = 0; i < ARRAYCOUNT(var800ac0e8); i++) {
 			var800ac0e8[i] = var800ac0e8[0] + ((i * 100) << 4);
 		}
+
+		var80084610 = var800ac0e8[0] + slotssize;
+		var80084618 = var800ac0e8[0] + allocsize - 1;
+		var80084614 = var80084610;
 	} else {
 		for (i = 0; i < ARRAYCOUNT(var800ac0e8); i++) {
 			var800ac0e8[i] = NULL;
 		}
-	}
 
-	var80084610 = var800ac0e8[0] + slotssize;
-	var80084618 = var800ac0e8[0] + allocsize - 1;
-	var80084614 = var80084610;
+		var80084610 = NULL;
+		var80084614 = NULL;
+		var80084618 = NULL;
+	}
 }
 
 s32 func0f176eb0(s32 arg0, s32 arg1)

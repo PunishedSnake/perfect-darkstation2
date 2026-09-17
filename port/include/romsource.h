@@ -10,6 +10,13 @@ enum romsourcekind {
 	ROMSOURCE_FILE,
 };
 
+#define ROMSOURCE_FILE_CACHE_SLOTS 4u
+
+struct romsourcecacheline {
+	u32 offset;
+	u32 length;
+};
+
 /*
  * ROM source contract.
  *
@@ -22,6 +29,9 @@ struct romsource {
 	const u8 *memory;
 	void *handle;
 	u32 size;
+	u8 *read_cache;
+	struct romsourcecacheline read_cache_lines[ROMSOURCE_FILE_CACHE_SLOTS];
+	u32 read_cache_next_slot;
 };
 
 void romSourceInitMemory(struct romsource *source, const void *data, u32 size);

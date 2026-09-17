@@ -63,6 +63,7 @@ int main(void)
 {
 	u8 expected[TEST_OUTPUT_SIZE];
 	u8 container[TEST_CONTAINER_SIZE];
+	u8 cachedRange[73];
 	struct romsource source = { 0 };
 	char path[] = "/tmp/pd_romsource_test_XXXXXX";
 	const int fd = mkstemp(path);
@@ -86,6 +87,11 @@ int main(void)
 	assert(unlink(path) == 0);
 	assert(romSourceView(&source, 0, 5) == NULL);
 	verifySource(&source, expected);
+	assert(containerSize > 1024u + sizeof(cachedRange));
+	assert(romSourceReadAt(&source, 509u, cachedRange, sizeof(cachedRange)));
+	assert(memcmp(cachedRange, container + 509u, sizeof(cachedRange)) == 0);
+	assert(romSourceReadAt(&source, 1024u, cachedRange, sizeof(cachedRange)));
+	assert(memcmp(cachedRange, container + 1024u, sizeof(cachedRange)) == 0);
 	romSourceClose(&source);
 
 	puts("romsource_test: ok");

@@ -1,6 +1,7 @@
 #ifndef PERFECT_DARK_PS2_AUDIO_QUEUE_H
 #define PERFECT_DARK_PS2_AUDIO_QUEUE_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -28,6 +29,18 @@ enum Ps2AudioSubmitPlan ps2AudioPlanSubmit(
     uint32_t available_bytes,
     uint32_t pending_bytes,
     uint32_t queue_limit_samples);
+
+/*
+ * audsrv exposes the free and occupied portions of one fixed-size ring as
+ * separate synchronous RPC calls. Once the capacity has been observed at
+ * startup, one current available observation is sufficient to reconstruct
+ * the occupied byte count exactly.
+ */
+bool ps2AudioDeriveQueued(
+    uint32_t capacity_bytes,
+    int available_result,
+    uint32_t *queued_bytes,
+    uint32_t *available_bytes);
 
 #ifdef __cplusplus
 }

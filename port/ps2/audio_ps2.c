@@ -24,6 +24,7 @@ extern unsigned int size_audsrv_irx;
 static const s16 *s_pending_buffer;
 static u32 s_pending_bytes;
 static bool s_audio_ready;
+static u32 s_audio_capacity_bytes;
 static u32 s_drop_count;
 static u32 s_submit_error_count;
 
@@ -148,6 +149,7 @@ s32 audioInit(void)
 
     s_pending_buffer = NULL;
     s_pending_bytes = 0;
+    s_audio_capacity_bytes = 0;
     s_drop_count = 0;
     s_submit_error_count = 0;
 
@@ -213,10 +215,25 @@ s32 audioInit(void)
         return -1;
     }
 
+    /* Playback has not started yet, so the two observations cannot race with
+     * the IOP reader. audsrv deliberately starts half full of silence. */
+    const int initial_available = audsrv_available();
+    const int initial_queued = audsrv_queued();
+    if (initial_available < 0 || initial_queued < 0 ||
+            (u32)initial_available > UINT32_MAX - (u32)initial_queued) {
+        sysLogPrintf(LOG_WARNING,
+            "AUDIO: could not establish audsrv ring capacity queued=%d available=%d; queue observation fallback enabled",
+            initial_queued, initial_available);
+    } else {
+        s_audio_capacity_bytes =
+            (u32)initial_available + (u32)initial_queued;
+    }
+
     s_audio_ready = true;
     sysLogPrintf(LOG_NOTE,
-        "AUDIO: native SPU2 service ready module=%d format=22050/S16/stereo queue_limit=%u",
-        audsrv_module, PS2_AUDIO_QUEUE_LIMIT_SAMPLES);
+        "AUDIO: native SPU2 service ready module=%d format=22050/S16/stereo queue_limit=%u capacity_bytes=%u",
+        audsrv_module, PS2_AUDIO_QUEUE_LIMIT_SAMPLES,
+        s_audio_capacity_bytes);
     return 0;
 }
 
@@ -254,20 +271,39 @@ void audioEndFrame(void)
         return;
     }
 
-    const int queued_result = audsrv_queued();
     const int available_result = audsrv_available();
-    if (queued_result < 0 || available_result < 0) {
+    uint32_t queued_bytes;
+    uint32_t available_bytes;
+
+    if (!ps2AudioDeriveQueued(s_audio_capacity_bytes, available_result,
+            &queued_bytes, &available_bytes)) {
+        /* Preserve compatibility with an unexpected audsrv implementation. */
+        const int queued_result = audsrv_queued();
+        if (queued_result < 0 || available_result < 0) {
+            if (s_submit_error_count++ < 4) {
+                sysLogPrintf(LOG_ERROR,
+                    "AUDIO: queue observation failed queued=%d available=%d capacity=%u",
+                    queued_result, available_result, s_audio_capacity_bytes);
+            }
+            return;
+        }
+
+        queued_bytes = (u32)queued_result;
+        available_bytes = (u32)available_result;
+    }
+
+    if (queued_bytes > UINT32_MAX - available_bytes) {
         if (s_submit_error_count++ < 4) {
             sysLogPrintf(LOG_ERROR,
-                "AUDIO: queue observation failed queued=%d available=%d",
-                queued_result, available_result);
+                "AUDIO: invalid queue observation queued=%u available=%u",
+                queued_bytes, available_bytes);
         }
         return;
     }
 
     const enum Ps2AudioSubmitPlan plan = ps2AudioPlanSubmit(
-        (u32)queued_result,
-        (u32)available_result,
+        queued_bytes,
+        available_bytes,
         bytes,
         PS2_AUDIO_QUEUE_LIMIT_SAMPLES);
 
@@ -275,7 +311,7 @@ void audioEndFrame(void)
         if (s_drop_count++ < 4) {
             sysLogPrintf(LOG_WARNING,
                 "AUDIO: dropped PCM frame plan=%d queued=%d available=%d bytes=%u",
-                plan, queued_result, available_result, bytes);
+                plan, (int)queued_bytes, (int)available_bytes, bytes);
         }
         return;
     }

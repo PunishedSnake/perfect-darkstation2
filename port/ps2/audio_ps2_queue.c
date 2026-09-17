@@ -2,6 +2,23 @@
 
 #include <limits.h>
 
+bool ps2AudioDeriveQueued(
+    uint32_t capacity_bytes,
+    int available_result,
+    uint32_t *queued_bytes,
+    uint32_t *available_bytes)
+{
+    if (capacity_bytes == 0 || available_result < 0 ||
+            (uint32_t)available_result > capacity_bytes ||
+            !queued_bytes || !available_bytes) {
+        return false;
+    }
+
+    *available_bytes = (uint32_t)available_result;
+    *queued_bytes = capacity_bytes - *available_bytes;
+    return true;
+}
+
 enum Ps2AudioSubmitPlan ps2AudioPlanSubmit(
     uint32_t queued_bytes,
     uint32_t available_bytes,

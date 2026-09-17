@@ -215,7 +215,7 @@ void *mempAlloc(u32 len, u8 pool)
 	}
 
 #ifdef PLATFORM_PS2
-	{
+	if (pool != MEMPOOL_8 && pool != MEMPOOL_7) {
 		struct memorypool *onboard = &g_MempOnboardPools[pool];
 		struct memorypool *expansion = &g_MempExpansionPools[pool];
 		u32 onboardfree = onboard->leftpos != 0 && onboard->rightpos >= onboard->leftpos

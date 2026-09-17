@@ -1,10 +1,42 @@
 #include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <zlib.h>
+#ifdef PLATFORM_PS2
+#include <malloc.h>
+#endif
 
 #include "romsource.h"
+
+#define ROMSOURCE_FILE_CACHE_LINE_SIZE (4u * 1024u)
+#define ROMSOURCE_FILE_CACHE_SIZE \
+	(ROMSOURCE_FILE_CACHE_SLOTS * ROMSOURCE_FILE_CACHE_LINE_SIZE)
+#define ROMSOURCE_FILE_CACHE_ALIGNMENT 512u
+
+static u8 *romSourceAllocCache(void)
+{
+#ifdef PLATFORM_PS2
+	return memalign(64u, ROMSOURCE_FILE_CACHE_SIZE);
+#else
+	return malloc(ROMSOURCE_FILE_CACHE_SIZE);
+#endif
+}
+
+static void romSourceResetCache(struct romsource *source)
+{
+	if (!source) {
+		return;
+	}
+
+	for (u32 i = 0; i < ROMSOURCE_FILE_CACHE_SLOTS; ++i) {
+		source->read_cache_lines[i].offset = 0;
+		source->read_cache_lines[i].length = 0;
+	}
+
+	source->read_cache_next_slot = 0;
+}
 
 static bool romSourceRangeValid(const struct romsource *source, u32 offset, u32 length)
 {
@@ -29,6 +61,8 @@ void romSourceInitMemory(struct romsource *source, const void *data, u32 size)
 	source->memory = data;
 	source->handle = NULL;
 	source->size = size;
+	source->read_cache = NULL;
+	romSourceResetCache(source);
 }
 
 bool romSourceOpenFile(struct romsource *source, const char *path)
@@ -62,6 +96,8 @@ bool romSourceOpenFile(struct romsource *source, const char *path)
 	source->memory = NULL;
 	source->handle = file;
 	source->size = (u32)fileSize;
+	source->read_cache = romSourceAllocCache();
+	romSourceResetCache(source);
 
 	return true;
 }
@@ -75,11 +111,14 @@ void romSourceClose(struct romsource *source)
 	if (source->kind == ROMSOURCE_FILE && source->handle) {
 		fclose((FILE *)source->handle);
 	}
+	free(source->read_cache);
 
 	source->kind = ROMSOURCE_NONE;
 	source->memory = NULL;
 	source->handle = NULL;
 	source->size = 0;
+	source->read_cache = NULL;
+	romSourceResetCache(source);
 }
 
 u32 romSourceGetSize(const struct romsource *source)
@@ -125,6 +164,49 @@ bool romSourceReadAt(struct romsource *source, u32 offset, void *dst, u32 length
 		}
 
 		FILE *file = (FILE *)source->handle;
+		if (source->read_cache && length <= ROMSOURCE_FILE_CACHE_LINE_SIZE) {
+			for (u32 i = 0; i < ROMSOURCE_FILE_CACHE_SLOTS; ++i) {
+				const struct romsourcecacheline *line = &source->read_cache_lines[i];
+				if (offset >= line->offset) {
+					const u32 cacheDelta = offset - line->offset;
+					if (cacheDelta <= line->length &&
+							length <= line->length - cacheDelta) {
+						memcpy(dst,
+							source->read_cache + i * ROMSOURCE_FILE_CACHE_LINE_SIZE + cacheDelta,
+							length);
+						return true;
+					}
+				}
+			}
+
+			u32 cacheOffset = offset & ~(ROMSOURCE_FILE_CACHE_ALIGNMENT - 1u);
+			u32 cacheDelta = offset - cacheOffset;
+			if (length > ROMSOURCE_FILE_CACHE_LINE_SIZE - cacheDelta) {
+				cacheOffset = offset;
+				cacheDelta = 0;
+			}
+
+			const u32 remaining = source->size - cacheOffset;
+			const u32 cacheLength = remaining < ROMSOURCE_FILE_CACHE_LINE_SIZE
+				? remaining : ROMSOURCE_FILE_CACHE_LINE_SIZE;
+			const u32 slot = source->read_cache_next_slot;
+			u8 *cache = source->read_cache + slot * ROMSOURCE_FILE_CACHE_LINE_SIZE;
+
+			if (cacheOffset <= (u32)LONG_MAX &&
+					fseek(file, (long)cacheOffset, SEEK_SET) == 0 &&
+					fread(cache, 1, cacheLength, file) == cacheLength) {
+				source->read_cache_lines[slot].offset = cacheOffset;
+				source->read_cache_lines[slot].length = cacheLength;
+				source->read_cache_next_slot =
+					(slot + 1u) % ROMSOURCE_FILE_CACHE_SLOTS;
+				memcpy(dst, cache + cacheDelta, length);
+				return true;
+			}
+
+			source->read_cache_lines[slot].length = 0;
+			return false;
+		}
+
 		if (fseek(file, (long)offset, SEEK_SET) != 0) {
 			return false;
 		}

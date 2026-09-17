@@ -1,5 +1,8 @@
 # PS2 modern optimization audit
 
+Whole-runtime work beyond the renderer is tracked in
+[`PS2_WHOLE_RUNTIME_OPTIMIZATION_AUDIT.md`](PS2_WHOLE_RUNTIME_OPTIMIZATION_AUDIT.md).
+
 Date: 2026-09-17
 
 This audit asks which modern low-level techniques can accelerate the PS2 port

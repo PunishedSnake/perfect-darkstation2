@@ -195,6 +195,8 @@ static struct romfile romSegs[] = {
 };
 
 #ifdef PLATFORM_PS2
+static struct romfile *romdataLastDmaSegment;
+
 /*
  * These payloads are consumed through dmaExec and do not need a permanent
  * EE-side view. Keep the list deliberately explicit: a segment with a CPU
@@ -206,6 +208,36 @@ static bool romdataSegmentShouldStream(const struct romfile *seg)
 		(!strcmp(seg->name, "sfxtbl") ||
 		 !strcmp(seg->name, "seqtbl") ||
 		 !strcmp(seg->name, "texturesdata"));
+}
+
+static s32 romdataDmaReadSegment(struct romfile *seg, void *dst,
+		uintptr_t address, u32 length)
+{
+	uint32_t segmentOffset;
+
+	if (!seg || !seg->streamed || seg->source != SRC_ROM || seg->owned ||
+			!romdataStreamStartOffset(address, length,
+				(uintptr_t)seg->data, seg->size, &segmentOffset)) {
+		return ROMDATA_DMA_UNMAPPED;
+	}
+
+	if (segmentOffset > UINT32_MAX - seg->romoffset) {
+		return ROMDATA_DMA_ERROR;
+	}
+
+	const u32 romOffset = seg->romoffset + (u32)segmentOffset;
+	if (romOffset > g_RomFileSize || length > g_RomFileSize - romOffset) {
+		return ROMDATA_DMA_ERROR;
+	}
+
+	if (romSourceReadAt(&romSource, romOffset, dst, length)) {
+		return ROMDATA_DMA_OK;
+	}
+
+	sysLogPrintf(LOG_ERROR,
+		"ROM DMA read failed: segment=%s romoffset=%08x length=%u",
+		seg->name, romOffset, length);
+	return ROMDATA_DMA_ERROR;
 }
 #endif
 
@@ -508,32 +540,26 @@ s32 romdataDmaRead(void *dst, uintptr_t address, u32 length)
 		return ROMDATA_DMA_UNMAPPED;
 	}
 
-	for (struct romfile *seg = romSegs; seg->name; ++seg) {
-		uint32_t segmentOffset;
+	/* Audio and texture decompression issue bursts against one segment. Keep
+	 * the last hit so the common case avoids walking the complete ROM table. */
+	s32 result = romdataDmaReadSegment(
+		romdataLastDmaSegment, dst, address, length);
+	if (result != ROMDATA_DMA_UNMAPPED) {
+		return result;
+	}
 
-		if (!seg->streamed || seg->source != SRC_ROM || seg->owned ||
-			!romdataStreamStartOffset(address, length,
-				(uintptr_t)seg->data, seg->size, &segmentOffset)) {
+	for (struct romfile *seg = romSegs; seg->name; ++seg) {
+		if (seg == romdataLastDmaSegment) {
 			continue;
 		}
 
-		if (segmentOffset > UINT32_MAX - seg->romoffset) {
-			break;
+		result = romdataDmaReadSegment(seg, dst, address, length);
+		if (result != ROMDATA_DMA_UNMAPPED) {
+			if (result == ROMDATA_DMA_OK) {
+				romdataLastDmaSegment = seg;
+			}
+			return result;
 		}
-
-		const u32 romOffset = seg->romoffset + (u32)segmentOffset;
-		if (romOffset > g_RomFileSize || length > g_RomFileSize - romOffset) {
-			break;
-		}
-
-		if (romSourceReadAt(&romSource, romOffset, dst, length)) {
-			return ROMDATA_DMA_OK;
-		}
-
-		sysLogPrintf(LOG_ERROR,
-			"ROM DMA read failed: segment=%s romoffset=%08x length=%u",
-			seg->name, romOffset, length);
-		return ROMDATA_DMA_ERROR;
 	}
 
 	sysLogPrintf(LOG_ERROR,
@@ -767,6 +793,7 @@ s32 romdataInit(void)
 #ifdef PLATFORM_PS2
 	u32 streamedSegmentCount = 0;
 	u32 streamedBytes = 0;
+	romdataLastDmaSegment = NULL;
 #endif
 	if (altRomName) {
 		romName = altRomName;
