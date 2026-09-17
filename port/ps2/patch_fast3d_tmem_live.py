@@ -40,16 +40,16 @@ def patch(source: str) -> str:
         "}\n",
         "static inline int gfx_lod_tile_offset(const int i) {\n"
         "    /*\n"
-        "     * OpenGL collapses ordinary mip LOD to texture 0 because its\n"
-        "     * sampler owns a generated mip chain. GS has no such chain in\n"
-        "     * the native backend: expose tile i so TEXEL0/TEXEL1 can be\n"
-        "     * reconstructed by the exact two-pass combiner.\n"
+        "     * The PS2 backend does not yet own a complete GS mip chain.\n"
+        "     * Keep ordinary LOD on the known-good base tile so TEXEL1 cannot\n"
+        "     * sample an absent/stale adjacent mip. Real detail-texture mode\n"
+        "     * still exposes tile i and therefore retains its two textures.\n"
         "     */\n"
         "    if (gfx_detail_textures_enabled)\n"
-        "        return i;\n"
+        "        return ((rdp.tex_lod && !rdp.tex_detail) ? 0 : i);\n"
         "    return (rdp.tex_lod ? rdp.tex_detail : i);\n"
         "}\n",
-        "native GS LOD tile pair",
+        "native GS safe LOD tile selection",
     )
 
     source = replace_once(

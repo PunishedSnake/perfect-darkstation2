@@ -117,7 +117,10 @@ but that state can no longer leak into the next batch.
    visibility cannot be complete until the hardware log inventories the
    remaining recipe IDs and their triangle counts.
 3. **POTWIERDZONE:** mip generation/sampling and the portable framebuffer-copy
-   API are not implemented.
+   API are not implemented. Ordinary mip LOD therefore currently feeds the
+   known-good base tile to both combiner texture inputs. Real detail-texture
+   mode still exposes two tiles. This deliberately removes incorrect adjacent
+   mip sampling until a complete GS mip chain is implemented and validated.
 4. **HIPOTEZA DO TESTU:** the slight striping reported on recognizable
    textures is filter fidelity rather than row pitch. The PS2 path maps N64
    filtered draws to GS bilinear sampling; it does not implement the portable
