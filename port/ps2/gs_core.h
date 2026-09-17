@@ -106,7 +106,8 @@ void ps2GsCorePresent(void);
 /* Render-target and GS state owned below the Fast3D compatibility adapter. */
 void ps2GsCoreClear(bool clear_color, bool clear_depth);
 void ps2GsCoreSetScissor(int x, int y, int width, int height);
-void ps2GsCoreSetDepthMode(bool depth_test, bool depth_update, bool depth_compare);
+void ps2GsCoreSetDepthMode(bool depth_test, bool depth_update,
+    bool depth_compare, bool compare_equal);
 void ps2GsCoreSetAlphaBlend(bool enable);
 void ps2GsCoreSetAlphaBlendEquation(
     enum Ps2GsAlphaBlendEquation equation);

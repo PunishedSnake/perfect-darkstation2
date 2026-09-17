@@ -58,6 +58,22 @@ int main(void)
     assert(gfxPs2TopLeftY(240, 0, 120) == 120);
     assert(gfxPs2TopLeftY(448, 48, 200) == 200);
 
+    assert(gfxPs2ApplyDecalDepthBias(1234, false) == 1234);
+    assert(gfxPs2ApplyDecalDepthBias(1234, true) == 1236);
+    assert(gfxPs2ApplyDecalDepthBias(65533, true) == 65535);
+    assert(gfxPs2ApplyDecalDepthBias(65535, true) == 65535);
+    assert(!gfxPs2DepthModeAllowsEqual(false, 0x0000u));
+    assert(gfxPs2DepthModeAllowsEqual(false, 0x0400u));
+    assert(!gfxPs2DepthModeAllowsEqual(false, 0x0800u));
+    assert(gfxPs2DepthModeAllowsEqual(false, 0x0c00u));
+    assert(gfxPs2DepthModeAllowsEqual(true, 0x0000u));
+    assert(!gfxPs2DepthModeIsDecal(0x0800u));
+    assert(gfxPs2DepthModeIsDecal(0x0c00u));
+    assert(!gfxPs2DepthModeUsesDecalBias(false, true, 0x0c00u));
+    assert(!gfxPs2DepthModeUsesDecalBias(true, false, 0x0c00u));
+    assert(!gfxPs2DepthModeUsesDecalBias(true, true, 0x0800u));
+    assert(gfxPs2DepthModeUsesDecalBias(true, true, 0x0c00u));
+
     uint16_t clamp_max = UINT16_MAX;
     assert(gfxPs2TextureRegionClampMax(7.5f / 8.0f, 8u, &clamp_max));
     assert(clamp_max == 7u);

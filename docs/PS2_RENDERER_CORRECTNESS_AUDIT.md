@@ -38,6 +38,35 @@ across its coverage and reject later world, weapon or UI geometry.
 buffer exists and depth testing is enabled. The effective test/write truth
 table is host-tested.
 
+### Reversed-Z comparison and decal semantics
+
+**POTWIERDZONE:** the portable backend uses a strict depth comparison for
+ordinary opaque/translucent geometry, permits equal depth for primitive-depth
+and `ZMODE_INTER`, and applies polygon offset for `ZMODE_DEC`. The PS2 backend
+previously selected `GEQUAL` for every compared draw and ignored `zmode`.
+Coplanar mask geometry could therefore pass as ordinary world geometry, while
+real decals could fight or disappear.
+
+The reversed-Z GS mapping now uses `GREATER` for ordinary OPA/XLU draws and
+`GEQUAL` only for primitive-depth, INTER, DEC and subsequent passes of the
+same material. DEC receives a saturating +2 depth bias toward the camera. It
+falls back from VU1/PATH1 to EE/PATH3 because the shared affine VU mapping
+cannot express that saturation safely. Host tests cover the comparison truth
+table, mode classification and near-plane saturation. The bias is active only
+when both depth testing and depth comparison are enabled, matching the
+portable backend's explicit polygon-offset disable on `ZTST=ALWAYS` draws.
+
+The adapter also now starts with depth testing and writing disabled. Fast3D's
+cached rendering state is zero-initialised, so its first depth-disabled draw
+deliberately emits no `set_depth_mode` call. Starting the GS at the old
+depth-enabled `GEQUAL` default made early UI/LEGAL rendering depend on stale
+backend state until the first later depth-mode transition.
+
+The same initial-state audit now explicitly disables GS blending and enables
+the expected color/alpha write lanes instead of inheriting gsKit bootstrap
+values. This matches Fast3D's zero-initialised `alpha_blend=false` cache before
+the first material transition.
+
 ## Contracts reviewed without a new defect
 
 - **CURRENT IMPLEMENTATION:** NPOT Fast3D coordinates are normalized against
@@ -71,24 +100,21 @@ table is host-tested.
    exact GS implementation needs owned framebuffer feedback or a material-
    specific channel graph. It must not be replaced with another approximate
    blend equation.
-2. **POTWIERDZONE:** `ZMODE_DEC` selects polygon offset in the OpenGL backend.
-   The PS2 adapter currently ignores `zmode`; decals can therefore fight or
-   disappear at equal depth. A reversed-Z bias needs a bounded hardware A/B.
-3. **POTWIERDZONE:** unsupported combiner recipes are still dropped. Renderer
+2. **POTWIERDZONE:** unsupported combiner recipes are still dropped. Renderer
    visibility cannot be complete until the hardware log inventories the
    remaining recipe IDs and their triangle counts.
-4. **POTWIERDZONE:** mip generation/sampling and the portable framebuffer-copy
+3. **POTWIERDZONE:** mip generation/sampling and the portable framebuffer-copy
    API are not implemented.
-5. **HIPOTEZA DO TESTU:** the slight striping reported on recognizable
+4. **HIPOTEZA DO TESTU:** the slight striping reported on recognizable
    textures is filter fidelity rather than row pitch. The PS2 path maps N64
    filtered draws to GS bilinear sampling; it does not implement the portable
    three-point reconstruction. A point-versus-linear A/B should precede any
    coordinate bias.
-6. **HIPOTEZA DO TESTU:** remaining LEGAL glyph corruption may have been caused
+5. **HIPOTEZA DO TESTU:** remaining LEGAL glyph corruption may have been caused
    by the partial viewport/scissor origin defect. If it survives this fix,
    isolate texture-rectangle/copy-cycle coordinates separately from ordinary
    triangle text.
-7. **INFERENCJA:** Fast3D performs face culling before the backend homogeneous
+6. **INFERENCJA:** Fast3D performs face culling before the backend homogeneous
    clipper. Eye-plane-crossing triangles can therefore be rejected before the
    PS2 clipper can repair them. Moving culling after clipping requires an
    explicit winding contract and should be tested separately.

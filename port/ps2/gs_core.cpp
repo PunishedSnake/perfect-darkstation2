@@ -1024,7 +1024,8 @@ extern "C" void ps2GsCoreSetScissor(int x, int y, int width, int height)
     ps2GsCoreEmitScissor();
 }
 
-extern "C" void ps2GsCoreSetDepthMode(bool depth_test, bool depth_update, bool depth_compare)
+extern "C" void ps2GsCoreSetDepthMode(bool depth_test, bool depth_update,
+    bool depth_compare, bool compare_equal)
 {
     if (!s_gs) {
         return;
@@ -1034,7 +1035,8 @@ extern "C" void ps2GsCoreSetDepthMode(bool depth_test, bool depth_update, bool d
     const bool test_enabled = ps2GsDepthTestEnabled(
         depth_test, has_depth_buffer);
     s_gs->Test->ZTE = test_enabled ? GS_SETTING_ON : GS_SETTING_OFF;
-    s_gs->Test->ZTST = (test_enabled && depth_compare) ? 2 : 1;
+    s_gs->Test->ZTST = ps2GsDepthCompareMode(
+        depth_test, depth_compare, compare_equal, has_depth_buffer);
     s_depth_update = ps2GsDepthWriteEnabled(
         depth_test, depth_update, has_depth_buffer);
 

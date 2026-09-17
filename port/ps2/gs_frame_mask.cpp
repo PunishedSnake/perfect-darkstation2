@@ -54,3 +54,14 @@ extern "C" bool ps2GsDepthWriteEnabled(
 {
     return depth_test && depth_update && has_depth_buffer;
 }
+
+extern "C" uint8_t ps2GsDepthCompareMode(
+    bool depth_test, bool depth_compare, bool compare_equal,
+    bool has_depth_buffer)
+{
+    /* GS ZTST: 1=ALWAYS, 2=GEQUAL, 3=GREATER for reversed Z. */
+    if (!depth_test || !depth_compare || !has_depth_buffer) {
+        return 1u;
+    }
+    return compare_equal ? 2u : 3u;
+}

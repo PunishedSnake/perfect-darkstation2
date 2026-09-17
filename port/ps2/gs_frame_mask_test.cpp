@@ -51,12 +51,22 @@ static void test_disabled_depth_test_cannot_write_depth(void)
     assert(!ps2GsDepthWriteEnabled(true, true, false));
 }
 
+static void test_reversed_depth_comparison_contract(void)
+{
+    assert(ps2GsDepthCompareMode(false, true, false, true) == 1u);
+    assert(ps2GsDepthCompareMode(true, false, false, true) == 1u);
+    assert(ps2GsDepthCompareMode(true, true, false, false) == 1u);
+    assert(ps2GsDepthCompareMode(true, true, true, true) == 2u);
+    assert(ps2GsDepthCompareMode(true, true, false, true) == 3u);
+}
+
 int main(void)
 {
     test_ct32_independent_lanes();
     test_ct16_aggregate_contract();
     test_clear_is_independent_from_draw_masks();
     test_disabled_depth_test_cannot_write_depth();
+    test_reversed_depth_comparison_contract();
     puts("gs_frame_mask tests passed");
     return 0;
 }

@@ -55,6 +55,33 @@ static inline int gfxPs2TopLeftY(
     return target_height - bottom_y - area_height;
 }
 
+/* OpenGL's ZMODE_DEC offset (-2,-2) moves a decal toward the camera. */
+static inline int gfxPs2ApplyDecalDepthBias(int depth, bool decal)
+{
+    if (!decal) {
+        return depth;
+    }
+    return depth >= 65533 ? 65535 : depth + 2;
+}
+
+static inline bool gfxPs2DepthModeAllowsEqual(
+    bool depth_source_primitive, uint16_t zmode)
+{
+    /* RDP ZMODE_INTER=0x400 and ZMODE_DEC=0xc00. */
+    return depth_source_primitive || zmode == 0x0400u || zmode == 0x0c00u;
+}
+
+static inline bool gfxPs2DepthModeIsDecal(uint16_t zmode)
+{
+    return zmode == 0x0c00u;
+}
+
+static inline bool gfxPs2DepthModeUsesDecalBias(
+    bool depth_test, bool depth_compare, uint16_t zmode)
+{
+    return depth_test && depth_compare && gfxPs2DepthModeIsDecal(zmode);
+}
+
 /* Exact runtime proof used to select the one-channel material graph. */
 static inline uint32_t gfxPs2MaterialRgbChannelPasses(bool monochrome_rgb)
 {

@@ -209,6 +209,8 @@ static float s_depth_far = 1.0f;
 static bool s_depth_test = true;
 static bool s_depth_update = true;
 static bool s_depth_compare = true;
+static bool s_depth_compare_equal;
+static bool s_depth_decal;
 static bool s_alpha_blend;
 static bool s_modulate;
 static uint32_t s_sampler_cms[2];
@@ -815,22 +817,30 @@ static void ps2_set_sampler_parameters(int sampler, bool linear_filter, uint32_t
 static void ps2_set_depth_mode(bool depth_test, bool depth_update, bool depth_compare,
                                bool depth_source_prim, uint16_t zmode)
 {
-    (void)depth_source_prim;
-    (void)zmode;
-
 #if defined(PERFECT_DARK_PS2_DISABLE_DEPTH)
     (void)depth_test;
     (void)depth_update;
     (void)depth_compare;
+    (void)depth_source_prim;
+    (void)zmode;
     s_depth_test = false;
     s_depth_update = false;
     s_depth_compare = false;
-    ps2GsCoreSetDepthMode(false, false, false);
+    s_depth_compare_equal = false;
+    s_depth_decal = false;
+    ps2GsCoreSetDepthMode(false, false, false, false);
 #else
+    const bool compare_equal =
+        gfxPs2DepthModeAllowsEqual(depth_source_prim, zmode);
+    const bool decal = gfxPs2DepthModeUsesDecalBias(
+        depth_test, depth_compare, zmode);
     s_depth_test = depth_test;
     s_depth_update = depth_update;
     s_depth_compare = depth_compare;
-    ps2GsCoreSetDepthMode(depth_test, depth_update, depth_compare);
+    s_depth_compare_equal = compare_equal;
+    s_depth_decal = decal;
+    ps2GsCoreSetDepthMode(
+        depth_test, depth_update, depth_compare, compare_equal);
 #endif
 }
 
@@ -1038,7 +1048,8 @@ static int ps2_map_clip_depth(float z, float w)
     ranged = ps2_clampf(ranged, 0.0f, 1.0f);
 
     /* Current GS baseline uses GEQUAL: near is large, far is small. */
-    return 1 + (int)((1.0f - ranged) * 65534.0f);
+    const int depth = 1 + (int)((1.0f - ranged) * 65534.0f);
+    return gfxPs2ApplyDecalDepthBias(depth, s_depth_decal);
 }
 
 static size_t ps2_vbo_stride(const struct ShaderProgram *prg)
@@ -1127,7 +1138,8 @@ static bool ps2_independent_alpha_uses_tex1(
 
 static void ps2_trilerp_set_base_state(void)
 {
-    ps2GsCoreSetDepthMode(s_depth_test, s_depth_update, s_depth_compare);
+    ps2GsCoreSetDepthMode(s_depth_test, s_depth_update, s_depth_compare,
+        s_depth_compare_equal);
     ps2GsCoreSetAlphaBlend(false);
     ps2GsCoreSetAlphaWrite(true);
     ps2GsCoreSetTextureAlpha(false);
@@ -1137,7 +1149,7 @@ static void ps2_trilerp_set_base_state(void)
 static void ps2_trilerp_set_lerp_state(void)
 {
     /* Equal-depth fragments must pass, but the second pass must not rewrite Z. */
-    ps2GsCoreSetDepthMode(s_depth_test, false, s_depth_compare);
+    ps2GsCoreSetDepthMode(s_depth_test, false, s_depth_compare, true);
     ps2GsCoreSetAlphaBlend(true);
     ps2GsCoreSetAlphaWrite(false);
     ps2GsCoreSetTextureAlpha(false);
@@ -1148,13 +1160,15 @@ static void ps2_trilerp_restore_state(void)
 {
     ps2GsCoreSetAlphaWrite(true);
     ps2GsCoreSetAlphaBlend(s_alpha_blend);
-    ps2GsCoreSetDepthMode(s_depth_test, s_depth_update, s_depth_compare);
+    ps2GsCoreSetDepthMode(s_depth_test, s_depth_update, s_depth_compare,
+        s_depth_compare_equal);
     ps2_apply_texture_clamp(0);
 }
 
 static void ps2_input1_tex0_lerp_set_base_state(void)
 {
-    ps2GsCoreSetDepthMode(s_depth_test, s_depth_update, s_depth_compare);
+    ps2GsCoreSetDepthMode(s_depth_test, s_depth_update, s_depth_compare,
+        s_depth_compare_equal);
     ps2GsCoreSetAlphaBlend(false);
     ps2GsCoreSetAlphaWrite(true);
     ps2GsCoreSetTextureAlpha(false);
@@ -1162,7 +1176,7 @@ static void ps2_input1_tex0_lerp_set_base_state(void)
 
 static void ps2_input1_tex0_lerp_set_texture_state(void)
 {
-    ps2GsCoreSetDepthMode(s_depth_test, false, s_depth_compare);
+    ps2GsCoreSetDepthMode(s_depth_test, false, s_depth_compare, true);
     ps2GsCoreSetAlphaBlend(true);
     ps2GsCoreSetAlphaWrite(false);
     ps2GsCoreSetTextureAlpha(false);
@@ -1346,7 +1360,8 @@ static void ps2_restore_alpha_trilerp_state(void)
     ps2GsCoreBindDefaultRenderTarget();
     ps2GsCoreSetScissor(
         s_scissor.x, s_scissor.y, s_scissor.width, s_scissor.height);
-    ps2GsCoreSetDepthMode(s_depth_test, s_depth_update, s_depth_compare);
+    ps2GsCoreSetDepthMode(s_depth_test, s_depth_update, s_depth_compare,
+        s_depth_compare_equal);
     ps2GsCoreSetColorWrite(true);
     ps2GsCoreSetAlphaWrite(true);
     ps2GsCoreSetAlphaBlend(s_alpha_blend);
@@ -1433,7 +1448,7 @@ static bool ps2_draw_independent_tex0_alpha_tile(
     }
     ps2GsCoreSetAlphaTest(false, 0u);
     ps2GsCoreSetFog(false, 0u, 0u, 0u);
-    ps2GsCoreSetDepthMode(false, false, false);
+    ps2GsCoreSetDepthMode(false, false, false, false);
     ps2GsCoreSetAlphaBlend(false);
     ps2GsCoreSetFramebufferAlphaForce(false);
     ps2GsCoreSetColorWrite(true);
@@ -1455,7 +1470,8 @@ static bool ps2_draw_independent_tex0_alpha_tile(
 
     ps2GsCoreBindDefaultRenderTarget();
     ps2GsCoreSetScissor(tile->x, tile->y, tile->width, tile->height);
-    ps2GsCoreSetDepthMode(s_depth_test, s_depth_update, s_depth_compare);
+    ps2GsCoreSetDepthMode(s_depth_test, s_depth_update, s_depth_compare,
+        s_depth_compare_equal);
     ps2GsCoreSetColorWrite(true);
     ps2GsCoreSetAlphaWrite(true);
     const bool texture_edge = s_shader->features.opt_texture_edge;
@@ -1685,7 +1701,7 @@ static bool ps2_draw_tex0_factor_lerp_tile(
     ps2GsCoreSetAlphaWrite(true);
     ps2GsCoreSetAlphaTest(false, 0u);
     ps2GsCoreSetFog(false, 0u, 0u, 0u);
-    ps2GsCoreSetDepthMode(false, false, false);
+    ps2GsCoreSetDepthMode(false, false, false, false);
     ps2GsCoreSetAlphaBlend(false);
     ps2GsCoreSetFramebufferAlphaForce(false);
     ps2GsCoreSetTextureAlpha(true);
@@ -1803,7 +1819,8 @@ static bool ps2_draw_tex0_factor_lerp_tile(
 
     ps2GsCoreBindDefaultRenderTarget();
     ps2GsCoreSetScissor(tile->x, tile->y, tile->width, tile->height);
-    ps2GsCoreSetDepthMode(s_depth_test, s_depth_update, s_depth_compare);
+    ps2GsCoreSetDepthMode(s_depth_test, s_depth_update, s_depth_compare,
+        s_depth_compare_equal);
     ps2GsCoreSetColorWrite(true);
     ps2GsCoreSetAlphaWrite(true);
     ps2GsCoreSetAlphaTest(
@@ -1986,7 +2003,7 @@ static bool ps2_draw_interference_tile(
     ps2GsCoreSetAlphaWrite(true);
     ps2GsCoreSetAlphaTest(false, 0u);
     ps2GsCoreSetFog(false, 0u, 0u, 0u);
-    ps2GsCoreSetDepthMode(false, false, false);
+    ps2GsCoreSetDepthMode(false, false, false, false);
     ps2GsCoreSetAlphaBlend(false);
     ps2GsCoreSetFramebufferAlphaForce(false);
     ps2GsCoreSetTextureAlpha(true);
@@ -2092,7 +2109,8 @@ static bool ps2_draw_interference_tile(
 
     ps2GsCoreBindDefaultRenderTarget();
     ps2GsCoreSetScissor(tile->x, tile->y, tile->width, tile->height);
-    ps2GsCoreSetDepthMode(s_depth_test, s_depth_update, s_depth_compare);
+    ps2GsCoreSetDepthMode(s_depth_test, s_depth_update, s_depth_compare,
+        s_depth_compare_equal);
     ps2GsCoreSetColorWrite(true);
     ps2GsCoreSetAlphaWrite(true);
     ps2GsCoreSetAlphaTest(
@@ -2212,7 +2230,7 @@ static bool ps2_draw_custom24_nonlinear_alpha_tile(
     ps2GsCoreSetAlphaWrite(true);
     ps2GsCoreSetAlphaTest(false, 0u);
     ps2GsCoreSetFog(false, 0u, 0u, 0u);
-    ps2GsCoreSetDepthMode(false, false, false);
+    ps2GsCoreSetDepthMode(false, false, false, false);
     ps2GsCoreSetAlphaBlend(false);
     ps2GsCoreSetFramebufferAlphaForce(false);
     ps2GsCoreSetTextureAlpha(false);
@@ -2248,7 +2266,8 @@ static bool ps2_draw_custom24_nonlinear_alpha_tile(
 
     ps2GsCoreBindDefaultRenderTarget();
     ps2GsCoreSetScissor(tile->x, tile->y, tile->width, tile->height);
-    ps2GsCoreSetDepthMode(s_depth_test, s_depth_update, s_depth_compare);
+    ps2GsCoreSetDepthMode(s_depth_test, s_depth_update, s_depth_compare,
+        s_depth_compare_equal);
     ps2GsCoreSetAlphaTest(
         s_shader->features.opt_alpha_threshold,
         s_shader->features.opt_alpha_threshold ?
@@ -2403,7 +2422,7 @@ static bool ps2_draw_custom22_23_signed_alpha_tile(
         return false;
     }
     ps2GsCoreSetAlphaTest(false, 0u);
-    ps2GsCoreSetDepthMode(false, false, false);
+    ps2GsCoreSetDepthMode(false, false, false, false);
     ps2GsCoreSetFramebufferAlphaForce(false);
     ps2GsCoreSetTextureAlpha(false);
     ps2GsCoreSetAlphaWrite(false);
@@ -2443,7 +2462,8 @@ static bool ps2_draw_custom22_23_signed_alpha_tile(
 
     ps2GsCoreBindDefaultRenderTarget();
     ps2GsCoreSetScissor(tile->x, tile->y, tile->width, tile->height);
-    ps2GsCoreSetDepthMode(s_depth_test, s_depth_update, s_depth_compare);
+    ps2GsCoreSetDepthMode(s_depth_test, s_depth_update, s_depth_compare,
+        s_depth_compare_equal);
     ps2GsCoreSetAlphaWrite(true);
     ps2GsCoreSetFog(false, 0u, 0u, 0u);
     ps2GsCoreSetTextureAlpha(true);
@@ -2484,7 +2504,7 @@ static bool ps2_draw_trilerp_independent_alpha_tile(
     ps2GsCoreSetAlphaTest(false, 0u);
     ps2GsCoreSetFog(s_shader->features.opt_fog,
         s_draw_fog_r, s_draw_fog_g, s_draw_fog_b);
-    ps2GsCoreSetDepthMode(false, false, false);
+    ps2GsCoreSetDepthMode(false, false, false, false);
     ps2GsCoreSetAlphaBlend(false);
     ps2GsCoreSetFramebufferAlphaForce(false);
     ps2GsCoreSetTextureAlpha(
@@ -2516,7 +2536,8 @@ static bool ps2_draw_trilerp_independent_alpha_tile(
 
     ps2GsCoreBindDefaultRenderTarget();
     ps2GsCoreSetScissor(tile->x, tile->y, tile->width, tile->height);
-    ps2GsCoreSetDepthMode(s_depth_test, s_depth_update, s_depth_compare);
+    ps2GsCoreSetDepthMode(s_depth_test, s_depth_update, s_depth_compare,
+        s_depth_compare_equal);
     ps2GsCoreSetAlphaWrite(true);
     const bool texture_edge = s_shader->features.opt_texture_edge;
     ps2GsCoreSetAlphaTest(
@@ -2648,7 +2669,7 @@ static bool ps2_draw_alpha_trilerp_tile(
     ps2GsCoreSetAlphaWrite(true);
     ps2GsCoreSetAlphaTest(false, 0u);
     ps2GsCoreSetFog(false, 0u, 0u, 0u);
-    ps2GsCoreSetDepthMode(false, false, false);
+    ps2GsCoreSetDepthMode(false, false, false, false);
     ps2GsCoreSetAlphaBlend(false);
     ps2GsCoreSetTextureAlpha(true);
 
@@ -2711,7 +2732,8 @@ static bool ps2_draw_alpha_trilerp_tile(
 
     ps2GsCoreBindDefaultRenderTarget();
     ps2GsCoreSetScissor(tile->x, tile->y, tile->width, tile->height);
-    ps2GsCoreSetDepthMode(s_depth_test, s_depth_update, s_depth_compare);
+    ps2GsCoreSetDepthMode(s_depth_test, s_depth_update, s_depth_compare,
+        s_depth_compare_equal);
     ps2GsCoreSetAlphaTest(
         s_shader->features.opt_alpha_threshold,
         s_shader->features.opt_alpha_threshold ?
@@ -2958,7 +2980,11 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
 #if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
         float transform_scale[4];
         float transform_offset[4];
-        bool vu1_transform_eligible = ps2GsVu1BuildViewportMapping(
+        /* ZMODE_DEC needs a saturating +2 reversed-Z bias.  The shared VU1
+         * affine mapping cannot clamp that bias without changing every draw,
+         * so decals deliberately use the exact EE/PATH3 mapper below. */
+        bool vu1_transform_eligible = !s_depth_decal &&
+            ps2GsVu1BuildViewportMapping(
             s_viewport.x, s_viewport.y,
             s_viewport.width, s_viewport.height,
             ps2GsCoreGetOffsetX(), ps2GsCoreGetOffsetY(),
@@ -3542,15 +3568,14 @@ static void ps2_init(void)
     s_active_texture_tile = 0;
     s_depth_near = 0.0f;
     s_depth_far = 1.0f;
-#if defined(PERFECT_DARK_PS2_DISABLE_DEPTH)
+    /* RenderingState is zero-initialised by Fast3D.  Its first depth-disabled
+     * draw therefore does not call set_depth_mode(), so the backend's initial
+     * state must already be depth-test/write disabled. */
     s_depth_test = false;
     s_depth_update = false;
     s_depth_compare = false;
-#else
-    s_depth_test = true;
-    s_depth_update = true;
-    s_depth_compare = true;
-#endif
+    s_depth_compare_equal = false;
+    s_depth_decal = false;
     s_alpha_blend = false;
     s_modulate = false;
     s_sampler_cms[0] = s_sampler_cms[1] = 0;
@@ -3570,13 +3595,13 @@ static void ps2_init(void)
     s_upload_mirror_s = false;
     s_upload_mirror_t = false;
     ps2GsCoreSetAlphaTest(false, 0u);
+    ps2GsCoreSetAlphaBlend(false);
     ps2GsCoreSetFramebufferAlphaForce(false);
     ps2GsCoreSetColorWrite(true);
+    ps2GsCoreSetAlphaWrite(true);
     ps2GsCoreSetFog(false, 0u, 0u, 0u);
     ps2GsCoreSetTextureAlpha(false);
-#if defined(PERFECT_DARK_PS2_DISABLE_DEPTH)
-    ps2GsCoreSetDepthMode(false, false, false);
-#endif
+    ps2GsCoreSetDepthMode(false, false, false, false);
     ps2_reset_viewport();
 
     sysLogPrintf(LOG_NOTE,

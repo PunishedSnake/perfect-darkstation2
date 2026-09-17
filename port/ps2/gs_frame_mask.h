@@ -32,6 +32,9 @@ uint8_t ps2GsClearDepthWriteMask(bool clear_depth, bool has_depth_buffer);
 bool ps2GsDepthTestEnabled(bool depth_test, bool has_depth_buffer);
 bool ps2GsDepthWriteEnabled(
     bool depth_test, bool depth_update, bool has_depth_buffer);
+uint8_t ps2GsDepthCompareMode(
+    bool depth_test, bool depth_compare, bool compare_equal,
+    bool has_depth_buffer);
 
 #ifdef __cplusplus
 }
