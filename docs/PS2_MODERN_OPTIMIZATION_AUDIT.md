@@ -44,6 +44,15 @@ restores the numerical model expected by the original game without enabling
 global unsafe-math transformations.  CI disassembles the final ELF and fails
 unless the symbol contains `sqrt.s`.
 
+### Precomputed texture-coordinate scale
+
+NPOT and expanded-mirror coordinate scaling depends only on immutable texture
+upload metadata.  The renderer previously recomputed the next power-of-two
+extent and performed two floating-point divisions for every textured draw.
+The sampler record now stores both final scale factors at upload time.  Draw
+submission only loads the cached values; the tested coordinate formula and
+all generated ST values remain unchanged.
+
 ## Highest-value next candidates
 
 ### 1. Stop doing the transform twice for VU1 draws
