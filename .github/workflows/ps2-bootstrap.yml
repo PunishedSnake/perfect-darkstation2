@@ -384,7 +384,9 @@ jobs:
           mips64r5900el-ps2-elf-size build-ps2/pd-ps2-game.elf
           mips64r5900el-ps2-elf-readelf -h build-ps2/pd-ps2-game.elf
           mips64r5900el-ps2-elf-nm build-ps2/pd-ps2-game.elf | \
-            grep -E ' main$| mainProc$| videoInit$| gfx_run$| Ps2GsVu1TexturedTransformCode(Start|End)$'
+            grep -E ' main$| mainProc$| videoInit$| gfx_run$| sqrtf$| Ps2GsVu1TexturedTransformCode(Start|End)$'
+          mips64r5900el-ps2-elf-objdump -d --disassemble=sqrtf \
+            build-ps2/pd-ps2-game.elf | grep -E '\bsqrt\.s\b'
           test -z "$(mips64r5900el-ps2-elf-nm -u build-ps2/pd-ps2-game.elf)"
 
       - name: Build optimized full game A/B

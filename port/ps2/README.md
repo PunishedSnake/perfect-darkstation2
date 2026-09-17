@@ -202,6 +202,7 @@ baseline. Compare O2 only against the same scene and storage configuration.
 
 - [Startup and first-frame chain](../../docs/PS2_STARTUP_CHAIN.md)
 - [Code and file audit](../../docs/PS2_CODE_AND_FILE_AUDIT.md)
+- [Modern optimization audit](../../docs/PS2_MODERN_OPTIMIZATION_AUDIT.md)
 - [Native renderer architecture](../../docs/PS2_NATIVE_RENDERER_ARCHITECTURE.md)
 - [N64 RDP/TMEM semantics](../../docs/N64_RDP_TMEM_SEMANTICS.md)
 - [Diagnostic test procedure](PROTOTYPE_TEST.md)

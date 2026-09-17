@@ -569,6 +569,7 @@ set(PD_PS2_GAME_RUNTIME_SOURCES
   "${PD_ROOT}/port/src/utils.c"
   ${PD_PS2_PREPROCESS_SOURCES}
   system_ps2.c
+  fast_math_ps2.c
   audio_ps2.c
   audio_ps2_queue.c
   "${PD_PS2_AUDSRV_IRX_C}"
