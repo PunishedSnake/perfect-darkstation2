@@ -56,6 +56,13 @@ def patch(source: str) -> str:
         source,
         "    if ((rsp.geometry_mode & G_CULL_BOTH) != 0) {\n",
         "    if ((rsp.geometry_mode & G_CULL_BOTH) != 0\n"
+        "        /* Screen-space winding is undefined before homogeneous\n"
+        "         * clipping when a triangle reaches or crosses the eye plane.\n"
+        "         * Let the PS2 backend clip those triangles first instead of\n"
+        "         * dividing by a non-positive W and rejecting valid world\n"
+        "         * geometry. Fully visible triangles keep the cheap frontend\n"
+        "         * cull. */\n"
+        "        && v1->w > 0.0f && v2->w > 0.0f && v3->w > 0.0f\n"
         "#if defined(PERFECT_DARK_PS2_DISABLE_CULLING)\n"
         "        && false\n"
         "#endif\n"

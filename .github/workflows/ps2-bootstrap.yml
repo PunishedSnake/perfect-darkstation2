@@ -518,6 +518,30 @@ jobs:
           mips64r5900el-ps2-elf-size build-ps2-geometry-no-depth/pd-ps2-game.elf
           test -z "$(mips64r5900el-ps2-elf-nm -u build-ps2-geometry-no-depth/pd-ps2-game.elf)"
 
+      - name: Build textured no-cull diagnostic
+        run: |
+          cmake -S port/ps2 -B build-ps2-no-cull -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/port/ps2/ps2dev-toolchain.cmake" \
+            -DPD_PS2_GAME_VU1=OFF \
+            -DPD_PS2_DISABLE_CULLING_DIAGNOSTIC=ON
+          cmake --build build-ps2-no-cull --target pd_ps2_game -j2 --verbose
+          test -f build-ps2-no-cull/pd-ps2-game.elf
+          test -s build-ps2-no-cull/pd-ps2-game.map
+          mips64r5900el-ps2-elf-size build-ps2-no-cull/pd-ps2-game.elf
+          test -z "$(mips64r5900el-ps2-elf-nm -u build-ps2-no-cull/pd-ps2-game.elf)"
+
+      - name: Build textured no-depth diagnostic
+        run: |
+          cmake -S port/ps2 -B build-ps2-no-depth -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/port/ps2/ps2dev-toolchain.cmake" \
+            -DPD_PS2_GAME_VU1=OFF \
+            -DPD_PS2_DISABLE_DEPTH_DIAGNOSTIC=ON
+          cmake --build build-ps2-no-depth --target pd_ps2_game -j2 --verbose
+          test -f build-ps2-no-depth/pd-ps2-game.elf
+          test -s build-ps2-no-depth/pd-ps2-game.map
+          mips64r5900el-ps2-elf-size build-ps2-no-depth/pd-ps2-game.elf
+          test -z "$(mips64r5900el-ps2-elf-nm -u build-ps2-no-depth/pd-ps2-game.elf)"
+
       - name: Build alpha-trilerp hardware diagnostic
         run: |
           cmake -S port/ps2 -B build-ps2-alpha-diag -G Ninja \
@@ -660,6 +684,26 @@ jobs:
           path: |
             build-ps2-geometry-no-depth/pd-ps2-game.elf
             build-ps2-geometry-no-depth/pd-ps2-game.map
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload textured no-cull diagnostic
+        uses: actions/upload-artifact@v4
+        with:
+          name: pd-ps2-game-no-cull
+          path: |
+            build-ps2-no-cull/pd-ps2-game.elf
+            build-ps2-no-cull/pd-ps2-game.map
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload textured no-depth diagnostic
+        uses: actions/upload-artifact@v4
+        with:
+          name: pd-ps2-game-no-depth
+          path: |
+            build-ps2-no-depth/pd-ps2-game.elf
+            build-ps2-no-depth/pd-ps2-game.map
           if-no-files-found: error
           retention-days: 14
 

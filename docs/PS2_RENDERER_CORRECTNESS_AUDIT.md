@@ -130,10 +130,15 @@ but that state can no longer leak into the next batch.
    by the partial viewport/scissor origin defect. If it survives this fix,
    isolate texture-rectangle/copy-cycle coordinates separately from ordinary
    triangle text.
-6. **INFERENCJA:** Fast3D performs face culling before the backend homogeneous
-   clipper. Eye-plane-crossing triangles can therefore be rejected before the
-   PS2 clipper can repair them. Moving culling after clipping requires an
-   explicit winding contract and should be tested separately.
+6. **POTWIERDZONE W KODZIE, SPRZĘT DO TESTU:** Fast3D performs face culling
+   before the backend homogeneous clipper. The old path divided by every
+   vertex `W` and tried to correct mixed-sign triangles by negating the
+   screen-space winding. That is not equivalent to clipping the polygon and
+   can reject valid room geometry crossing the eye plane. The PS2-generated
+   frontend now performs the cheap pre-cull only when all three `W` values are
+   positive. Eye-plane-crossing triangles proceed to the six-plane backend
+   clipper. Fully textured no-cull and no-depth artifacts isolate the two
+   remaining state contracts without replacing materials with debug colors.
 
 ## Next hardware acceptance test
 
