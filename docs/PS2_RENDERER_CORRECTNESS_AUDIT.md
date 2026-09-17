@@ -67,6 +67,19 @@ the expected color/alpha write lanes instead of inheriting gsKit bootstrap
 values. This matches Fast3D's zero-initialised `alpha_blend=false` cache before
 the first material transition.
 
+### Fog state survived only the first pass-graph batch
+
+**POTWIERDZONE:** tiled material graphs temporarily disable GS fog while
+reconstructing scalar/color workspaces. Their common restore previously left
+fog disabled. The vertex translator caches the fog colour across all batches
+of one draw call, so a draw larger than the translation buffer re-enabled fog
+for its first batch only. Later batches of the same model or room were emitted
+with identical geometry/material data but different visibility.
+
+The common graph restore now reinstates the active shader's fog enable and
+last translated fog colour. Temporary workspace stages may still disable fog,
+but that state can no longer leak into the next batch.
+
 ## Contracts reviewed without a new defect
 
 - **CURRENT IMPLEMENTATION:** NPOT Fast3D coordinates are normalized against

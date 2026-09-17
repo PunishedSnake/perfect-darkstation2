@@ -1370,7 +1370,9 @@ static void ps2_restore_alpha_trilerp_state(void)
         s_shader && s_shader->features.opt_alpha_threshold,
         s_shader && s_shader->features.opt_alpha_threshold ?
             PS2_GFX_ALPHA_THRESHOLD : 0u);
-    ps2GsCoreSetFog(false, 0u, 0u, 0u);
+    ps2GsCoreSetFog(
+        s_shader && s_shader->features.opt_fog,
+        s_draw_fog_r, s_draw_fog_g, s_draw_fog_b);
     ps2GsCoreSetTextureAlpha(
         s_shader && s_shader->plan.texture_alpha);
     ps2_apply_texture_clamp(0);
