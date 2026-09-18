@@ -1,227 +1,281 @@
-# Perfect Dark port
+# Perfect DarkStation 2
 
-This repository contains a work-in-progress port of the [Perfect Dark decompilation](https://github.com/n64decomp/perfect_dark) to modern platforms.
+[![PS2 Bootstrap CI](https://github.com/PunishedSnake/perfect-darkstation2/actions/workflows/ps2-bootstrap.yml/badge.svg?branch=ps2)](https://github.com/PunishedSnake/perfect-darkstation2/actions/workflows/ps2-bootstrap.yml)
 
-To run the port, you must already have a Perfect Dark ROM, specifically one of the following:
-* `ntsc-final`/`US V1.1`/`US Rev 1` (md5 `e03b088b6ac9e0080440efed07c1e40f`).  
-  **This is the recommended version to use**.  
-  Called `NTSC version 8.7 final` on the boot screen.
-* `ntsc-1.0`/`US V1.0` (md5 `7f4171b0c8d17815be37913f535e4e93`).  
-  Technically supported, but not recommended.  
-  Called `NTSC version 8.7 final` on the boot screen as well.
-* `jpn-final` (md5 `538d2b75945eae069b29c46193e74790`).  
-  Technically supported, but requires a separate custom-built executable.  
-  Called `JPN version 8.9 final` on the boot screen.
-* `pal-final` (md5 `d9b5cd305d228424891ce38e71bc9213`).  
-  Technically supported, but requires a separate custom-built executable.  
-  Called `PAL 8.7 final` on the boot screen.
+**Perfect DarkStation 2** is an experimental open-source port of *Perfect Dark* to the original Sony PlayStation 2.
 
-> **PlayStation 2 branch:** `ps2` contains the Perfect DarkStation 2 port. It
-> builds a real EE game ELF and has reached the legal/Expansion Pak startup
-> screens on retail hardware, but it is not playable yet. See the
-> [PS2 quick start](port/ps2/README.md),
-> [startup chain](docs/PS2_STARTUP_CHAIN.md), and
-> [code/file audit](docs/PS2_CODE_AND_FILE_AUDIT.md) for the exact frontier.
-> The [SM64 PS2 comparison](docs/PS2_SM64_PORT_COMPARISON.md) records which
-> techniques are reusable and which older backend shortcuts are intentionally
-> not copied.
+The project is based on the [Perfect Dark PC port](https://github.com/fgsfdsfgs/perfect_dark) and the original [Perfect Dark decompilation](https://github.com/n64decomp/perfect_dark), but the `ps2` branch replaces the desktop rendering/platform path with a native PlayStation 2 runtime targeting the Emotion Engine, Graphics Synthesizer, VU1, SPU2 and DualShock 2.
 
-## Status
+The goal is not emulation. The game is being brought up as a native PS2 ELF and is continuously tested on real retail hardware.
 
-The game is in a mostly functional state, with both singleplayer and split-screen multiplayer modes fully working.  
-There are minor graphics- and gameplay-related issues, and possibly occasional crashes.
+> **Current state:** the port boots on real PlayStation 2 hardware, passes the legal screen and the Rare, Nintendo 64 and Perfect Dark logo sequence, reaches the main menu and can begin mission loading. It is **not yet a playable release**. Rendering correctness and performance remain the main blockers.
 
-**The following extra features are implemented:**
-* mouselook;
-* dual analog controller support;
-* widescreen resolution support;
-* configurable field of view;
-* 60 FPS support, including fixes for some framerate-related issues;
-* fixes for a couple original bugs and crashes;
-* basic mod support, currently enough to load a few custom levels;
-* slightly expanded memory heap size;
-* experimental high framerate support (up to 240 FPS):
-  * enable `Uncap Tickrate` in `Extended Video Options` to activate;
-  * in practice the game will have issues running faster than ~165 FPS, so use VSync or `Video.FramerateLimit` to cap it.
-* emulate the Transfer Pak functionality the game has on the Nintendo 64 to unlock some cheats automatically.
+## What works
 
-**The following platforms are officially supported and tested:**
-* Windows 7+: i686, x86_64
-* Linux: i686, x86_64
-* MacOS: x86_64 (OS 10.9+), arm64 (OS 11.0+)
-* Nintendo Switch: arm64
+The PS2 branch is a full game-runtime bring-up rather than a renderer-only prototype.
 
-The PlayStation 2 port is an experimental bring-up target and is intentionally
-not included in the supported-platform list above yet.
+Confirmed or implemented so far:
 
-## Download
+- native PS2 EE executable built with the current PS2DEV/PS2SDK toolchain;
+- ROM-backed game data without shipping copyrighted ROM or extracted game assets;
+- bounded streaming of the NTSC-final ROM data and runtime asset loading;
+- portable Perfect Dark runtime linked into the PS2 ELF;
+- native Graphics Synthesizer backend;
+- Fast3D/RDP command translation for the PS2 renderer;
+- N64 TMEM load semantics and PS2 texture conversion;
+- colour and textured triangle rendering;
+- depth, viewport, scissor, fog, alpha-test and texture-alpha state;
+- VRAM allocation, texture residency and eviction;
+- one-pass and selected multipass combiner plans;
+- VIF1/VU1 PATH1 rendering where supported, with CPU/PATH3 fallback;
+- VU1 transform/microprogram path;
+- DualShock 2 discovery and analog input;
+- SPU2 audio backend and portable sound integration;
+- PS2 filesystem, configuration and save paths;
+- `pd.ini` creation;
+- emulated cartridge EEPROM through `eeprom.bin`;
+- title sequence progression through all startup logos;
+- main-menu entry and mission-loading path on retail hardware;
+- renderer counters, durable checkpoints and hardware-oriented diagnostics;
+- binary renderer/GS trace capture for offline analysis;
+- host-side regression tests for renderer components;
+- dedicated PS2 GitHub Actions CI and linker-map artifacts.
 
-Latest [automatic builds](https://github.com/fgsfdsfgs/perfect_dark/releases/tag/ci-dev-build) for supported platforms:
-* [x86_64-windows](https://github.com/fgsfdsfgs/perfect_dark/releases/download/ci-dev-build/pd-x86_64-windows.zip)
-* [i686-windows](https://github.com/fgsfdsfgs/perfect_dark/releases/download/ci-dev-build/pd-i686-windows.zip)
-* [x86_64-linux](https://github.com/fgsfdsfgs/perfect_dark/releases/download/ci-dev-build/pd-x86_64-linux.tar.gz)
-* [i686-linux](https://github.com/fgsfdsfgs/perfect_dark/releases/download/ci-dev-build/pd-i686-linux.tar.gz)
-* [arm64-nswitch](https://github.com/fgsfdsfgs/perfect_dark/releases/download/ci-dev-build/pd-arm64-nswitch.zip)
+## Current limitations
 
-If you are looking for netplay builds (the `port-net` branch), see [this link](https://github.com/fgsfdsfgs/perfect_dark/blob/port-net/README.md#download).
+The runtime is substantially further along than the graphics currently make it look. Humanity has once again discovered that reaching a menu is easier than reproducing an N64 renderer correctly on completely unrelated hardware.
 
-## Running
+Major remaining work includes:
 
-You must already have a Perfect Dark ROM to run the game, as specified above.  
+- corrupted or inaccurate textures, materials and effects in title/menu/game scenes;
+- unsupported Fast3D combiner recipes which are currently recorded and dropped;
+- incomplete blending and text fidelity;
+- off-screen render targets, framebuffer copies and framebuffer-based effects;
+- mipmap generation and sampling;
+- further VIF1/VU1 and PATH3 synchronization validation;
+- remaining display-list command-budget hardening;
+- major performance work before the game can be considered playable.
 
-This assumes that you're using an x86_64 build. If you aren't, replace `x86_64` below with your arch (e.g. `i686`).
+Real-hardware validation is authoritative for DMA ordering, VIF/VU behaviour, GS FIFO behaviour, storage I/O and timing.
 
-1. Create a directory named `data` next to `pd.x86_64` if it's not there.
-2. Put your Perfect Dark NTSC ROM named `pd.ntsc-final.z64` into it.
-3. Run the `pd.x86_64` executable.
+## Renderer architecture
 
-If you want to use a PAL or JPN ROM instead, put them into the `data` directory and run the appropriate executable:
-* PAL: ROM name `pd.pal-final.z64`, executable name `pd.pal.x86_64`.
-* JPN: ROM name `pd.jpn-final.z64`, executable name `pd.jpn.x86_64`.
+The active graphics path is:
 
-Optionally, you can also put your Perfect Dark for GameBoy Color ROM named `pd.gbc` in the `data` directory if you want to emulate having the Nintendo 64's Transfer Pak and unlock some cheats automatically.
+```text
+Perfect Dark GBI
+      |
+      v
+portable Fast3D frontend
+      |
+      v
+N64 RDP/TMEM state model
+      |
+      v
+PS2 combiner + pass planner
+      |
+      +--> VIF1 / VU1 / PATH1 where supported
+      |
+      +--> CPU / PATH3 fallback
+      |
+      v
+Graphics Synthesizer
+      |
+      v
+VBlank presentation
+```
 
-Optionally, you can move the data folder to `~/.local/share/perfectdark` on Linux or `~/Library/Application Support/perfectdark` on MacOS.
+This backend is intentionally native to the PS2. It does not wrap OpenGL and it does not depend on an emulator-specific rendering interface.
 
-Additional information can be found in the [wiki](https://github.com/fgsfdsfgs/perfect_dark/wiki).
+Design and implementation details are documented in:
 
-A GPU supporting OpenGL 3.0/ES3.0 or above is required to run the port.
+- [Native PS2 renderer architecture](docs/PS2_NATIVE_RENDERER_ARCHITECTURE.md)
+- [N64 RDP/TMEM semantics](docs/N64_RDP_TMEM_SEMANTICS.md)
+- [Renderer correctness audit](docs/PS2_RENDERER_CORRECTNESS_AUDIT.md)
+- [PS2 optimization roadmap](docs/PS2_OPTIMIZATION_ROADMAP.md)
+- [Whole-runtime optimization audit](docs/PS2_WHOLE_RUNTIME_OPTIMIZATION_AUDIT.md)
 
-### Installing the Nintendo Switch version
+## Retail-hardware milestone
 
-The Nintendo Switch build ZIP comes with all 3 regions in different folders: `perfectdark`, `perfectdark_pal` and `perfectdark_jpn`.
+The current tested startup chain on a retail PlayStation 2 is:
 
-Take the folder for the region you want and put it into the `/switch` folder on your SD card, then put your ROM into the `data` folder inside of the folder you extracted as described above.
+```text
+ELF startup
+ -> filesystem/config
+ -> ROM validation and data materialization
+ -> DualShock 2 / SPU2 / GS initialization
+ -> Perfect Dark runtime initialization
+ -> LEGAL / Expansion Pak screen
+ -> Rare logo
+ -> Nintendo 64 logo
+ -> Perfect Dark logo
+ -> main menu
+ -> mission loading
+```
 
-## Controls
+See [PS2 startup and first-frame chain](docs/PS2_STARTUP_CHAIN.md) for the detailed execution path and failure boundaries.
 
-1964GEPD-style and Xbox-style bindings are implemented.
+## Requirements
 
-N64 pad buttons X and Y (or `X_BUTTON`, `Y_BUTTON` in the code) refer to the reserved buttons `0x40` and `0x80`, which are also leveraged by 1964GEPD.
+The repository does **not** contain a Perfect Dark ROM or extracted copyrighted game assets.
 
-Support for one controller, two-stick configurations are enabled for 1.2.
+The PS2 port currently targets a legally obtained:
 
-Note that the mouse only controls player 1.
+- Perfect Dark NTSC-final / US v1.1 / US Rev 1 ROM
+- big-endian `.z64` image
+- MD5: `e03b088b6ac9e0080440efed07c1e40f`
 
-Controls can be rebound in `pd.ini`. Default control scheme is as follows:
+Place the ROM beside the ELF as:
 
-| Action           | Keyboard and mouse     | Xbox pad                 | N64 pad                   |
-| -                | -                      | -                        | -                         |
-| Fire / Accept    | LMB/Space              | RT                       | Z Trigger                 |
-| Aim mode         | RMB/Z                  | LT                       | R Trigger                 |
-| Use / Cancel     | E                      | N/A                      | B                         |
-| Use / Accept     | N/A                    | A                        | A                         |
-| Crouch cycle     | N/A                    | LS Click                 | `0x80000000` (Extra)      |
-| Half-Crouch      | Shift                  | N/A                      | `0x40000000` (Extra)      |
-| Full-Crouch      | Control                | N/A                      | `0x20000000` (Extra)      |
-| Reload           | R                      | X                        | X `(0x40)`                |
-| Previous weapon  | Mousewheel forward     | B                        | D-Left                    |
-| Next weapon      | Mousewheel back        | Y                        | Y `(0x80)`                |
-| Radial menu      | Q                      | LB                       | D-Down                    |
-| Alt fire mode    | F                      | RB                       | L Trigger                 |
-| Alt-fire oneshot | `F + LMB` or `E + LMB` | `A + RT` or  `RB + RT`   | `A + Z`     or `L + Z`    |
-| Quick-detonate   | `E + Q`   or `E + R`   | `A + B`  or  `A + X`     | `A + D-Left`or `A + X`    |
+```text
+pd.ntsc-final.z64
+```
+
+The normal runtime directory contains:
+
+```text
+pd-ps2-game.elf
+pd.ntsc-final.z64
+
+pd.ini       # generated runtime configuration
+eeprom.bin   # generated 2048-byte emulated cartridge EEPROM
+```
+
+Diagnostic builds may additionally create `pdps2.log` or `pdps2-gs-trace.bin`.
 
 ## Building
 
-### Windows
+Install the current [PS2DEV](https://github.com/ps2dev/ps2dev) toolchain and ensure `PS2DEV`, `PS2SDK` and `GSKIT` are exported.
 
-1. Install [MSYS2](https://www.msys2.org).
-2. Open the `MINGW64` prompt if building for x86_64, or the `MINGW32` prompt if building for i686. (**NOTE:** _do not_ use the `MSYS` prompt)
-3. Install dependencies:  
-   `pacman -S mingw-w64-x86_64-toolchain mingw-w64-x86_64-SDL2 mingw-w64-x86_64-zlib mingw-w64-x86_64-cmake mingw-w64-x86_64-python3 mingw-w64-i686-toolchain mingw-w64-i686-SDL2 mingw-w64-i686-zlib mingw-w64-i686-cmake mingw-w64-i686-python3 make git`
-4. Get the source code:  
-   `git clone --recursive https://github.com/fgsfdsfgs/perfect_dark.git && cd perfect_dark`
-5. Run `cmake -G"Unix Makefiles" -Bbuild .`.
-   * Add ` -DROMID=pal-final` or ` -DROMID=jpn-final` at the end of the command if you want to build a PAL or JPN executable respectively.\
-6. Run `cmake --build build -j4 -- -O`.
-7. The resulting executable will be at `build/pd.x86_64.exe` (or at `build/pd.i686.exe` if building for i686).
-8. If you don't know where you downloaded the source to, you can run `explorer .` to open the current directory.
+Configure and build the normal correctness-oriented game ELF:
 
-### Linux
+```sh
+cmake -S port/ps2 -B build-ps2 -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE="$PWD/port/ps2/ps2dev-toolchain.cmake"
 
-1. Ensure you have gcc, g++ (version 10.0+), make, cmake, git, python3 and SDL2 (version 2.0.12+), libGL and ZLib installed on your system.
-   * If you wish to crosscompile, you will also need to have libraries and compilers for the target platform installed, e.g. `gcc-multilib` and `g++-multilib` for x86_64 -> i686 crosscompilation.
-2. Get the source code:  
-   `git clone --recursive https://github.com/fgsfdsfgs/perfect_dark.git && cd perfect_dark`
-3. Run the following command:
-   * ```cmake -G"Unix Makefiles" -Bbuild .```
-   * Add ` -DROMID=pal-final` or ` -DROMID=jpn-final` at the end of the command if you want to build a PAL or JPN executable respectively.
-   * Add ` -DCMAKE_C_FLAGS=-m32 -DCMAKE_CXX_FLAGS=-m32` at the end of the command if you want to crosscompile from x86_64 to x86.
-4. Run `cmake --build build -j4`.
-5. The resulting executable will be at `build/pd.<arch>` (for example `build/pd.x86_64`).
+cmake --build build-ps2 --target pd_ps2_game -j2
+```
 
-### MacOS
+Outputs:
 
-1. Set up Homebrew.
-2. Install dependencies:
-   * Execute command: `brew install cmake gcc python3 zlib git`
-3. Install SDL2:
-   * Execute commands:
-     ```
-     wget http://libsdl.org/release/SDL2-2.30.9.dmg -O SDL2.dmg
-     hdiutil mount SDL2.dmg
-     sudo cp -vr /Volumes/SDL2/SDL2.framework /Library/Frameworks
-     hdiutil detach /Volumes/SDL2
-     ```
-   * This installs SDL2 system-wide and this is how the automatic builds are done. The game will also look for it in the executable path, so you could
-     download it locally instead.
-4. Get the source code:  
-   `git clone --recursive https://github.com/fgsfdsfgs/perfect_dark.git && cd perfect_dark`
-5. Configure:
-   * Execute command: `cmake -G"Unix Makefiles" -Bbuild -DCMAKE_OSX_ARCHITECTURES=x86_64 .`
-   * Replace `x86_64` with `arm64` if building for an ARM64 Mac.
-   * Add ` -DROMID=pal-final` or ` -DROMID=jpn-final` at the end of the command if you want to build a PAL or JPN executable respectively.
-6. Build:
-   * Execute command: `cmake --build build --target pd -j4 --clean-first`
-7. The resulting executable will be at `build/pd.<arch>` (for example `build/pd.x86_64`).
-   * You might need to execute `chmod +x build/pd.x86-64` before you can run it.
+```text
+build-ps2/pd-ps2-game.elf
+build-ps2/pd-ps2-game.map
+```
 
-### Nintendo Switch
+The default build uses the current `Og` correctness baseline.
 
-1. Set up the [devkitA64 environment](https://devkitpro.org/wiki/Getting_Started).
-   * On Windows you can do it under MSYS2 or WSL, usually MSYS2 is recommended.
-   * If using MSYS2, make sure to use the **MSYS2** shell, **not** MINGW32 or MINGW64.
-2. Install host dependencies:
-   * On MSYS2: execute command `pacman -Syuu && pacman -S git make cmake python3`
-   * On Linux: use your package manager as normal to install the above dependencies.
-3. Install Switch toolchain and dependencies:
-   * Execute commands:
-     ```
-     dkp-pacman -Syuu
-     dkp-pacman -S devkitA64 libnx switch-zlib switch-sdl2 switch-cmake dkp-toolchain-vars
-     ```
-   * If in MSYS2 or `dkp-pacman` doesn't work, replace it with just `pacman`.
-4. Get the source code:  
-   `git clone --recursive https://github.com/fgsfdsfgs/perfect_dark.git && cd perfect_dark`
-5. Ensure devkitA64 environment variables are set:
-   * Execute command: `source /opt/devkitpro/switchvars.sh`
-   * If your `$DEVKITPRO` path is different, substitute that instead or set the variables manually.
-6. Configure:
-   * Execute command: `aarch64-none-elf-cmake -G"Unix Makefiles" -Bbuild .`
-   * Add ` -DROMID=pal-final` or ` -DROMID=jpn-final` at the end of the command if you want to build a PAL or JPN executable respectively.
-7. Build:
-   * Execute command: `make -C build -j4`
-8. The resulting executable will be at `build/pd.arm64.nro`.
+For a controlled optimized comparison build:
 
-### Notes
+```sh
+cmake -S port/ps2 -B build-ps2-o2 -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE="$PWD/port/ps2/ps2dev-toolchain.cmake" \
+  -DPD_PS2_OPTIMIZATION=O2
 
-Alternate compilers or toolchains can be specified by passing `-DCMAKE_TOOLCHAIN_FILE=whatever` as normal. The port does not build with Visual Studio.
+cmake --build build-ps2-o2 --target pd_ps2_game -j2
+```
 
-You will need to provide a `jpn-final` or `pal-final` ROM to run executables built for those regions, named `pd.jpn-final.z64` or `pd.pal-final.z64`.
+A separate standalone hardware diagnostic ELF can be built with:
 
-It might be possible to build and run the game on platforms that are not specified in the supported platforms list (e.g. Linux on armv7), but this has not been tested.
+```sh
+cmake --build build-ps2 -j2
+```
 
-## Credits
+which produces `pd-ps2-bootstrap.elf`.
 
-* the original [decompilation project](https://github.com/n64decomp/perfect_dark) authors;
-* Ryan Dwyer for the above, additional help, and `pd-extract`;
-* doomhack for the only other publicly available [PD porting effort](https://github.com/doomhack/perfect_dark) I could find;
-* [sm64-port](https://github.com/sm64-port/sm64-port) authors for the audio mixer and some other changes;
-* [Ship of Harkinian team](https://github.com/Kenix3/libultraship/tree/main/src/fast), Emill and MaikelChan for the libultraship version of fast3d that this port uses;
-* lieff for [minimp3](https://github.com/lieff/minimp3);
-* Mouse Injector and 1964GEPD authors for some of the 60FPS- and mouselook-related fixes;
-* Raf for the 64-bit port;
-* NicNamSam for the icon;
-* everyone who has submitted pull requests and issues to this repository and tested the port;
-* probably more I'm forgetting.
+More detailed build, launch and diagnostic instructions live in [port/ps2/README.md](port/ps2/README.md).
+
+## Useful runtime options
+
+| Option | Purpose |
+| --- | --- |
+| `--rom-file <path>` | Override the ROM path. |
+| `--eeprom-file <path>` | Override the EEPROM path. |
+| `--basedir <path>` | Override the runtime data root. |
+| `--savedir <path>` | Override config/save output. |
+| `--boot-stage <number>` | Start at a selected stage. |
+| `--skip-intro` | Start at CI Training instead of the title sequence. |
+| `--no-sound` | Disable game audio/output for diagnostics. |
+| `--file-log` | Enable synchronous durable file logging. |
+| `--no-log` | Force the filesystem log sink off. |
+| `--profile <number>` | Select a player profile where supported. |
+
+## Renderer trace capture
+
+The normal game build can record a single renderer frame without globally enabling synchronous file logging.
+
+From the main menu, selecting **Carrington Institute** arms the recorder. After the transition, a complete scene frame is captured to:
+
+```text
+pdps2-gs-trace.bin
+```
+
+The trace records renderer state, combiner recipes, pass graphs, texture metadata, PATH1 submission information, raw PATH3 GIF qwords, GS register shadow state, VRAM allocation state and renderer statistics.
+
+Decode it on a host system with:
+
+```sh
+python3 tools/ps2_renderer_trace_decode.py pdps2-gs-trace.bin \
+  --json pdps2-gs-trace.json
+```
+
+See [PS2 renderer trace](docs/PS2_RENDERER_TRACE.md) for the capture format and procedure.
+
+## CI and testing
+
+The `ps2` branch has dedicated GitHub Actions CI using the PS2DEV container.
+
+CI currently:
+
+- builds the PS2 game and diagnostic targets;
+- builds correctness and optimized variants where requested;
+- runs backend-independent Fast3D/TMEM tests;
+- runs GS state, clipping, allocator, combiner and renderer regression tests;
+- checks the EE link frontier;
+- rejects unresolved symbols;
+- publishes ELF and linker-map artifacts used during hardware testing.
+
+The linker map is treated as part of the diagnostic output so code ownership, section survival and memory use can be checked against the actual final ELF.
+
+## Development status and priorities
+
+The project has moved beyond platform bootstrap. Current development is concentrated on renderer correctness and performance.
+
+The immediate priorities are:
+
+1. use retail-hardware GS traces to identify the remaining incorrect or unsupported renderer states;
+2. close high-frequency combiner and texture-path gaps;
+3. validate synchronization and packet ordering across PATH1/VU1 and PATH3;
+4. implement framebuffer effects required by menu and gameplay scenes;
+5. profile and remove the largest CPU, packet and synchronization bottlenecks;
+6. reach stable, visually correct and playable gameplay on original PS2 hardware.
+
+For the larger audit and remaining risks, see:
+
+- [PS2 code and file audit](docs/PS2_CODE_AND_FILE_AUDIT.md)
+- [PS2 modern optimization audit](docs/PS2_MODERN_OPTIMIZATION_AUDIT.md)
+- [PS2 optimization roadmap](docs/PS2_OPTIMIZATION_ROADMAP.md)
+- [SM64 PS2 comparison](docs/PS2_SM64_PORT_COMPARISON.md)
+
+## Project lineage and credits
+
+Perfect DarkStation 2 exists because of the work done by several earlier projects and contributors.
+
+In particular:
+
+- the [Perfect Dark decompilation](https://github.com/n64decomp/perfect_dark) project and its contributors;
+- [fgsfdsfgs/perfect_dark](https://github.com/fgsfdsfgs/perfect_dark), which provides the portable runtime this PS2 effort is based on;
+- Ryan Dwyer for the original decompilation work, tooling and `pd-extract`;
+- doomhack's earlier [Perfect Dark porting effort](https://github.com/doomhack/perfect_dark);
+- the [sm64-port](https://github.com/sm64-port/sm64-port) contributors;
+- the Ship of Harkinian / libultraship Fast3D work and its contributors;
+- PS2DEV, PS2SDK and gsKit contributors;
+- everyone testing the PS2 ELF on real hardware and contributing reports, logs and traces.
+
+See the repository history for individual code contributions.
+
+## License
+
+Source code in this repository is distributed under the [MIT License](LICENSE).
+
+*Perfect Dark*, Nintendo 64, PlayStation and PlayStation 2 are trademarks of their respective owners. This project is an unofficial fan-made port and is not affiliated with or endorsed by Nintendo, Rare, Microsoft or Sony.
