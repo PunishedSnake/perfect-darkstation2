@@ -10,14 +10,15 @@ the filesystem.
 ## Capture
 
 1. Start the normal `pd-ps2-game.elf` build from USB.
-2. Reach the main menu.
-3. Select **Carrington Institute**. The menu callback arms the recorder.
-4. The transition frame is skipped. The following complete scene frame is
-   buffered in EE memory and written once as `pdps2-gs-trace.bin` beside the
-   running ELF.
-5. Wait for USB activity to finish before resetting or removing the device.
+2. Move to the scene and camera angle you want to inspect. You can capture
+   from the menu, Carrington Institute or a mission.
+3. Press **Select** on controller 1 once. The next complete renderer frame is
+   buffered in EE memory and written as `pdps2-gs-trace.bin` beside the ELF.
+4. Wait for USB activity to finish before resetting or removing the device.
 
-Selecting the same item again replaces the previous file with a fresh capture.
+Release Select before pressing it again. Each new capture replaces the previous
+file, so copy a useful trace before recording another. A USB write can briefly
+stall the game after that frame; Select is not forwarded as a game action.
 The capture contains:
 
 - ordered Fast3D/renderer state changes and draw/clip counts;
@@ -42,7 +43,8 @@ python3 tools/ps2_renderer_trace_decode.py pdps2-gs-trace.bin \
 ```
 
 The console summary reports event counts, PATH1/PATH3 submission and qword
-traffic, draw cost grouped by pass graph, and the final GS shadow. The JSON
+traffic, draw cost grouped by pass graph, unsupported shader IDs and fully
+clipped draws, and the final GS shadow. The JSON
 preserves those aggregates together with the complete event stream and decoded
 PATH3 A+D register writes for analysis or comparison between two hardware
 captures.
@@ -65,6 +67,26 @@ three-vertex tile passes are now kept in the already-open PATH3 arena instead
 of paying a VIF1 chain, `FLUSHA`, VU1 launch and PATH ownership handoff for
 every triangle. Batches of at least four triangles remain eligible for VU1.
 This is a transport optimization; texture, combiner, alpha, depth and geometry
-semantics are unchanged. A second retail-hardware trace is required to measure
-the realized frame-time reduction and verify the expected collapse in PATH
-handoffs.
+semantics are unchanged.
+
+## Second retail-hardware capture
+
+A later stage 38 frame from the Og build containing the batch threshold recorded
+513 events, with no dropped event records. `alpha_trilerp_modulate` used zero
+PATH1 and 29 PATH3 submits, down from 2,800 submits on each path in the first
+capture. The frame took 199,997 microseconds in the instrumented recorder, and
+the alpha graph took 131,867 microseconds. The frames were captured at different
+moments, with 80 versus 90 alpha input triangles, so these durations do not
+prove the exact uninstrumented FPS improvement. The alpha pass graph still
+submitted 468,345 requested PATH3 qwords in this frame.
+
+Both captures contain two occurrences of the same unsupported shader
+`0x320d020d818a818a/0x0000000000000513`; the unsupported material appears
+in three draw calls containing five input triangles. Three other draws,
+containing six input triangles, have no vertices left after clipping.
+These are candidates for missing geometry, not proof of the cause of every
+missing model. For a useful comparison, press Select when a specific model
+vanishes or a dark line appears and retain the corresponding view/photo.
+The raw GIF/VIF capture stores at most 65,536 qwords; the second frame dropped
+435,716 raw qwords, while retaining every high-level event and requested
+submission size. Interpret the stored command stream as incomplete.

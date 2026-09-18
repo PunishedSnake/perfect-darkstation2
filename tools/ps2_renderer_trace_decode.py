@@ -76,6 +76,8 @@ def _analyze(events: list[dict]) -> dict:
         "input_triangles": 0,
         "input_vertices": 0,
         "clipped_vertices": 0,
+        "fully_clipped_draws": 0,
+        "fully_clipped_triangles": 0,
     }
     by_pass = collections.defaultdict(lambda: {
         "draws": 0, "input_triangles": 0, "clipped_vertices": 0,
@@ -84,6 +86,10 @@ def _analyze(events: list[dict]) -> dict:
         "path3_submits": 0, "path3_requested_qwords": 0,
     })
     current_pass = 0
+    current_shader = None
+    unsupported_shaders = collections.defaultdict(lambda: {
+        "draws": 0, "input_triangles": 0, "clipped_vertices": 0,
+    })
     active_draw = None
     gaps = []
 
@@ -100,9 +106,15 @@ def _analyze(events: list[dict]) -> dict:
         event_type = event["type"]
         if event_type == "shader":
             current_pass = _event_value(event, "c") >> 32
+            current_shader = {
+                "id0": event["a"],
+                "id1": event["b"],
+                "supported": bool(event["flags"] & 8),
+            }
         elif event_type == "draw_input":
             active_draw = {
                 "pass_graph": current_pass,
+                "shader": current_shader,
                 "start": event["microseconds"],
                 "triangles": _event_value(event, "a"),
                 "path1_submits": 0,
@@ -128,6 +140,17 @@ def _analyze(events: list[dict]) -> dict:
         elif event_type == "draw_clipped" and active_draw is not None:
             clipped = _event_value(event, "c")
             draw_totals["clipped_vertices"] += clipped
+            if clipped == 0:
+                draw_totals["fully_clipped_draws"] += 1
+                draw_totals["fully_clipped_triangles"] += active_draw[
+                    "triangles"]
+            shader = active_draw["shader"]
+            if shader is not None and not shader["supported"]:
+                shader_name = f"{shader['id0']}/{shader['id1']}"
+                unsupported = unsupported_shaders[shader_name]
+                unsupported["draws"] += 1
+                unsupported["input_triangles"] += active_draw["triangles"]
+                unsupported["clipped_vertices"] += clipped
             pass_name = PASS_GRAPH_NAMES.get(
                 active_draw["pass_graph"],
                 f"unknown_{active_draw['pass_graph']}")
@@ -147,6 +170,7 @@ def _analyze(events: list[dict]) -> dict:
     return {
         "paths": paths,
         "draws": draw_totals,
+        "unsupported_shaders": dict(sorted(unsupported_shaders.items())),
         "by_pass_graph": dict(sorted(
             by_pass.items(),
             key=lambda item: item[1]["duration_microseconds"],
@@ -311,6 +335,14 @@ def print_summary(trace: dict) -> None:
               f"duration={values['duration_microseconds']} us "
               f"PATH1={values['path1_submits']} "
               f"PATH3={values['path3_submits']}")
+    draws = analysis["draws"]
+    print(f"fully clipped: draws={draws['fully_clipped_draws']} "
+          f"triangles={draws['fully_clipped_triangles']}")
+    print("unsupported shaders:")
+    for shader, values in analysis["unsupported_shaders"].items():
+        print(f"  {shader}: draws={values['draws']} "
+              f"triangles={values['input_triangles']} "
+              f"clipped_vertices={values['clipped_vertices']}")
     print("GS shadow:")
     for event in trace["event_stream"]:
         if event["type"] == "gs_register":

@@ -215,13 +215,13 @@ More detailed build, launch and diagnostic instructions live in [port/ps2/README
 
 The normal game build can record a single renderer frame without globally enabling synchronous file logging.
 
-From the main menu, selecting **Carrington Institute** arms the recorder. After the transition, a complete scene frame is captured to:
+Press **Select** on controller 1 in the scene you want to inspect. The next complete renderer frame is captured to:
 
 ```text
 pdps2-gs-trace.bin
 ```
 
-The trace records renderer state, combiner recipes, pass graphs, texture metadata, PATH1 submission information, raw PATH3 GIF qwords, GS register shadow state, VRAM allocation state and renderer statistics.
+Each press replaces the previous capture after Select has been released. The trace records renderer state, combiner recipes, pass graphs, texture metadata, PATH1 submission information, raw PATH3 GIF qwords, GS register shadow state, VRAM allocation state and renderer statistics. A busy frame may exceed the fixed raw-qword budget; the event stream reports any loss.
 
 Decode it on a host system with:
 

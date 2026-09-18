@@ -33,9 +33,6 @@
 #include "lib/str.h"
 #include "data.h"
 #include "types.h"
-#if defined(PLATFORM_PS2)
-#include "gfx_ps2_capture.h"
-#endif
 
 u8 g_InventoryWeapon;
 
@@ -4904,23 +4901,6 @@ char *mainMenuTextLabel(struct menuitem *item)
 	return langGet(nocheats[item->param]);
 }
 
-MenuItemHandlerResult menuhandlerMainMenuCarringtonInstitute(
-	s32 operation, struct menuitem *item, union handlerdata *data)
-{
-	(void)item;
-	(void)data;
-#if defined(PLATFORM_PS2)
-	if (operation == MENUOP_SET) {
-		/* The menu closes after this callback. Skip its transition frame, then
-		 * capture one fully loaded Carrington Institute frame. */
-		gfxPs2RequestRendererCapture((u32)g_Vars.stagenum, 1u);
-	}
-#else
-	(void)operation;
-#endif
-	return 0;
-}
-
 struct menuitem g_MainMenuMenuItems[] = {
 	{
 		MENUITEMTYPE_SELECTABLE,
@@ -4928,7 +4908,7 @@ struct menuitem g_MainMenuMenuItems[] = {
 		MENUITEMFLAG_SELECTABLE_CLOSESDIALOG | MENUITEMFLAG_BIGFONT,
 		L_MISC_446, // "Carrington Institute"
 		0x00000001,
-		menuhandlerMainMenuCarringtonInstitute,
+		NULL,
 	},
 	{
 		MENUITEMTYPE_SELECTABLE,

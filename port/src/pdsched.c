@@ -26,6 +26,10 @@
 #include "input.h"
 #include "mixer.h"
 #include "vi_unblack_timer.h"
+#ifdef PLATFORM_PS2
+#include "gfx_ps2_capture.h"
+#include "pad_ps2.h"
+#endif
 
 /*
  * private typedefs and defines
@@ -271,6 +275,9 @@ void schedAudioFrame(OSSched *sc)
  */
 void schedEndFrame(OSSched *sc)
 {
+#ifdef PLATFORM_PS2
+	static bool select_was_held;
+#endif
 	sc->frameCount++;
 
 #if PAL
@@ -290,6 +297,20 @@ void schedEndFrame(OSSched *sc)
 	}
 
 	inputUpdate();
+
+#ifdef PLATFORM_PS2
+	/* PADMAN may be polled more than once per game frame, so detect the
+	 * physical held transition here rather than relying on pad->pressed.
+	 * VideoStartFrame has already begun this frame. Arm the next complete
+	 * renderer frame after the user presses Select. */
+	const struct Ps2PadState *pad = ps2PadGetState(0);
+	const bool select_held = pad && pad->connected &&
+		(pad->held & PS2_PAD_SELECT) != 0u;
+	if (select_held && !select_was_held) {
+		gfxPs2RequestRendererCapture((u32)g_Vars.stagenum, 0u);
+	}
+	select_was_held = select_held;
+#endif
 
 	joyStartReadData(&g_PiMesgQueue);
 	joyReadData();
