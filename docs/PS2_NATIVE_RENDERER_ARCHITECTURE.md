@@ -1,11 +1,8 @@
 # Perfect DarkStation 2 native renderer architecture
 
-Status: active design record for the `ps2` branch.
+Status: active design record for the `ps2` branch. Reviewed against the current development frontier on 2026-09-18.
 
-Current bring-up status, build instructions and known limitations are tracked
-in [the PS2 README](../port/ps2/README.md). For end-to-end control flow and the
-file/dead-code review, see [the startup chain](PS2_STARTUP_CHAIN.md) and
-[the code/file audit](PS2_CODE_AND_FILE_AUDIT.md).
+Use [PS2_DEVELOPMENT.md](PS2_DEVELOPMENT.md) for the canonical branch workflow and active priorities. Build instructions and platform runtime details are tracked in [the PS2 README](../port/ps2/README.md). For end-to-end control flow and the dated file/dead-code review, see [the startup chain](PS2_STARTUP_CHAIN.md) and [the code/file audit](PS2_CODE_AND_FILE_AUDIT.md).
 
 This document records the intended PS2 renderer/dataflow architecture so that implementation decisions survive individual development sessions. It is deliberately stricter than a wishlist: every substantial optimization should be tied to an observed bottleneck, a documented hardware/API contract, or a real-hardware experiment.
 
@@ -386,7 +383,7 @@ This semantic layer should remain backend-independent where possible. PS2-specif
 - RGBA32/PSMCT32 remains the compatibility fallback for other formats and any TMEM view whose exactness is not proved;
 - the hot frame loop is native in command, texture and presentation transport, but one-time initialization is not yet gsKit-independent.
 
-Remaining renderer milestones include measured GS state batching and combiner coverage, VIF1/VU1 geometry batches, and replacement of the remaining one-time gsKit CRT/system-buffer bootstrap where doing so has a concrete ownership or performance benefit.
+Remaining renderer milestones are no longer basic VIF1/VU1 bring-up. The active work is trace-driven combiner/material coverage, hardware validation and expansion of the existing VU1/PATH1 geometry route, measured GS state/packet optimization, framebuffer effects, and replacement of the remaining one-time gsKit CRT/system-buffer bootstrap only where profiling or ownership gives a concrete reason.
 
 ## 8. Bottleneck hypothesis ordering
 
@@ -651,8 +648,7 @@ PCSX2 is useful for correctness, packet/state inspection and fast iteration. It 
 
 - **CURRENT IMPLEMENTATION:** establish CPU baseline counters for EE
   translation time, translated vertices and final transport volume;
-- **IN PROGRESS:** define packed VIF-ready vertex batches. The transport
-  supports 96 color vertices or 81 textured vertices plus draw-local GS state;
+- **CURRENT IMPLEMENTATION:** packed VIF-ready vertex batches are defined. The transport supports 96 color vertices or 81 textured vertices plus draw-local GS state;
 - **CURRENT IMPLEMENTATION:** the next geometry stage has a host-tested raw
   input/output memory contract. Each 256-QW TOPS input bank contains a six-QW
   control/tag header, five fixed prefix A+D slots, up to 81 clip/STQ/RGBA
@@ -692,12 +688,8 @@ PCSX2 is useful for correctness, packet/state inspection and fast iteration. It 
   elided, confirming that the reduced synchronization keeps required ownership
   waits while removing redundant MMIO traffic;
 - VU1 lighting/texgen candidate;
-- **IN PROGRESS:** direct GS-ready output and XGKICK. The transport diagnostic
-  executes this route with raw textured transforms and GS-ready A+D transport
-  for color/multipass draws;
-- **IN PROGRESS:** double-buffer VU input/output ownership. BASE/OFFSET banks
-  and alternating EE slots exist, while execution remains serialized for the
-  first hardware correctness test;
+- **CURRENT IMPLEMENTATION:** direct GS-ready output and XGKICK are active for the validated transport path. The transport diagnostic and eligible ordinary textured draws execute raw transforms on VU1, while GS-ready A+D transport is available for colour/multipass work. Remaining work is coverage and pixel-equivalent hardware validation, not first bring-up;
+- **CURRENT IMPLEMENTATION:** double-buffer VU input/output storage and ownership scaffolding exist through BASE/OFFSET banks and alternating EE slots. Submission remains deliberately serialized where required by the current correctness contract; additional overlap is a measured optimization task rather than a prerequisite for renderer functionality;
 - lossless real-hardware PATH1/PATH3 A/B and timing against the CPU path.
 
 ### M6: IPU image jobs
