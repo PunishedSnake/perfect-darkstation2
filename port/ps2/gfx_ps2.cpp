@@ -59,6 +59,8 @@
  *   - INPUT3 + TEXEL0 * (INPUT1 - INPUT2), reduced to signed TEX_EDGE tests
  *   - lerp(INPUT2, INPUT1, TEXEL0), reconstructed in a scalar alpha lane
  *   - TEXEL1 * INPUT1 beside trilerped RGB, captured by an alpha-only draw
+ *   - trilerped alpha * INPUT2 + INPUT3, with the additive term accumulated
+ *     in the tiled scalar target before final GS alpha normalization
  *
  * Alpha-bearing TEXEL0/TEXEL1 trilerp has a tiled CT32 execution graph. Its
  * low-lane channel shuffle passed the deterministic image A/B on physical PS2
@@ -163,6 +165,7 @@ struct Ps2AlphaTrilerpVertex {
     uint8_t independent_alpha;
     uint8_t fog;
     uint8_t primitive_alpha;
+    uint8_t alpha_add;
     float signed_alpha_delta;
 };
 
@@ -1397,6 +1400,22 @@ static void ps2_make_alpha_trilerp_texture_triangle(
         output[i].st = ps2_pack_st(
             vertex->tex_u[texture_index] * vertex->inv_w,
             vertex->tex_v[texture_index] * vertex->inv_w);
+        output[i].xyz2 = ps2_pack_xyz2(
+            vertex->x - (float)origin_x,
+            vertex->y - (float)origin_y,
+            vertex->z);
+    }
+}
+
+static void ps2_make_alpha_trilerp_add_triangle(
+    const struct Ps2AlphaTrilerpVertex *source,
+    int origin_x, int origin_y, struct Ps2GsColorVertex output[3])
+{
+    for (uint32_t i = 0u; i < 3u; ++i) {
+        const struct Ps2AlphaTrilerpVertex *vertex = &source[i];
+        const uint8_t add = vertex->alpha_add;
+        output[i].rgbaq = ps2_pack_rgbaq(
+            add, add, add, 0x80u, 0.0f);
         output[i].xyz2 = ps2_pack_xyz2(
             vertex->x - (float)origin_x,
             vertex->y - (float)origin_y,
@@ -2723,7 +2742,10 @@ static bool ps2_draw_alpha_trilerp_tile(
     struct Ps2GsTexturedVertex texture1_color[3];
     struct Ps2GsTexturedVertex alpha_base[3];
     struct Ps2GsTexturedVertex alpha_lerp[3];
+    struct Ps2GsColorVertex alpha_add[3];
     struct Ps2GsTexturedVertex composite[3];
+    const bool add_input3 = s_shader->plan.alpha_recipe ==
+        PS2_ALPHA_TEX01_LERP_INPUT1_MUL_INPUT2_PLUS_INPUT3;
     ps2_make_alpha_trilerp_texture_triangle(
         triangle, 0, tile->x, tile->y, true, false, texture0_alpha);
     ps2_make_alpha_trilerp_texture_triangle(
@@ -2738,8 +2760,13 @@ static bool ps2_draw_alpha_trilerp_tile(
     ps2_make_alpha_trilerp_workspace_triangle(
         triangle, tile->x, tile->y, 0u, true, false, false,
         alpha_lerp);
+    if (add_input3) {
+        ps2_make_alpha_trilerp_add_triangle(
+            triangle, tile->x, tile->y, alpha_add);
+    }
     ps2_make_alpha_trilerp_workspace_triangle(
-        triangle, tile->x, tile->y, 0x80u, false, true, true,
+        triangle, tile->x, tile->y,
+        add_input3 ? 0x40u : 0x80u, false, true, true,
         composite);
 
     ps2GsCoreSetAlphaWrite(true);
@@ -2783,6 +2810,15 @@ static bool ps2_draw_alpha_trilerp_tile(
     if (!ps2GsCoreDrawRenderTargetAlphaTriangles(
             s_alpha_trilerp_color_target, alpha_lerp, 3u, false)) {
         return false;
+    }
+    if (add_input3) {
+        ps2GsCoreSetColorChannelWriteMask(PS2_GS_COLOR_WRITE_RED);
+        ps2GsCoreSetAlphaWrite(false);
+        ps2GsCoreSetAlphaBlendEquation(
+            PS2_GS_ALPHA_BLEND_SOURCE_PLUS_DESTINATION);
+        ps2GsCoreDrawColorTriangles(alpha_add, 3u);
+        ps2GsCoreSetColorWrite(true);
+        ps2GsCoreSetAlphaWrite(true);
     }
 
     if (!ps2GsCoreBindRenderTarget(s_alpha_trilerp_color_target)) {
@@ -3336,6 +3372,7 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
                 vertex->shade_b = ps2_modulate_component(input[1][2]);
                 vertex->lod = ps2_modulate_component(input[0][0]);
                 vertex->primitive_alpha = 0u;
+                vertex->alpha_add = 0u;
                 vertex->signed_alpha_delta = 0.0f;
                 if (ps2_independent_alpha_is_custom22_23(
                         &s_shader->plan)) {
@@ -3352,6 +3389,18 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
                     vertex->independent_alpha =
                         ps2_modulate_component(
                             input[0][3] * input[1][3]);
+                } else if (s_shader->plan.alpha_recipe ==
+                        PS2_ALPHA_TEX01_LERP_INPUT1_MUL_INPUT2_PLUS_INPUT3) {
+                    /*
+                     * Keep the scalar workspace in N64's 0..255 alpha domain.
+                     * The final 0x40 composite factor converts it back to the
+                     * GS 0..128 blend-factor neighbourhood.
+                     */
+                    vertex->shade_a =
+                        ps2_modulate_component(input[1][3]);
+                    vertex->independent_alpha = 0u;
+                    vertex->alpha_add =
+                        ps2_u8_component(input[2][3]);
                 } else if (s_shader->plan.alpha_recipe ==
                         PS2_ALPHA_INPUT1) {
                     vertex->shade_a = 0x80u;

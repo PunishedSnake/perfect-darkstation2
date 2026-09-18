@@ -29,6 +29,10 @@ extern "C" bool ps2GsDescribeAlphaBlendEquation(
             /* (Cd - 0) * As + 0 */
             *factors = { 1u, 2u, 0u, 2u, 0u };
             return true;
+        case PS2_GS_ALPHA_BLEND_SOURCE_PLUS_DESTINATION:
+            /* (Cs - 0) * FIX(0x80) + Cd == Cs + Cd. */
+            *factors = { 0u, 2u, 2u, 1u, 0x80u };
+            return true;
         default:
             return false;
     }

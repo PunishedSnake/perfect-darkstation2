@@ -173,6 +173,15 @@ static bool ps2_cycle_multiplies_combined_by_input2(
            (a == SHADER_INPUT_2 && c == SHADER_COMBINED);
 }
 
+static bool ps2_cycle_multiplies_combined_by_input2_plus_input3(
+    const struct CCFeatures *f, uint8_t channel)
+{
+    return f->c[1][channel][0] == SHADER_COMBINED &&
+           f->c[1][channel][1] == SHADER_0 &&
+           f->c[1][channel][2] == SHADER_INPUT_2 &&
+           f->c[1][channel][3] == SHADER_INPUT_3;
+}
+
 static bool ps2_plan_opaque_tex01_lerp(const struct CCFeatures *f,
     struct Ps2CombinerPlan *plan)
 {
@@ -218,20 +227,27 @@ static bool ps2_plan_alpha_tex01_lerp_modulate(
         return false;
     }
 
-    for (uint8_t channel = 0; channel < 2u; ++channel) {
-        if (!f->do_multiply[1][channel]) {
-            return false;
-        }
-        const uint8_t a = f->c[1][channel][0];
-        const uint8_t c = f->c[1][channel][2];
-        if (!((a == SHADER_COMBINED && c == SHADER_INPUT_2) ||
-              (a == SHADER_INPUT_2 && c == SHADER_COMBINED))) {
-            return false;
-        }
+    if (!ps2_cycle_multiplies_combined_by_input2(f, 0u)) {
+        return false;
+    }
+
+    enum Ps2AlphaRecipe alpha_recipe = PS2_ALPHA_UNSUPPORTED;
+    if (ps2_cycle_multiplies_combined_by_input2(f, 1u)) {
+        /*
+         * The ordinary alpha-trilerp graph carries this equation implicitly,
+         * so it historically used UNSUPPORTED as an internal sentinel.
+         */
+        alpha_recipe = PS2_ALPHA_UNSUPPORTED;
+    } else if (ps2_cycle_multiplies_combined_by_input2_plus_input3(
+                   f, 1u)) {
+        alpha_recipe =
+            PS2_ALPHA_TEX01_LERP_INPUT1_MUL_INPUT2_PLUS_INPUT3;
+    } else {
+        return false;
     }
 
     plan->color_recipe = PS2_COLOR_TEX01_LERP_INPUT1_MUL_INPUT2;
-    plan->alpha_recipe = PS2_ALPHA_UNSUPPORTED;
+    plan->alpha_recipe = alpha_recipe;
     plan->color_cycle = 1;
     plan->alpha_cycle = 1;
     plan->textured = true;

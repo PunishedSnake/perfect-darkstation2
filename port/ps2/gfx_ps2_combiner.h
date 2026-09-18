@@ -31,6 +31,8 @@ enum Ps2AlphaRecipe {
     PS2_ALPHA_TEX1_MUL_INPUT1,
     PS2_ALPHA_INPUT1_MUL_INPUT2,
     PS2_ALPHA_TEX0_MUL_INPUT1_MUL_INPUT2,
+    /* lerp(TEX0.a,TEX1.a,INPUT1.a) * INPUT2.a + INPUT3.a. */
+    PS2_ALPHA_TEX01_LERP_INPUT1_MUL_INPUT2_PLUS_INPUT3,
     /* TEX_EDGE observes INPUT1 + INPUT2 only through its adjusted threshold. */
     PS2_ALPHA_INPUT1_PLUS_INPUT2_EDGE,
     /* INPUT2 * INPUT1 * (1 - INPUT1), reconstructed in a scalar target. */

@@ -120,9 +120,30 @@ shows the same RGB equation as supported
 `0x020d020d818a818a/0x0000000000000011`, but the second alpha cycle is
 `COMBINED.a * INPUT2.a + INPUT3.a`, whereas the supported recipe ends after
 the multiplication. `gfx_ps2.cpp` rejects unsupported shaders, so those 3 or
-4 draws do not reach GS. The trace cannot identify which visible surface they
-belong to. Neither new view has a fully clipped draw; this rules out wholesale
-clipping of a submitted draw in these frames, but does not rule out an object
-being culled earlier by the game, individual triangles being clipped, or a GS
-material/depth error. Preserve paired images and name the matching frame file
-before making a visual-causality claim.
+4 draws do not reach GS. Neither new view has a fully clipped draw; this rules
+out wholesale clipping of a submitted draw in these frames, but does not rule
+out an object being culled earlier by the game, individual triangles being
+clipped, or a GS material/depth error.
+
+The paired retail observation now identifies frame 474 / trace `(3)` as the
+view in which the couch in the first Carrington room is missing. This turns the
+previously anonymous comparison into a useful material correlation:
+
+- **POTWIERDZONE:** the renderer drops the shader above before GS submission;
+- **POTWIERDZONE:** its cluster uses a 56x54 PSMT8 texture in both views
+  (handle 62 in frame 612, handle 47 in frame 474), next to the same 64x64
+  PSMT4 alpha-trilerp resource shape (handles 41 and 48 respectively);
+- **INFERENCJA:** the stable shader/resource pattern plus the missing-couch
+  label makes this material a strong candidate for the couch surface, but the
+  trace still does not carry a model identifier.
+
+The PS2 combiner now accepts this exact additive-alpha variant. It reuses the
+validated alpha-trilerp graph, keeps its scalar intermediate in the N64 0..255
+alpha domain, adds `INPUT3.a` with a GS fixed-factor additive blend, and
+converts the final alpha back to the GS blend-factor scale during composite.
+This is deliberately restricted to the exact
+`COMBINED.a * INPUT2.a + INPUT3.a` equation. **HIPOTEZA DO TESTU:** on real
+hardware the unsupported count for this shader should drop to zero and the
+couch should remain visible at the frame-474 camera angle. The extra additive
+draw is local to this material graph; PATH3 traffic and frame-tail latency must
+be re-profiled after correctness is confirmed.
