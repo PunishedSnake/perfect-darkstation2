@@ -55,7 +55,7 @@ claims can be based on the actual link rather than filenames.
 | `src/setups/*.c` | Canonical decompilation source for ROM setup files and rebuild workflows. | No. The current PS2 runtime streams compiled setup payloads from the supplied ROM. |
 
 All C, C++, VSM and Python files under `port/ps2` have an explicit owner in
-`port/ps2/CMakeLists.txt` or `.github/workflows/ps2-bootstrap.yml`. The same is
+`port/ps2/CMakeLists.txt` or `.github/workflows/ps2-ci.yml`. The same is
 true for PS2 headers through an include from a runtime or test owner. There is
 currently no orphan PS2 implementation file that can be safely deleted merely
 because it is absent from the final ELF.

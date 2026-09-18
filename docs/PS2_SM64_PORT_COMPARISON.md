@@ -66,8 +66,9 @@ as fixes or approximations.
    The normal game therefore keeps exact non-endpoint trilerp graphs. A direct
    independent-alpha draw is allowed only when upload metadata proves constant
    white texture RGB.
-5. Treat compiler optimization as a measured A/B. CI emits separate `Og` and
-   `O2` game ELFs and embeds the profile in the runtime log. SM64 demonstrates
+5. Treat compiler optimization as a measured A/B. CI always emits the `Og`
+   game ELF and emits the separate `O2` comparison only for an explicitly
+   requested manual run; the profile is embedded in the runtime log. SM64 demonstrates
    that an optimized decompilation can run on PS2, but it does not prove that
    `-O3` is safe for Perfect Dark or that EE compute is the current bottleneck.
 6. Revisit IOP module footprint after the render critical path is usable. It

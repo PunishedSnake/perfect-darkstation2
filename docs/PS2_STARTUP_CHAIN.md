@@ -291,7 +291,7 @@ collision and HUD continue running. These observations do not support treating
 the result as one Z-buffer bug: the 2D corruption exists without world depth,
 and incorrect depth testing cannot manufacture new stretched triangle edges.
 
-CI now publishes `pd-ps2-game-safe` as a retail-hardware correctness control.
+Historical CI published `pd-ps2-game-safe` as a retail-hardware correctness control.
 It consumes the same authoritative TMEM view but lets the portable importer
 expand CI/IA/I 4-bit and 8-bit textures to CT32, removing native PSMT4/PSMT8
 IMAGE, TBW and CLUT layout from the font experiment. It also compiles the full
@@ -319,8 +319,8 @@ insufficient output capacity and 10,000 deterministic random triangles. This
 fix is shared by both geometry transports; the older pre-clip `safe` artifact
 remains useful only for isolating indexed texture residency and VU1 behavior.
 
-Current CI publishes three full-game corners so the font result is not
-confounded with the transform selection:
+The historical diagnostic CI matrix published three full-game corners so the
+font result was not confounded with the transform selection:
 
 | Artifact | Indexed textures | Geometry transform |
 | --- | --- | --- |
@@ -352,7 +352,7 @@ POT, NPOT, mirrored and zero-sized contracts. **HISTORICAL TEST HYPOTHESIS:** th
 correction should change the repeatable font and icon corruption; it is not
 claimed to repair black world materials or stretched geometry.
 
-CI also publishes `pd-ps2-game-geometry-baseline`. It accepts supported and
+Historical CI also published `pd-ps2-game-geometry-baseline`. It accepts supported and
 unsupported shader recipes but renders every submitted triangle with an
 untextured six-colour diagnostic palette through EE/PATH3. Alpha test,
 blending, fog and material pass graphs are disabled while depth and the common
@@ -379,7 +379,7 @@ near weapon triangles, matching the hardware symptom. Clear packets now force
 independent FRAME/ZBUF masks, full-target scissor, disabled alpha/destination
 tests and unblended sprites, then restore every persistent register.
 
-**HISTORICAL TEST HYPOTHESIS:** CI publishes two additional untextured EE/PATH3
+**HISTORICAL TEST HYPOTHESIS:** CI published two additional untextured EE/PATH3
 controls. `geometry-no-cull` bypasses only Fast3D face culling;
 `geometry-no-depth` bypasses only GS depth testing and writes. Compare both
 against the repaired `geometry-baseline`. Do not promote either bypass to the
@@ -395,7 +395,7 @@ culling as the cause of that diagnostic-only ordering symptom.
 **CURRENT IMPLEMENTATION:** the original geometry baseline deliberately
 forced every draw to an opaque palette, including alpha-blended, texture-edge
 and invisible/depth-only draws. That turns legitimate masks, screen effects
-and transparent planes into false solid occluders. CI now publishes two
+and transparent planes into false solid occluders. Historical CI then published two
 narrower controls:
 
 | Artifact | Accepted draws | Fragment source |
@@ -450,9 +450,10 @@ contracts and the remaining destination-colour, decal-depth, filtering and
 combiner gaps.
 
 The normal game build therefore keeps the file sink disabled. Console logging
-remains active, `--file-log` opts into `pdps2.log`, and CI retains a separate
-`pd-ps2-game-filelog` artifact for controlled diagnostics. No frame-critical
-path may rely on synchronous filesystem progress.
+remains active, and `--file-log` opts into `pdps2.log`. A local build may set
+`PD_PS2_FILE_LOG_DEFAULT=ON` for controlled diagnostics, but routine CI does not
+publish that configuration. No frame-critical path may rely on synchronous
+filesystem progress.
 
 ## Fatal and hang interpretation
 

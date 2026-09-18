@@ -45,8 +45,12 @@ On first start the game also creates these files beside the ELF:
 ```text
 pd.ini       runtime configuration
 eeprom.bin   emulated 16 Kbit cartridge EEPROM, exactly 2048 bytes
-pdps2.log    durable bring-up log
 ```
+
+`pdps2.log` is created only when `--file-log` is enabled or a dedicated
+file-logging build is used. `pdps2-gs-trace.bin` is created only after the
+Carrington Institute trace trigger described in
+[the trace guide](../../docs/PS2_RENDERER_TRACE.md).
 
 The ELF directory is the default base and save directory because PS2 launchers
 do not provide a reliable desktop-style working directory. Common PS2 device
@@ -79,14 +83,14 @@ cmake -S port/ps2 -B build-ps2-o2 -G Ninja \
 cmake --build build-ps2-o2 --target pd_ps2_game -j2
 ```
 
-CI publishes this as `pd-ps2-game-o2`. The runtime log records
+An explicitly requested manual CI run publishes this as `pd-ps2-game-o2`. The runtime log records
 `optimization=Og` or `optimization=O2`; compare the two ELFs with the same ROM,
 configuration, scene and logging policy. Do not mix their measurements.
 
-The normal Og and O2 game artifacts keep file logging disabled. CI publishes
-`pd-ps2-game-filelog`, built with `-DPD_PS2_FILE_LOG_DEFAULT=ON`, only for
-controlled diagnostics. It reproduces the blocking `mass:` path and must not
-be used as the normal hardware build.
+The normal Og and optional O2 game artifacts keep file logging disabled.
+`PD_PS2_FILE_LOG_DEFAULT=ON` remains a local diagnostic option; CI does not
+publish a file-logging artifact because it is unsuitable as a normal hardware
+baseline.
 
 The map file is a required build artifact. It records actual archive members,
 section contributions and discarded sections after `--gc-sections`; source
@@ -111,9 +115,12 @@ cmake -S port/ps2 -B build-ps2-vu1-diag -G Ninja \
 cmake --build build-ps2-vu1-diag -j2
 ```
 
-CI builds and inspects all diagnostic configurations plus `Og` and `O2` game
-ELFs, runs backend-independent host tests, rejects undefined symbols, and
-publishes both game variants together with their linker maps.
+CI builds the ordinary standalone bootstrap as a compile gate and fully builds
+and inspects the normal `Og` game ELF. It runs backend-independent host tests,
+rejects undefined symbols, and publishes the game ELF with its linker map,
+section sizes and build metadata. `O2` is built and published only when the
+manual workflow input requests it. The specialized alpha/VU1 scene selectors
+remain local hardware diagnostics rather than routine CI artifacts.
 
 ## Runtime options useful during bring-up
 

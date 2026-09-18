@@ -1,6 +1,6 @@
 # Perfect DarkStation 2
 
-[![PS2 CI](https://github.com/PunishedSnake/perfect-darkstation2/actions/workflows/ps2-bootstrap.yml/badge.svg?branch=ps2)](https://github.com/PunishedSnake/perfect-darkstation2/actions/workflows/ps2-bootstrap.yml)
+[![PS2 CI](https://github.com/PunishedSnake/perfect-darkstation2/actions/workflows/ps2-ci.yml/badge.svg?branch=ps2)](https://github.com/PunishedSnake/perfect-darkstation2/actions/workflows/ps2-ci.yml)
 
 **Perfect DarkStation 2** is an experimental open-source port of *Perfect Dark* to the original Sony PlayStation 2.
 
@@ -238,13 +238,13 @@ The `ps2` branch has dedicated GitHub Actions CI using the PS2DEV container.
 
 CI currently:
 
-- builds the PS2 game and diagnostic targets;
-- builds correctness and optimized variants where requested;
+- builds the normal `Og` PS2 game ELF and a standalone diagnostic compile gate;
+- builds the `O2` comparison ELF only when explicitly requested through a manual workflow run;
 - runs backend-independent Fast3D/TMEM tests;
 - runs GS state, clipping, allocator, combiner and renderer regression tests;
 - checks the EE link frontier;
 - rejects unresolved symbols;
-- publishes ELF and linker-map artifacts used during hardware testing.
+- publishes the game ELF, linker map, section-size report and build/toolchain metadata used during hardware testing.
 
 The linker map is treated as part of the diagnostic output so code ownership, section survival and memory use can be checked against the actual final ELF.
 

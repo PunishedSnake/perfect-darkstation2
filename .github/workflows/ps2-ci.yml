@@ -15,7 +15,7 @@ on:
       - "src/include/**"
       - "include/**"
       - "tools/assetmgr/**"
-      - ".github/workflows/ps2-bootstrap.yml"
+      - ".github/workflows/ps2-ci.yml"
   pull_request:
     branches: [ "ps2" ]
     paths:
@@ -30,7 +30,7 @@ on:
       - "src/include/**"
       - "include/**"
       - "tools/assetmgr/**"
-      - ".github/workflows/ps2-bootstrap.yml"
+      - ".github/workflows/ps2-ci.yml"
   workflow_dispatch:
     inputs:
       build_o2:
@@ -44,7 +44,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  ee-bootstrap:
+  ps2-build-and-test:
+    name: Build and test PS2 port
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/ps2dev/ps2dev:latest
@@ -56,19 +57,32 @@ jobs:
         run: apk add --no-cache bash cmake g++ git ninja python3 zlib-dev
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Record current toolchain
         run: |
-          echo "PS2DEV=$PS2DEV"
-          echo "PS2SDK=$PS2SDK"
-          mips64r5900el-ps2-elf-gcc --version
-          mips64r5900el-ps2-elf-ld --version | head -n 1
-          g++ --version | head -n 1
-          cmake --version | head -n 1
-          ninja --version
-          python3 --version
-          sha256sum port/ps2/ps2dev-toolchain.cmake
+          {
+            echo "repository_sha=$GITHUB_SHA"
+            echo "repository_ref=$GITHUB_REF"
+            echo "default_profile=Og"
+            echo "optional_comparison_profile=O2"
+            echo "ps2dev=$PS2DEV"
+            echo "ps2sdk=$PS2SDK"
+            echo "gskit=$GSKIT"
+            printf "ps2sdk_commit="
+            git -C "$PS2SDK" rev-parse HEAD 2>/dev/null || echo "unavailable-in-container"
+            printf "gskit_commit="
+            git -C "$GSKIT" rev-parse HEAD 2>/dev/null || echo "unavailable-in-container"
+            mips64r5900el-ps2-elf-gcc --version | head -n 1
+            mips64r5900el-ps2-elf-ld --version | head -n 1
+            g++ --version | head -n 1
+            cmake --version | head -n 1
+            printf "ninja="
+            ninja --version
+            printf "python="
+            python3 --version
+            sha256sum port/ps2/ps2dev-toolchain.cmake
+          } | tee ps2-build-metadata.txt
 
       - name: Test backend-independent RDP TMEM model
         run: |
@@ -413,6 +427,8 @@ jobs:
           mips64r5900el-ps2-elf-objdump -d --disassemble=sqrtf \
             build-ps2/pd-ps2-game.elf | grep -E '\bsqrt\.s\b'
           test -z "$(mips64r5900el-ps2-elf-nm -u build-ps2/pd-ps2-game.elf)"
+          mips64r5900el-ps2-elf-size -A build-ps2/pd-ps2-game.elf > \
+            build-ps2/pd-ps2-game.sections.txt
 
       - name: Reject dynamic STL containers in PS2 runtime
         run: |
@@ -435,31 +451,37 @@ jobs:
           test -s build-ps2-o2/pd-ps2-game.map
           mips64r5900el-ps2-elf-size build-ps2-o2/pd-ps2-game.elf
           test -z "$(mips64r5900el-ps2-elf-nm -u build-ps2-o2/pd-ps2-game.elf)"
+          mips64r5900el-ps2-elf-size -A build-ps2-o2/pd-ps2-game.elf > \
+            build-ps2-o2/pd-ps2-game.sections.txt
 
       - name: Upload full game ELF
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pd-ps2-game
           path: |
             build-ps2/pd-ps2-game.elf
             build-ps2/pd-ps2-game.map
+            build-ps2/pd-ps2-game.sections.txt
+            ps2-build-metadata.txt
           if-no-files-found: error
           retention-days: 3
 
       - name: Upload optimized full game A/B
         if: github.event_name == 'workflow_dispatch' && inputs.build_o2
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pd-ps2-game-o2
           path: |
             build-ps2-o2/pd-ps2-game.elf
             build-ps2-o2/pd-ps2-game.map
+            build-ps2-o2/pd-ps2-game.sections.txt
+            ps2-build-metadata.txt
           if-no-files-found: error
           retention-days: 3
 
   prune-old-ps2-artifacts:
     name: Prune superseded PS2 artifacts
-    needs: ee-bootstrap
+    needs: ps2-build-and-test
     if: success() && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
