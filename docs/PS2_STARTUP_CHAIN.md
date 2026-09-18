@@ -1,36 +1,37 @@
 # PS2 startup and first-frame chain
 
-This document describes the `ps2` branch as audited on 2026-09-03. It follows
-the retail-console path from the PS2SDK entry point to the first normal 3D
-title frame. It is intended both as a maintenance map and as a checklist for
-hardware logs.
+Current frontier reviewed: 2026-09-18.
 
-Hardware testing on 2026-09-05 reached the Rare, Nintendo 64 and Perfect Dark
-logos after LEGAL. Controller detection and EEPROM creation have also been
-confirmed. Title rendering remains incorrect: fragmented logos and roughly one
-frame per four seconds were reported. Reaching these states does not establish
-renderer correctness or playable performance.
+This document maps the retail-console execution path from the PS2SDK entry point through the normal game frame. It also preserves dated bring-up observations because they explain several renderer and logging decisions.
 
-The next build bounds scratch channel copies to each tile's used rectangle. An
-experimental direct draw for constant alpha-trilerp endpoints was removed after
-the first hardware build containing it no longer showed the post-LEGAL logos.
-All factors therefore retain the known tiled graph until a controlled A/B build
-can validate a cheaper path independently. The cause of the fragmented logos is
-not yet proven.
+For the current project priorities and branch workflow, use [PS2_DEVELOPMENT.md](PS2_DEVELOPMENT.md). Dated build observations below are historical evidence unless explicitly labelled as the current implementation.
 
-Title tracing now flushes buffered text without closing and reopening `mass:`
-inside `lvTick` or model rendering. The first-frame completion checkpoint remains
-outside `mainTick`, after presentation. This follows the logger's own rule that
-durable USB filesystem checkpoints do not belong in frame-critical code and
-prevents tracing from becoming part of the renderer bottleneck.
+## Current hardware frontier
 
-Diagnostic lines `PS2 frame video` measure full `gfx_run` and `gfx_end_frame`
-durations. `PS2 frame runtime` measures scheduler-start plus mainTick, scheduler-end,
-and their total, excluding the outer frame gate. Rendering happens within mainTick,
-so these timings overlap and must not be added together. Each reports one sampled
-frame at roughly five-second intervals, not an average. Trilerp counters are
-cumulative and identify tiled triangles and submitted scratch tiles. Existing `ee_us`
-only measures vertex translation and cannot explain total frame time.
+Retail PlayStation 2 testing has progressed beyond the original first-frame bring-up. With synchronous file logging disabled, the normal game ELF has reached:
+
+```text
+LEGAL / Expansion Pak screen
+ -> Rare logo
+ -> Nintendo 64 logo
+ -> Perfect Dark logo
+ -> main menu
+ -> mission loading
+```
+
+Controller detection, EEPROM creation, GS presentation, VU1/PATH1 transport and PATH3 fallback have all been exercised on real hardware.
+
+Startup reachability is therefore no longer the primary blocker. The current work is renderer correctness and performance: missing/incorrect materials, unsupported combiner recipes, framebuffer effects, texture/filter fidelity, synchronization validation and display-list safety.
+
+The old roughly-one-frame-per-four-seconds title observation remains useful as historical performance evidence, not as the current canonical performance statement.
+
+## Logging and timing rules
+
+Durable USB filesystem logging must not run in frame-critical code. The file sink remains disabled in normal builds because synchronous `mass:` writes have already been shown to stall frame progress on tested hardware.
+
+Diagnostic lines `PS2 frame video` measure full `gfx_run` and `gfx_end_frame` durations. `PS2 frame runtime` measures scheduler-start plus `mainTick`, scheduler-end, and their total, excluding the outer frame gate. Rendering happens within `mainTick`, so these timings overlap and must not be added together.
+
+Renderer counters, explicit snapshots and the binary renderer trace are preferred for current graphics diagnosis. See [PS2_RENDERER_TRACE.md](PS2_RENDERER_TRACE.md).
 
 ## Execution overview
 
