@@ -1,4 +1,4 @@
-name: PS2 Bootstrap CI
+name: PS2 CI
 
 on:
   push:
