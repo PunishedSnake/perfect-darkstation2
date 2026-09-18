@@ -1,17 +1,16 @@
 # PS2 renderer correctness audit
 
-Date: 2026-09-16
+Date: 2026-09-16; frontier note updated 2026-09-18
 
-This audit follows the real-hardware results through the `material-alpha`
-diagnostic. It separates proven backend-contract defects from visual
-hypotheses so another broad diagnostic build cannot accidentally hide the
-fault it is meant to isolate.
+This audit follows the real-hardware results through the `material-alpha` diagnostic. It separates proven backend-contract defects from visual hypotheses so another broad diagnostic build cannot accidentally hide the fault it is meant to isolate.
+
+The normal retail-hardware path now reaches the main menu and mission loading. That progression proves runtime reachability, not renderer correctness. The open items below therefore remain relevant even when a scene advances successfully.
 
 ## Confirmed defects fixed by this pass
 
 ### Fast3D area origin versus GS area origin
 
-**POTWIERDZONE:** `GfxRenderingAPI::set_viewport` and `set_scissor` receive the
+**CONFIRMED:** `GfxRenderingAPI::set_viewport` and `set_scissor` receive the
 same bottom-left-origin areas consumed by OpenGL. The GS viewport translation,
 native `SCISSOR` register and tiled pass graphs use top-left screen space.
 
@@ -121,16 +120,13 @@ but that state can no longer leak into the next batch.
    known-good base tile to both combiner texture inputs. Real detail-texture
    mode still exposes two tiles. This deliberately removes incorrect adjacent
    mip sampling until a complete GS mip chain is implemented and validated.
-4. **HIPOTEZA DO TESTU:** the slight striping reported on recognizable
+4. **HYPOTHESIS TO TEST:** the slight striping reported on recognizable
    textures is filter fidelity rather than row pitch. The PS2 path maps N64
    filtered draws to GS bilinear sampling; it does not implement the portable
    three-point reconstruction. A point-versus-linear A/B should precede any
    coordinate bias.
-5. **HIPOTEZA DO TESTU:** remaining LEGAL glyph corruption may have been caused
-   by the partial viewport/scissor origin defect. If it survives this fix,
-   isolate texture-rectangle/copy-cycle coordinates separately from ordinary
-   triangle text.
-6. **POTWIERDZONE W KODZIE, SPRZĘT DO TESTU:** Fast3D performs face culling
+5. **HYPOTHESIS TO TEST IF STILL REPRODUCIBLE:** any remaining LEGAL or UI glyph corruption should be isolated as a texture-rectangle/copy-cycle problem rather than folded into ordinary triangle-material debugging. The viewport/scissor origin defect is already fixed, so a current reproduction must be captured before more text-specific changes are made.
+6. **CONFIRMED IN CODE, HARDWARE VALIDATION PENDING:** Fast3D performs face culling
    before the backend homogeneous clipper. The old path divided by every
    vertex `W` and tried to correct mixed-sign triangles by negating the
    screen-space winding. That is not equivalent to clipping the polygon and
