@@ -90,3 +90,39 @@ vanishes or a dark line appears and retain the corresponding view/photo.
 The raw GIF/VIF capture stores at most 65,536 qwords; the second frame dropped
 435,716 raw qwords, while retaining every high-level event and requested
 submission size. Interpret the stored command stream as incomplete.
+
+## Select captures at two viewing angles
+
+Two further retail captures from stage 38 use the Select trigger. Their frame
+numbers are 612 (`pdps2-gs-trace(2).bin`) and 474
+(`pdps2-gs-trace(3).bin`); the file suffix does not establish capture order.
+The recorder contains no screenshot, camera transform or model identifier, so
+neither file can yet be labeled as the visible or missing-model view.
+
+| Recorded frame | Captured duration | Input draws / triangles | Fully clipped draws | Unsupported draws / triangles | Alpha trilerp time | PATH3 requested qwords |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 612 | 241,635 us | 30 / 188 | 0 | 4 / 8 | 178,540 us | 695,735 |
+| 474 | 155,956 us | 23 / 157 | 0 | 3 / 5 | 112,601 us | 431,123 |
+
+Both captures retained all high-level events. The raw GIF qword recorder reached
+its 65,536-qword capacity, dropping 631,020 and 367,011 requested qwords
+respectively. Requested qword counts remain complete in the submit events.
+These are distinct frames with different geometry; their duration difference
+is not an isolated benchmark of a code change or an estimate of uninstrumented
+FPS. The alpha trilerp graph accounts for about 74% and 72% of their measured
+durations, respectively. Its PSMCT32-to-PSMT8 channel shuffle emits many
+small sprites per tile and still dominates PATH3 traffic after the PATH1
+handoff reduction.
+
+The unsupported shader in both views is
+`0x320d020d818a818a/0x0000000000000513`. Decode of the two-cycle shader ID
+shows the same RGB equation as supported
+`0x020d020d818a818a/0x0000000000000011`, but the second alpha cycle is
+`COMBINED.a * INPUT2.a + INPUT3.a`, whereas the supported recipe ends after
+the multiplication. `gfx_ps2.cpp` rejects unsupported shaders, so those 3 or
+4 draws do not reach GS. The trace cannot identify which visible surface they
+belong to. Neither new view has a fully clipped draw; this rules out wholesale
+clipping of a submitted draw in these frames, but does not rule out an object
+being culled earlier by the game, individual triangles being clipped, or a GS
+material/depth error. Preserve paired images and name the matching frame file
+before making a visual-causality claim.
