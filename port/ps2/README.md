@@ -1,5 +1,7 @@
 # Perfect DarkStation 2
 
+> **Developer entry point:** use [docs/PS2_DEVELOPMENT.md](../../docs/PS2_DEVELOPMENT.md) for the current branch model, test loop and active priorities, and [docs/README.md](../../docs/README.md) for the documentation map. This file remains the platform build/runtime reference.
+
 This directory owns the PlayStation 2 port on the `ps2` branch. The target is a
 retail PS2 using the current PS2DEV/PS2SDK toolchain. No ROM or extracted game
 asset is included in source control or CI artifacts.
