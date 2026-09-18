@@ -12,6 +12,13 @@ static struct Ps2GsPackedReg makeReg(uint64_t value, uint64_t reg)
 
 int main(void)
 {
+    assert(!ps2GsVu1BatchWorthwhile(0u));
+    assert(!ps2GsVu1BatchWorthwhile(3u));
+    assert(!ps2GsVu1BatchWorthwhile(9u));
+    assert(ps2GsVu1BatchWorthwhile(12u));
+    assert(ps2GsVu1BatchWorthwhile(
+        PS2_GS_VU1_MAX_TEXTURED_VERTICES));
+
     struct Ps2GsVu1BatchLayout layout = {};
     assert(!ps2GsVu1PlanAdBatch(0u, &layout));
     assert(!ps2GsVu1PlanAdBatch(256u, &layout));

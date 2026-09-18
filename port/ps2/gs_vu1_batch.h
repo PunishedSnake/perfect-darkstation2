@@ -24,6 +24,7 @@ extern "C" {
 #define PS2_GS_VU1_MAX_AD_REGISTERS 255u
 #define PS2_GS_VU1_MAX_COLOR_VERTICES 96u
 #define PS2_GS_VU1_MAX_TEXTURED_VERTICES 81u
+#define PS2_GS_VU1_MIN_BATCH_VERTICES 12u
 #define PS2_GS_VU1_DMA_CHAIN_OVERHEAD_QW 3u
 #define PS2_GS_VU1_DMA_SLOT_QW \
     (PS2_GS_VU1_BUFFER_QW + PS2_GS_VU1_DMA_CHAIN_OVERHEAD_QW)
@@ -33,6 +34,17 @@ struct Ps2GsVu1BatchLayout {
     uint32_t gif_packet_qw;
     uint32_t dma_chain_qw;
 };
+
+/*
+ * A VIF1 launch has a fixed chain, FLUSHA and PATH ownership cost.  Tiny
+ * batches are cheaper and substantially less serialising when appended to the
+ * already-open PATH3 arena.  Four triangles are the conservative crossover;
+ * larger geometry still uses the VU1 transport.
+ */
+static inline bool ps2GsVu1BatchWorthwhile(uint32_t vertex_count)
+{
+    return vertex_count >= PS2_GS_VU1_MIN_BATCH_VERTICES;
+}
 
 bool ps2GsVu1PlanAdBatch(uint32_t register_count,
     struct Ps2GsVu1BatchLayout *layout);

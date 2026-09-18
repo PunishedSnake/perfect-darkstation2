@@ -1999,7 +1999,8 @@ extern "C" void ps2GsCoreDrawColorTriangles(const struct Ps2GsColorVertex *verti
     const bool emit_prim = ps2GsStateShadowNeedsWrite(
         &s_state_shadow, PS2_GS_STATE_PRIM, prim);
 
-    if (ps2GsVu1QueueEnabled()) {
+    if (ps2GsVu1QueueEnabled() &&
+        ps2GsVu1BatchWorthwhile(vertex_count)) {
         const struct Ps2GsPackedReg prim_record = { prim, GS_PRIM };
         if (ps2GsVu1QueueSubmitColor(
                 &prim_record, emit_prim, vertices, vertex_count)) {
@@ -2095,7 +2096,8 @@ static bool ps2GsCoreDrawTexturedTrianglesInternal(GSTEXTURE *tex,
         (emit_tex0 ? 1u : 0u) +
         (emit_prim ? 1u : 0u);
 
-    if (ps2GsVu1QueueEnabled()) {
+    if (ps2GsVu1QueueEnabled() &&
+        ps2GsVu1BatchWorthwhile(vertex_count)) {
         struct Ps2GsPackedReg prefix[5];
         struct Ps2GsPackedReg suffix[1];
         uint32_t prefix_count = 0u;
