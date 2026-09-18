@@ -147,3 +147,36 @@ hardware the unsupported count for this shader should drop to zero and the
 couch should remain visible at the frame-474 camera angle. The extra additive
 draw is local to this material graph; PATH3 traffic and frame-tail latency must
 be re-profiled after correctness is confirmed.
+
+
+## Additive-alpha follow-up capture
+
+The next retail capture, frame 247 (`pdps2-gs-trace(4).bin`), was taken
+after commit `357c94c7` made
+`0x320d020d818a818a/0x00000513` a supported alpha-trilerp material.
+It contains 32 draws / 247 input triangles and **zero unsupported shader
+draws**. The formerly rejected shader now appears in four supported draws
+containing eight input triangles and 33 clipped output vertices. All four use
+the same 56x54 PSMT8 resource shape (handle 30 in this frame).
+
+This falsifies the earlier simple hypothesis that dropping this shader was by
+itself the cause of the missing couch. The material now survives planner and
+clip submission, while the paired television image still shows severe missing
+surface coverage. The next discriminator is therefore inside the tiled
+pass-graph/composite path rather than the unsupported-shader gate.
+
+The same capture reinforces the performance diagnosis but does not prove a
+runtime packet overflow. It recorded 723,512 requested PATH3 qwords, of which
+695,860 belong to `alpha_trilerp_modulate`. That pass graph consumed 184,401
+of the 245,670 captured microseconds. The raw trace qword storage again filled
+at 65,536 qwords and dropped 659,964 qwords; high-level events and requested
+submission counts remained intact.
+
+Starting with the next build, each alpha-trilerp draw records two lightweight
+high-level `pass_graph_draw` events only while Select capture is active. The
+decoder reports the screen-space bounding box, tile count, LOD-factor range,
+shade-alpha range, additive INPUT3 alpha range and pass-graph success bit.
+Ordinary gameplay frames do not perform this extra range scan. This should let
+a paired screenshot identify whether the couch/computer geometry reaches a
+valid tiled composite and whether its effective alpha inputs collapse near
+zero.

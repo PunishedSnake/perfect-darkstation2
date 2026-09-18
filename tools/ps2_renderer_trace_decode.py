@@ -22,7 +22,7 @@ EVENT_NAMES = {
     14: "path3_submit", 15: "core_summary", 16: "gs_register",
     17: "texture_resource", 18: "texture_clut",
     19: "render_target", 20: "vram", 21: "renderer_stats",
-    22: "frontend_state", 23: "warning",
+    22: "frontend_state", 23: "warning", 24: "pass_graph_draw",
 }
 
 GS_STATE_NAMES = [
@@ -91,6 +91,8 @@ def _analyze(events: list[dict]) -> dict:
         "draws": 0, "input_triangles": 0, "clipped_vertices": 0,
     })
     active_draw = None
+    pass_graph_draws = []
+    pending_pass_graph_draw = None
     gaps = []
 
     for previous, current in zip(events, events[1:]):
@@ -137,6 +139,49 @@ def _analyze(events: list[dict]) -> dict:
             if active_draw is not None:
                 active_draw[f"{path_name}_submits"] += 1
                 active_draw[f"{path_name}_requested_qwords"] += requested
+        elif event_type == "pass_graph_draw":
+            if event["flags"] & 0x0100:
+                if pending_pass_graph_draw is not None:
+                    ranges = _event_value(event, "c")
+                    pending_pass_graph_draw["shader"] = {
+                        "id0": event["a"],
+                        "id1": event["b"],
+                    }
+                    pending_pass_graph_draw["lod_min"] = ranges & 0xff
+                    pending_pass_graph_draw["lod_max"] = (ranges >> 8) & 0xff
+                    pending_pass_graph_draw["shade_alpha_min"] = (
+                        ranges >> 16) & 0xff
+                    pending_pass_graph_draw["shade_alpha_max"] = (
+                        ranges >> 24) & 0xff
+                    pending_pass_graph_draw["add_alpha_min"] = (
+                        ranges >> 32) & 0xff
+                    pending_pass_graph_draw["add_alpha_max"] = (
+                        ranges >> 40) & 0xff
+                    pending_pass_graph_draw["success"] = bool(
+                        (ranges >> 48) & 1)
+                    pending_pass_graph_draw["additive_alpha"] = bool(
+                        (ranges >> 49) & 1)
+                    pass_graph_draws.append(pending_pass_graph_draw)
+                    pending_pass_graph_draw = None
+            else:
+                bbox_min = _event_value(event, "c")
+                bbox_max = _event_value(event, "d")
+                def signed_fixed_16_4(value):
+                    value &= 0xffffffff
+                    if value & 0x80000000:
+                        value -= 0x100000000
+                    return value / 16.0
+                pending_pass_graph_draw = {
+                    "sequence": event["sequence"],
+                    "vertices": _event_value(event, "a"),
+                    "tiles": _event_value(event, "b"),
+                    "bbox": {
+                        "min_x": signed_fixed_16_4(bbox_min),
+                        "min_y": signed_fixed_16_4(bbox_min >> 32),
+                        "max_x": signed_fixed_16_4(bbox_max),
+                        "max_y": signed_fixed_16_4(bbox_max >> 32),
+                    },
+                }
         elif event_type == "draw_clipped" and active_draw is not None:
             clipped = _event_value(event, "c")
             draw_totals["clipped_vertices"] += clipped
@@ -175,6 +220,7 @@ def _analyze(events: list[dict]) -> dict:
             by_pass.items(),
             key=lambda item: item[1]["duration_microseconds"],
             reverse=True)),
+        "pass_graph_draws": pass_graph_draws,
         "largest_event_gaps": sorted(
             gaps, key=lambda gap: gap["microseconds"], reverse=True)[:10],
     }
@@ -343,6 +389,22 @@ def print_summary(trace: dict) -> None:
         print(f"  {shader}: draws={values['draws']} "
               f"triangles={values['input_triangles']} "
               f"clipped_vertices={values['clipped_vertices']}")
+    if analysis["pass_graph_draws"]:
+        print("alpha-trilerp pass-graph draws:")
+        for draw in analysis["pass_graph_draws"]:
+            bbox = draw["bbox"]
+            shader = draw.get("shader", {})
+            print(
+                f"  shader={shader.get('id0', '?')}/{shader.get('id1', '?')} "
+                f"vertices={draw['vertices']} tiles={draw['tiles']} "
+                f"bbox=({bbox['min_x']:.1f},{bbox['min_y']:.1f})-"
+                f"({bbox['max_x']:.1f},{bbox['max_y']:.1f}) "
+                f"lod={draw.get('lod_min', 0)}..{draw.get('lod_max', 0)} "
+                f"shade_a={draw.get('shade_alpha_min', 0)}.."
+                f"{draw.get('shade_alpha_max', 0)} "
+                f"add_a={draw.get('add_alpha_min', 0)}.."
+                f"{draw.get('add_alpha_max', 0)} "
+                f"success={draw.get('success', False)}")
     print("GS shadow:")
     for event in trace["event_stream"]:
         if event["type"] == "gs_register":

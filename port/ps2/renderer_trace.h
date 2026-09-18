@@ -36,6 +36,7 @@ enum Ps2RendererTraceEventType {
     PS2_TRACE_RENDERER_STATS,
     PS2_TRACE_FRONTEND_STATE,
     PS2_TRACE_WARNING,
+    PS2_TRACE_PASS_GRAPH_DRAW,
 };
 
 enum Ps2RendererTraceFlags {

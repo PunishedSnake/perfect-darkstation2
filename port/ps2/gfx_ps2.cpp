@@ -2889,7 +2889,46 @@ static bool ps2_draw_alpha_trilerp(uint32_t vertex_count)
         clip_x0, clip_y0, clip_x1 - clip_x0, clip_y1 - clip_y0,
     };
 
+    const bool trace_draw = ps2RendererTraceIsCapturing();
+    float trace_min_x = 0.0f;
+    float trace_min_y = 0.0f;
+    float trace_max_x = 0.0f;
+    float trace_max_y = 0.0f;
+    uint8_t trace_lod_min = 0xffu;
+    uint8_t trace_lod_max = 0u;
+    uint8_t trace_shade_a_min = 0xffu;
+    uint8_t trace_shade_a_max = 0u;
+    uint8_t trace_alpha_add_min = 0xffu;
+    uint8_t trace_alpha_add_max = 0u;
+    if (trace_draw && vertex_count != 0u) {
+        trace_min_x = trace_max_x = s_alpha_trilerp_vertices[0].x;
+        trace_min_y = trace_max_y = s_alpha_trilerp_vertices[0].y;
+        for (uint32_t i = 0u; i < vertex_count; ++i) {
+            const struct Ps2AlphaTrilerpVertex *vertex =
+                &s_alpha_trilerp_vertices[i];
+            if (vertex->x < trace_min_x) trace_min_x = vertex->x;
+            if (vertex->x > trace_max_x) trace_max_x = vertex->x;
+            if (vertex->y < trace_min_y) trace_min_y = vertex->y;
+            if (vertex->y > trace_max_y) trace_max_y = vertex->y;
+            if (vertex->lod < trace_lod_min) trace_lod_min = vertex->lod;
+            if (vertex->lod > trace_lod_max) trace_lod_max = vertex->lod;
+            if (vertex->shade_a < trace_shade_a_min) {
+                trace_shade_a_min = vertex->shade_a;
+            }
+            if (vertex->shade_a > trace_shade_a_max) {
+                trace_shade_a_max = vertex->shade_a;
+            }
+            if (vertex->alpha_add < trace_alpha_add_min) {
+                trace_alpha_add_min = vertex->alpha_add;
+            }
+            if (vertex->alpha_add > trace_alpha_add_max) {
+                trace_alpha_add_max = vertex->alpha_add;
+            }
+        }
+    }
+
     bool success = true;
+    uint32_t draw_tiles = 0u;
     for (uint32_t vertex = 0u; vertex < vertex_count && success; vertex += 3u) {
         struct Ps2GfxPassGraphTriangle geometry = {};
         for (uint32_t i = 0u; i < 3u; ++i) {
@@ -2904,6 +2943,7 @@ static bool ps2_draw_alpha_trilerp(uint32_t vertex_count)
         const uint32_t tile_count = tiles.columns * tiles.rows;
         ++tiled_triangles;
         submitted_tiles += tile_count;
+        draw_tiles += tile_count;
         for (uint32_t tile_index = 0u;
              tile_index < tile_count && success; ++tile_index) {
             struct Ps2GfxPassGraphRect tile = {};
@@ -2915,6 +2955,38 @@ static bool ps2_draw_alpha_trilerp(uint32_t vertex_count)
     }
 
     ps2_restore_alpha_trilerp_state();
+    if (trace_draw) {
+        const int32_t min_x_16 = (int32_t)(trace_min_x * 16.0f);
+        const int32_t min_y_16 = (int32_t)(trace_min_y * 16.0f);
+        const int32_t max_x_16 = (int32_t)(trace_max_x * 16.0f);
+        const int32_t max_y_16 = (int32_t)(trace_max_y * 16.0f);
+        const uint64_t bbox_min =
+            (uint32_t)min_x_16 | ((uint64_t)(uint32_t)min_y_16 << 32u);
+        const uint64_t bbox_max =
+            (uint32_t)max_x_16 | ((uint64_t)(uint32_t)max_y_16 << 32u);
+        const bool additive_alpha = s_shader->plan.alpha_recipe ==
+            PS2_ALPHA_TEX01_LERP_INPUT1_MUL_INPUT2_PLUS_INPUT3;
+        const uint64_t alpha_ranges =
+            (uint64_t)trace_lod_min |
+            ((uint64_t)trace_lod_max << 8u) |
+            ((uint64_t)trace_shade_a_min << 16u) |
+            ((uint64_t)trace_shade_a_max << 24u) |
+            ((uint64_t)trace_alpha_add_min << 32u) |
+            ((uint64_t)trace_alpha_add_max << 40u) |
+            ((uint64_t)(success ? 1u : 0u) << 48u) |
+            ((uint64_t)(additive_alpha ? 1u : 0u) << 49u);
+        const uint16_t trace_flags =
+            (uint16_t)PS2_TRACE_FLAG_TEXTURED |
+            (uint16_t)PS2_TRACE_FLAG_SUPPORTED |
+            (success ? 0u : (uint16_t)PS2_TRACE_FLAG_DROPPED);
+        ps2RendererTraceRecord(PS2_TRACE_PASS_GRAPH_DRAW, trace_flags,
+            vertex_count, draw_tiles, bbox_min, bbox_max);
+        ps2RendererTraceRecord(PS2_TRACE_PASS_GRAPH_DRAW,
+            (uint16_t)(trace_flags | 0x0100u),
+            s_shader->shader_id0, s_shader->shader_id1,
+            alpha_ranges, 0u);
+    }
+
     const uint64_t now = sysGetMicroseconds();
     if (now - report_time >= 5000000ULL) {
         sysLogPrintf(LOG_NOTE,
