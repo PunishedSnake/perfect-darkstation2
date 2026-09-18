@@ -32,6 +32,16 @@ on:
       - "tools/assetmgr/**"
       - ".github/workflows/ps2-bootstrap.yml"
   workflow_dispatch:
+    inputs:
+      build_o2:
+        description: "Build and publish the optimized O2 comparison ELF"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: ps2-ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   ee-bootstrap:
@@ -415,6 +425,7 @@ jobs:
           fi
 
       - name: Build optimized full game A/B
+        if: github.event_name == 'workflow_dispatch' && inputs.build_o2
         run: |
           cmake -S port/ps2 -B build-ps2-o2 -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/port/ps2/ps2dev-toolchain.cmake" \
@@ -425,14 +436,6 @@ jobs:
           mips64r5900el-ps2-elf-size build-ps2-o2/pd-ps2-game.elf
           test -z "$(mips64r5900el-ps2-elf-nm -u build-ps2-o2/pd-ps2-game.elf)"
 
-      - name: Upload bootstrap ELF
-        uses: actions/upload-artifact@v4
-        with:
-          name: pd-ps2-bootstrap
-          path: build-ps2/pd-ps2-bootstrap.elf
-          if-no-files-found: error
-          retention-days: 14
-
       - name: Upload full game ELF
         uses: actions/upload-artifact@v4
         with:
@@ -441,9 +444,10 @@ jobs:
             build-ps2/pd-ps2-game.elf
             build-ps2/pd-ps2-game.map
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 3
 
       - name: Upload optimized full game A/B
+        if: github.event_name == 'workflow_dispatch' && inputs.build_o2
         uses: actions/upload-artifact@v4
         with:
           name: pd-ps2-game-o2
@@ -451,4 +455,45 @@ jobs:
             build-ps2-o2/pd-ps2-game.elf
             build-ps2-o2/pd-ps2-game.map
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 3
+
+  prune-old-ps2-artifacts:
+    name: Prune superseded PS2 artifacts
+    needs: ee-bootstrap
+    if: success() && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+
+    steps:
+      - name: Keep only artifacts from the current successful PS2 run
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const currentRunId = Number(context.runId);
+            const artifacts = await github.paginate(
+              github.rest.actions.listArtifactsForRepo,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                per_page: 100,
+              },
+            );
+
+            const staleArtifacts = artifacts.filter((artifact) =>
+              !artifact.expired &&
+              artifact.workflow_run?.head_branch === 'ps2' &&
+              artifact.workflow_run?.id !== currentRunId
+            );
+
+            core.info(`Deleting ${staleArtifacts.length} superseded PS2 artifact(s).`);
+
+            for (const artifact of staleArtifacts) {
+              core.info(`Deleting ${artifact.name} (${artifact.id}).`);
+              await github.rest.actions.deleteArtifact({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                artifact_id: artifact.id,
+              });
+            }
