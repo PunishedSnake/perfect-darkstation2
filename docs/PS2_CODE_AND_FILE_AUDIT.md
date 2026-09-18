@@ -1,9 +1,12 @@
 # PS2 code and file audit
 
-Audit date: 2026-09-03; startup-chain review updated 2026-09-05. Scope: the
-complete repository with emphasis on the `ps2` branch build graph, runtime
-startup, renderer frontier, generated inputs and the local uncommitted files
-present during the audit.
+Audit date: 2026-09-03; startup-chain review updated 2026-09-05. Current-status note: 2026-09-18.
+
+This is a **dated structural audit**, not the canonical current project status. Use [PS2_DEVELOPMENT.md](PS2_DEVELOPMENT.md) for the active development frontier. The audit remains authoritative for the build/file ownership findings made at the time.
+
+Since this audit, retail hardware has progressed through the complete title-logo chain to the main menu and mission loading, so the old first-Rare-frame frontier is superseded.
+
+Scope: the complete repository with emphasis on the `ps2` branch build graph, runtime startup, renderer frontier, generated inputs and the local uncommitted files present during the audit.
 
 This audit intentionally distinguishes four different meanings of “unused”:
 
@@ -135,20 +138,21 @@ No tracked zero-byte file was found.
 - generated headers in `src/generated/<romid>` are build outputs with stable
   include paths. Edit their JSON inputs or generator tools, not the output.
 
-## Remaining risks, ordered by impact
+## Current follow-up risks
+
+The structural findings above still apply, but the runtime frontier has moved. As of 2026-09-18 the highest-value risks are:
 
 | Priority | Risk | Consequence | Next verification |
 | --- | --- | --- | --- |
-| P0 | First Rare-logo model/render path remains unconfirmed after loader and VI-frame ownership hardening. | Black screen, fatal hold or EE fault immediately after Expansion Pak notice. | Retail run and last durable `title:`/`VideoPS2:` checkpoint. |
-| P0 | Direct display-list writers can still overrun between phase checks. Central Vtx/Mtx/colour allocations and PS2 frame boundaries are now guarded. | A single oversized renderer may cross the Gfx boundary before the post-phase check catches it. | Add per-writer reservations or a trailing canary, then stress title and a gameplay stage. |
-| P0 | Remaining unsupported combiner recipes are dropped. The renderer now counts dropped batches/triangles and durably checkpoints the first recipe; active room-fog `CUSTOM_11/CUSTOM_06` is implemented exactly. | Valid runtime with invisible geometry/effects. | Use the next title/game hardware trace to rank nonzero recipe IDs, then implement them in frequency order. |
-| P1 | Offscreen framebuffer operations and copies are stubs. | Missing blur, surveillance, menu and other framebuffer effects. | Build an explicit render-target/copy path with VRAM budgeting. |
-| P1 | Preprocessors validate some sizes after writing. | Corrupt ROM or bad estimate can overrun temporary output. | Convert writers to bounded cursors. |
-| P1 | VIF1/VU1 and PATH3 synchronization is only partly proven. | Intermittent corruption or hangs that host tests cannot reproduce. | Long hardware stress run with DMA/VU checkpoints and canaries. |
-| P1 | Mipmaps are unsupported. | Incorrect distant texture sampling and visual instability. | Implement only after correctness traces establish real game demand. |
-| P2 | Shared 4 KiB `bootAllocateStack` compatibility stub. | Unsafe if the port begins using multiple real EE threads through that API. | Assert single-threaded use or allocate one aligned stack per owner. |
-| P2 | Text and blend fidelity is imperfect. | Distorted glyphs and inaccurate translucent effects. | Reference-image comparisons after first-frame stability. |
-| P2 | Linked C++ runtime carries exception/unwind sections despite source flags. | Avoidable ELF/RAM footprint. | Attribute the sections from the new linker map before changing libraries. |
+| P0 | Unsupported combiner recipes are counted and dropped. | Valid runtime with missing geometry/materials/effects. | Use retail-hardware renderer traces to rank recipe IDs and triangle counts, then implement them in frequency/impact order. |
+| P0 | Direct display-list writers can still outrun phase-level arena checks. | Corruption may occur before the post-phase guard notices an overrun. | Add per-writer reservations or a protected trailing region, then stress title, menu and gameplay scenes. |
+| P0 | Renderer correctness remains incomplete across textures, blend equations and effects. | Menu and mission scenes can progress while remaining visually incorrect. | Compare controlled hardware captures and update the correctness audit only from isolated deltas. |
+| P1 | Offscreen framebuffer operations and copies remain incomplete. | Blur, surveillance, menu and other framebuffer-driven effects can be missing. | Implement explicit render-target/copy ownership with VRAM budgeting. |
+| P1 | VIF1/VU1 and PATH3 synchronization is proven only for the exercised paths. | Intermittent corruption or stalls may remain in untested transitions. | Long hardware stress runs plus trace/counter validation around ownership handoffs. |
+| P1 | Some preprocessors still validate estimated output too late. | Corrupt or unexpected inputs could overrun temporary output. | Convert remaining writers to bounded cursors. |
+| P1 | Mipmaps are unsupported. | Distant/detail texture behaviour can differ from the original. | Implement only after traces establish actual demand and base-level correctness is stable. |
+| P2 | Shared `bootAllocateStack` remains a compatibility stub. | Unsafe if the port begins using multiple real EE threads through that API. | Assert single-threaded use or allocate per-owner stacks. |
+| P2 | Linked runtime/library footprint still contains cleanup opportunities. | Avoidable ELF/RAM/I-cache cost. | Attribute sections from current linker maps before removing or replacing libraries. |
 
 ## Safe cleanup policy
 
@@ -168,9 +172,6 @@ candidates.
 
 ## Audit conclusion
 
-The repository contained real correctness hazards, but no disposable tracked
-PS2 source set. The productive cleanup is therefore structural: prevent local
-outputs from entering commits, repair build ownership, retain a linker map and
-turn silent startup corruption into bounded failures with durable diagnostics.
-The next material milestone is a complete first Rare-logo frame on retail
-hardware, followed by Gfx/Vtx arena bounds and unsupported-combiner closure.
+The repository contained real correctness hazards, but no disposable tracked PS2 source set. The productive cleanup was structural: prevent local outputs from entering commits, repair build ownership, retain a linker map and turn silent startup corruption into bounded failures with durable diagnostics.
+
+That startup milestone has since been passed on retail hardware. Current development is centered on renderer correctness, trace-driven combiner/material closure, display-list safety and measured performance. See [PS2_DEVELOPMENT.md](PS2_DEVELOPMENT.md) for the live priority order.
