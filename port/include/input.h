@@ -234,6 +234,10 @@ void inputMouseEnable(s32 enabled);
 
 // call this every frame
 void inputUpdate(void);
+#ifdef PLATFORM_PS2
+/* Physical controller 1 Select state for the renderer capture trigger. */
+s32 inputPs2TraceSelectHeld(void);
+#endif
 
 // call this before configSave()
 void inputSaveBinds(void);

@@ -28,7 +28,6 @@
 #include "vi_unblack_timer.h"
 #ifdef PLATFORM_PS2
 #include "gfx_ps2_capture.h"
-#include "pad_ps2.h"
 #endif
 
 /*
@@ -303,9 +302,7 @@ void schedEndFrame(OSSched *sc)
 	 * physical held transition here rather than relying on pad->pressed.
 	 * VideoStartFrame has already begun this frame. Arm the next complete
 	 * renderer frame after the user presses Select. */
-	const struct Ps2PadState *pad = ps2PadGetState(0);
-	const bool select_held = pad && pad->connected &&
-		(pad->held & PS2_PAD_SELECT) != 0u;
+	const bool select_held = inputPs2TraceSelectHeld();
 	if (select_held && !select_was_held) {
 		gfxPs2RequestRendererCapture((u32)g_Vars.stagenum, 0u);
 	}

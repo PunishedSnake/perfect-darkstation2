@@ -224,6 +224,12 @@ void inputUpdate(void)
     }
 }
 
+s32 inputPs2TraceSelectHeld(void)
+{
+    const struct Ps2PadState *pad = ps2PadGetState(0);
+    return pad && pad->connected && (pad->held & PS2_PAD_SELECT) != 0u;
+}
+
 s32 inputReadController(s32 controller, OSContPad *pad)
 {
     if (!ps2InputControllerIndexValid(controller) || !pad) {
