@@ -27,7 +27,7 @@ before storing either area. Host tests cover full-screen and partial regions.
 
 ### Disabled depth testing still wrote Z
 
-**POTWIERDZONE:** the portable/OpenGL contract disables both depth comparison
+**CONFIRMED:** the portable/OpenGL contract disables both depth comparison
 and depth writes when `depth_test` is false. The PS2 backend previously kept
 `TEST.ZTE` enabled, selected `ZTST=ALWAYS`, and copied `depth_update` directly
 to `ZBUF.ZMSK`. A nominally depth-disabled draw could therefore overwrite Z
@@ -39,7 +39,7 @@ table is host-tested.
 
 ### Reversed-Z comparison and decal semantics
 
-**POTWIERDZONE:** the portable backend uses a strict depth comparison for
+**CONFIRMED:** the portable backend uses a strict depth comparison for
 ordinary opaque/translucent geometry, permits equal depth for primitive-depth
 and `ZMODE_INTER`, and applies polygon offset for `ZMODE_DEC`. The PS2 backend
 previously selected `GEQUAL` for every compared draw and ignored `zmode`.
@@ -68,7 +68,7 @@ the first material transition.
 
 ### Fog state survived only the first pass-graph batch
 
-**POTWIERDZONE:** tiled material graphs temporarily disable GS fog while
+**CONFIRMED:** tiled material graphs temporarily disable GS fog while
 reconstructing scalar/color workspaces. Their common restore previously left
 fog disabled. The vertex translator caches the fog colour across all batches
 of one draw call, so a draw larger than the translation buffer re-enabled fog
@@ -106,16 +106,16 @@ but that state can no longer leak into the next batch.
 
 ## Remaining correctness gaps
 
-1. **POTWIERDZONE:** `G_MODULATE_EXT` means `source * destination` in the
+1. **CONFIRMED:** `G_MODULATE_EXT` means `source * destination` in the
    portable backend. Complex PS2 pass graphs reject it explicitly, but the
    direct path currently enables ordinary source-over blending instead. An
    exact GS implementation needs owned framebuffer feedback or a material-
    specific channel graph. It must not be replaced with another approximate
    blend equation.
-2. **POTWIERDZONE:** unsupported combiner recipes are still dropped. Renderer
+2. **CONFIRMED:** unsupported combiner recipes are still dropped. Renderer
    visibility cannot be complete until the hardware log inventories the
    remaining recipe IDs and their triangle counts.
-3. **POTWIERDZONE:** mip generation/sampling and the portable framebuffer-copy
+3. **CONFIRMED:** mip generation/sampling and the portable framebuffer-copy
    API are not implemented. Ordinary mip LOD therefore currently feeds the
    known-good base tile to both combiner texture inputs. Real detail-texture
    mode still exposes two tiles. This deliberately removes incorrect adjacent
