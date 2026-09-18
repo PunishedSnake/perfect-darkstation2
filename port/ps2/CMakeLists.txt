@@ -382,6 +382,34 @@ target_link_directories(pd_ps2_bootstrap PRIVATE "${GSKIT}/lib")
 target_link_libraries(pd_ps2_bootstrap PRIVATE
   gskit dmakit padx z audsrv patches kernel)
 
+# Standalone hardware probe for the EE -> SIF/RPC -> audsrv -> SPU2 path.
+# It deliberately has no renderer or game-mixer dependency, so an audible
+# 440 Hz tone proves that silence in the full game originates above audsrv.
+add_executable(pd_ps2_audio_diag EXCLUDE_FROM_ALL
+  audio_diag.c
+  audio_ps2.c
+  audio_ps2_queue.c
+  system_ps2.c
+  "${PD_PS2_AUDSRV_IRX_C}"
+)
+target_include_directories(pd_ps2_audio_diag PRIVATE
+  ${PD_PS2_COMMON_INCLUDE_DIRS}
+  "${PD_PS2_GENERATED_DIR}"
+)
+target_compile_options(pd_ps2_audio_diag PRIVATE
+  ${PD_PS2_CORRECTNESS_FLAGS}
+)
+target_compile_definitions(pd_ps2_audio_diag PRIVATE
+  PLATFORM_PS2=1
+  PD_PS2_GIT_COMMIT="${PD_PS2_GIT_COMMIT}"
+)
+target_link_libraries(pd_ps2_audio_diag PRIVATE
+  audsrv patches kernel)
+set_target_properties(pd_ps2_audio_diag PROPERTIES
+  OUTPUT_NAME "pd-ps2-audio-diag"
+  SUFFIX ".elf"
+)
+
 if(PD_PS2_ALPHA_TRILERP_DIAGNOSTIC)
   set(PD_PS2_BOOTSTRAP_OUTPUT_NAME "pd-ps2-alpha-trilerp-diag")
 elseif(PD_PS2_VU1_COLOR_DIAGNOSTIC)
