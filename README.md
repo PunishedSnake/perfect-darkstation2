@@ -1,6 +1,6 @@
 # Perfect DarkStation 2
 
-[![PS2 Bootstrap CI](https://github.com/PunishedSnake/perfect-darkstation2/actions/workflows/ps2-bootstrap.yml/badge.svg?branch=ps2)](https://github.com/PunishedSnake/perfect-darkstation2/actions/workflows/ps2-bootstrap.yml)
+[![PS2 CI](https://github.com/PunishedSnake/perfect-darkstation2/actions/workflows/ps2-bootstrap.yml/badge.svg?branch=ps2)](https://github.com/PunishedSnake/perfect-darkstation2/actions/workflows/ps2-bootstrap.yml)
 
 **Perfect DarkStation 2** is an experimental open-source port of *Perfect Dark* to the original Sony PlayStation 2.
 
@@ -9,6 +9,17 @@ The project is based on the [Perfect Dark PC port](https://github.com/fgsfdsfgs/
 The goal is not emulation. The game is being brought up as a native PS2 ELF and is continuously tested on real retail hardware.
 
 > **Current state:** the port boots on real PlayStation 2 hardware, passes the legal screen and the Rare, Nintendo 64 and Perfect Dark logo sequence, reaches the main menu and can begin mission loading. It is **not yet a playable release**. Rendering correctness and performance remain the main blockers.
+
+## Development
+
+The authoritative development branch is `ps2`. New PS2 work and pull requests should target it; `port` is retained as the inherited portable/upstream baseline.
+
+Start with:
+
+- [PS2 development guide](docs/PS2_DEVELOPMENT.md)
+- [Contributing](CONTRIBUTING.md)
+- [Documentation index](docs/README.md)
+- [PS2 platform quick start](port/ps2/README.md)
 
 ## What works
 
