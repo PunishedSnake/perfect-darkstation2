@@ -15,6 +15,7 @@
 #include "gs_vu1_wait.h"
 #include "log_ps2.h"
 #include "ps2_renderer_stats.h"
+#include "renderer_trace.h"
 #include "system.h"
 
 #if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
@@ -408,6 +409,8 @@ extern "C" bool ps2GsVu1QueueSubmitAd(
     } else {
         ps2RendererStatsRecordVu1WaitElided();
     }
+    ps2RendererTraceRecordPath1Qwords(slot->ucab, layout.dma_chain_qw,
+        layout.register_count, record_count / 2u, false);
     dmaKit_send_chain_ucab(DMA_CHANNEL_VIF1, slot->ucab);
     s_pending = true;
     s_build_slot ^= 1u;
@@ -465,11 +468,12 @@ extern "C" bool ps2GsVu1QueueSubmitTexturedTransform(
     const uint32_t payload_dma_address =
         (uint32_t)(uintptr_t)slot->canonical +
         PS2_GS_VU1_DMA_CHAIN_OVERHEAD_QW * 16u;
+    struct Ps2GsVu1TransformLayout trace_layout;
     if (!ps2GsVu1BuildTexturedTransformStream(
             slot->ucab, PS2_GS_VU1_DMA_SLOT_QW,
             payload_dma_address, scale, offset, flags,
             prefix, prefix_count, vertices, vertex_count,
-            suffix, suffix_count, NULL)) {
+            suffix, suffix_count, &trace_layout)) {
         return false;
     }
 
@@ -480,6 +484,10 @@ extern "C" bool ps2GsVu1QueueSubmitTexturedTransform(
     } else {
         ps2RendererStatsRecordVu1WaitElided();
     }
+    ps2RendererTraceRecordPath1Qwords(slot->ucab,
+        trace_layout.dma_chain_qw,
+        prefix_count + suffix_count + vertex_count * 3u,
+        vertex_count, true);
     dmaKit_send_chain_ucab(DMA_CHANNEL_VIF1, slot->ucab);
     s_pending = true;
     s_build_slot ^= 1u;

@@ -102,6 +102,8 @@ int ps2GsCoreGetOffsetY(void);
 void ps2GsCoreBeginFrame(void);
 void ps2GsCoreSubmit(void);
 void ps2GsCorePresent(void);
+/* Append the authoritative software GS shadow and resident VRAM inventory. */
+void ps2GsCoreRecordTraceSnapshot(void);
 
 /* Render-target and GS state owned below the Fast3D compatibility adapter. */
 void ps2GsCoreClear(bool clear_color, bool clear_depth);

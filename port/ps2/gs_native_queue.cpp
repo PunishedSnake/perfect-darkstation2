@@ -10,6 +10,7 @@
 #include "gs_texture_convert.h"
 #include "gs_vu1_queue.h"
 #include "log_ps2.h"
+#include "renderer_trace.h"
 #include "system.h"
 
 #define PS2_GIF_PACKED 0u
@@ -515,6 +516,10 @@ static bool ps2GsNativeQueueSubmitInternal(bool *vif_idle_after_submit)
         *vif_idle_after_submit = true;
     }
 
+    /* Copy before handing ownership to DMAC. Diagnostic capture is one frame
+     * and intentionally pays this cost so the host decoder sees the exact
+     * ordered PATH3 stream consumed by GIF. */
+    ps2RendererTraceRecordPath3Qwords(arena->ucab, arena->used_qw);
     dmaKit_send_ucab(DMA_CHANNEL_GIF, arena->ucab, arena->used_qw);
     s_build_arena ^= 1u;
     return true;

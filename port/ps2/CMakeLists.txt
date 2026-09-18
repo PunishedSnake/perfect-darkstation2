@@ -323,6 +323,7 @@ add_executable(pd_ps2_bootstrap
   gs_vu1_wait.cpp
   gs_vram_allocator.cpp
   ps2_renderer_stats.cpp
+  renderer_trace.cpp
   gfx_api_scene.c
   gfx_frame_ps2.c
   gfx_run_tmem_ps2.cpp
@@ -624,6 +625,7 @@ set(PD_PS2_GAME_RENDERER_SOURCES
   gs_vu1_wait.cpp
   gs_vram_allocator.cpp
   ps2_renderer_stats.cpp
+  renderer_trace.cpp
   gfx_frame_ps2.c
   gfx_run_tmem_ps2.cpp
   gfx_ps2.cpp

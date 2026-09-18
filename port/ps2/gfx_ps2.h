@@ -10,6 +10,9 @@ extern "C" {
 /* Fast3D backend consumes the already-initialised project GS core. */
 extern struct GfxRenderingAPI gfx_ps2_api;
 
+/* One-frame renderer/GS black-box capture, written beside the running ELF. */
+void gfxPs2RequestRendererCapture(uint32_t stage, uint32_t warmup_frames);
+
 struct GfxRdpTmemLiveTextureView;
 
 /* Backend-private cache variant for a physically expanded mirror period. */

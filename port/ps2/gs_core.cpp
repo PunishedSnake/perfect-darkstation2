@@ -19,6 +19,7 @@
 #include "gs_vram_allocator.h"
 #include "log_ps2.h"
 #include "ps2_renderer_stats.h"
+#include "renderer_trace.h"
 #include "system.h"
 
 #define PS2_GS_MAX_TEXTURES 64
@@ -804,6 +805,95 @@ extern "C" int ps2GsCoreGetOffsetX(void)
 extern "C" int ps2GsCoreGetOffsetY(void)
 {
     return s_gs ? s_gs->OffsetY : 0;
+}
+
+static uint64_t ps2GsCoreTracePair(uint32_t low, uint32_t high)
+{
+    return (uint64_t)low | ((uint64_t)high << 32u);
+}
+
+extern "C" void ps2GsCoreRecordTraceSnapshot(void)
+{
+    if (!s_gs || !ps2RendererTraceIsCapturing()) {
+        return;
+    }
+
+    ps2RendererTraceRecord(PS2_TRACE_CORE_SUMMARY, 0u,
+        ps2GsCoreTracePair((uint32_t)s_gs->Width, (uint32_t)s_gs->Height),
+        ps2GsCoreTracePair((uint32_t)s_gs->Mode, (uint32_t)s_gs->PSM),
+        ps2GsCoreTracePair((uint32_t)s_gs->PSMZ,
+            (uint32_t)s_gs->ActiveBuffer),
+        ps2GsCoreTracePair(s_gs->ScreenBuffer[0], s_gs->ScreenBuffer[1]));
+    ps2RendererTraceRecord(PS2_TRACE_CORE_SUMMARY, 1u,
+        ps2GsCoreTracePair(s_gs->ZBuffer, s_gs->CurrentPointer),
+        ps2GsCoreTracePair(s_active_render_target,
+            s_frame_building ? 1u : 0u),
+        ps2GsCoreTracePair(s_depth_update ? 1u : 0u,
+            (uint32_t)s_color_write_channels),
+        ps2GsCoreTracePair(s_alpha_write ? 1u : 0u,
+            s_framebuffer_alpha_force ? 1u : 0u));
+    ps2RendererTraceRecord(PS2_TRACE_CORE_SUMMARY, 2u,
+        ps2GsCoreTracePair(s_texture_alpha ? 1u : 0u,
+            s_retired_vram_count),
+        ps2GsCoreTracePair(s_loaded_clut_vram,
+            (uint32_t)s_loaded_clut_psm),
+        ps2GsCoreTracePair(s_scissor_x0, s_scissor_x1),
+        ps2GsCoreTracePair(s_scissor_y0, s_scissor_y1));
+
+    for (uint32_t slot = 0u; slot < PS2_GS_STATE_COUNT; ++slot) {
+        ps2RendererTraceRecord(PS2_TRACE_GS_REGISTER,
+            (s_state_shadow.valid_mask & (1u << slot)) != 0u ? 1u : 0u,
+            slot, s_state_shadow.value[slot],
+            s_state_shadow.emitted_writes,
+            s_state_shadow.suppressed_writes);
+    }
+
+    struct Ps2GsVramStats vram;
+    ps2GsVramAllocatorGetStats(&s_vram_allocator, &vram);
+    ps2RendererTraceRecord(PS2_TRACE_VRAM, 0u,
+        ps2GsCoreTracePair(vram.pool_bytes, vram.free_bytes),
+        ps2GsCoreTracePair(vram.largest_free_bytes, vram.free_ranges),
+        ps2GsCoreTracePair(s_vram_allocator.begin, s_vram_allocator.end),
+        s_retired_vram_count);
+
+    for (uint32_t i = 0u; i < PS2_GS_MAX_TEXTURES; ++i) {
+        const struct Ps2GsTextureSlot *texture = &s_textures[i];
+        if (!texture->used) {
+            continue;
+        }
+        const uint16_t flags =
+            (texture->resident ? 1u : 0u) |
+            (texture->uploaded ? 2u : 0u);
+        ps2RendererTraceRecord(PS2_TRACE_TEXTURE_RESOURCE, flags,
+            i + 1u,
+            ps2GsCoreTracePair((uint32_t)texture->texture.Width,
+                (uint32_t)texture->texture.Height),
+            ps2GsCoreTracePair((uint32_t)texture->texture.PSM,
+                (uint32_t)texture->texture.TBW),
+            ps2GsCoreTracePair(texture->texture.Vram,
+                texture->vram_bytes));
+        ps2RendererTraceRecord(PS2_TRACE_TEXTURE_CLUT, flags,
+            i + 1u,
+            ps2GsCoreTracePair(texture->texture.VramClut,
+                texture->clut_vram_bytes),
+            ps2GsCoreTracePair((uint32_t)texture->texture.ClutPSM,
+                (uint32_t)texture->texture.ClutStorageMode),
+            (uint32_t)texture->texture.Filter);
+    }
+
+    for (uint32_t i = 0u; i < PS2_GS_MAX_RENDER_TARGETS; ++i) {
+        const struct Ps2GsRenderTargetSlot *target = &s_render_targets[i];
+        if (!target->used) {
+            continue;
+        }
+        const uint16_t flags =
+            (target->has_contents ? 1u : 0u) |
+            (target->texture_cache_dirty ? 2u : 0u);
+        ps2RendererTraceRecord(PS2_TRACE_RENDER_TARGET, flags,
+            i + 1u, target->vram,
+            ps2GsCoreTracePair(target->layout.width, target->layout.height),
+            ps2GsCoreTracePair(target->layout.fbw, target->layout.bytes));
+    }
 }
 
 extern "C" void ps2GsCoreBeginFrame(void)

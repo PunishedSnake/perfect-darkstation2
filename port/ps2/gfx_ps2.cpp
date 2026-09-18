@@ -15,6 +15,7 @@
 #include "gs_vu1_transform.h"
 #include "log_ps2.h"
 #include "ps2_renderer_stats.h"
+#include "renderer_trace.h"
 #include "rdp_tmem_live.h"
 #include "system.h"
 
@@ -368,9 +369,28 @@ static void ps2_unload_shader(struct ShaderProgram *old_prg)
     (void)old_prg;
 }
 
+static void ps2_trace_shader(const struct ShaderProgram *prg)
+{
+    if (prg) {
+        const uint16_t trace_flags =
+            (prg->plan.supported ?
+                (uint16_t)PS2_TRACE_FLAG_SUPPORTED : 0u) |
+            (prg->plan.textured ?
+                (uint16_t)PS2_TRACE_FLAG_TEXTURED : 0u);
+        const uint64_t recipes =
+            (uint64_t)(uint32_t)prg->plan.color_recipe |
+            ((uint64_t)(uint32_t)prg->plan.alpha_recipe << 16u) |
+            ((uint64_t)(uint32_t)prg->plan.pass_graph << 32u);
+        ps2RendererTraceRecord(PS2_TRACE_SHADER, trace_flags,
+            prg->shader_id0, prg->shader_id1, recipes,
+            (uint64_t)prg->features.num_inputs);
+    }
+}
+
 static void ps2_load_shader(struct ShaderProgram *new_prg)
 {
     s_shader = new_prg;
+    ps2_trace_shader(new_prg);
 
     const bool threshold = new_prg && new_prg->plan.supported &&
                            new_prg->features.opt_alpha_threshold;
@@ -542,6 +562,19 @@ static void ps2_select_texture(int tile, uint32_t texture_id, bool linear_filter
             s_sampler_cms[tile], s_sampler_cmt[tile]);
     }
     ps2GsCoreSetTextureFilter(handle, linear_filter);
+    ps2RendererTraceRecord(PS2_TRACE_TEXTURE_SELECT,
+        linear_filter ? 1u : 0u, (uint32_t)tile, texture_id,
+        s_sampler_cms[tile], s_sampler_cmt[tile]);
+}
+
+static uint64_t ps2_trace_hash(const void *data, size_t size)
+{
+    const uint8_t *bytes = (const uint8_t *)data;
+    uint64_t hash = UINT64_C(1469598103934665603);
+    for (size_t i = 0u; i < size; ++i) {
+        hash = (hash ^ bytes[i]) * UINT64_C(1099511628211);
+    }
+    return hash;
 }
 
 static void ps2_upload_texture(const uint8_t *rgba32_buf, uint32_t width, uint32_t height, bool gen_mipmaps)
@@ -562,6 +595,13 @@ static void ps2_upload_texture(const uint8_t *rgba32_buf, uint32_t width, uint32
      */
     const Ps2GsTextureHandle handle =
         s_selected_texture[s_active_texture_tile];
+    if (ps2RendererTraceIsCapturing()) {
+        const size_t bytes = (size_t)width * height * 4u;
+        ps2RendererTraceRecord(PS2_TRACE_TEXTURE_UPLOAD,
+            gen_mipmaps ? 1u : 0u, handle,
+            ((uint64_t)width << 32u) | height, bytes,
+            rgba32_buf ? ps2_trace_hash(rgba32_buf, bytes) : 0u);
+    }
     bool mirror_s;
     bool mirror_t;
     ps2_effective_upload_mirror(width, height, &mirror_s, &mirror_t);
@@ -605,6 +645,15 @@ extern "C" bool gfxPs2UploadTmemTexture(
     const uint32_t height = view->size_bytes / view->line_size_bytes;
     const Ps2GsTextureHandle handle =
         s_selected_texture[s_active_texture_tile];
+    if (ps2RendererTraceIsCapturing()) {
+        const uint16_t trace_flags =
+            (uint16_t)((format & 0xfu) | ((size & 0xfu) << 4u));
+        ps2RendererTraceRecord(PS2_TRACE_TEXTURE_UPLOAD, trace_flags,
+            handle,
+            ((uint64_t)view->line_size_bytes << 32u) | height,
+            ((uint64_t)view->size_bytes << 32u) | view->palette_count,
+            ps2_trace_hash(view->texels, view->size_bytes));
+    }
 
     if (format == PS2_GFX_N64_FMT_RGBA &&
         size == PS2_GFX_N64_SIZ_32B &&
@@ -815,6 +864,9 @@ static void ps2_set_sampler_parameters(int sampler, bool linear_filter, uint32_t
     }
     ps2GsCoreSetTextureFilter(s_selected_texture[sampler], linear_filter);
     ps2GsCoreSetTextureClamp(cms, cmt);
+    ps2RendererTraceRecord(PS2_TRACE_SAMPLER,
+        (linear_filter ? 1u : 0u) | (mipmaps ? 2u : 0u),
+        sampler, s_selected_texture[sampler], cms, cmt);
 
     if (mipmaps && !s_warned_mipmap) {
         sysLogPrintf(LOG_WARNING, "GfxPS2 mipmap sampling requested but not implemented");
@@ -850,6 +902,11 @@ static void ps2_set_depth_mode(bool depth_test, bool depth_update, bool depth_co
     ps2GsCoreSetDepthMode(
         depth_test, depth_update, depth_compare, compare_equal);
 #endif
+    ps2RendererTraceRecord(PS2_TRACE_DEPTH,
+        (depth_test ? 1u : 0u) | (depth_update ? 2u : 0u) |
+            (depth_compare ? 4u : 0u) | (depth_source_prim ? 8u : 0u),
+        zmode, s_depth_compare_equal ? 1u : 0u,
+        s_depth_decal ? 1u : 0u, 0u);
 }
 
 static void ps2_set_depth_range(float znear, float zfar)
@@ -865,6 +922,9 @@ static void ps2_set_viewport(int x, int y, int width, int height)
         ps2GsCoreGetHeight(), y, height);
     s_viewport.width = width;
     s_viewport.height = height;
+    ps2RendererTraceRecord(PS2_TRACE_VIEWPORT, 0u,
+        (uint32_t)x, (uint32_t)s_viewport.y,
+        (uint32_t)width, (uint32_t)height);
 }
 
 static void ps2_set_scissor(int x, int y, int width, int height)
@@ -876,6 +936,9 @@ static void ps2_set_scissor(int x, int y, int width, int height)
     s_scissor.width = width;
     s_scissor.height = height;
     ps2GsCoreSetScissor(x, top_y, width, height);
+    ps2RendererTraceRecord(PS2_TRACE_SCISSOR, 0u,
+        (uint32_t)x, (uint32_t)top_y,
+        (uint32_t)width, (uint32_t)height);
 }
 
 static void ps2_set_use_alpha(bool use_alpha, bool modulate)
@@ -883,6 +946,9 @@ static void ps2_set_use_alpha(bool use_alpha, bool modulate)
     s_alpha_blend = use_alpha;
     s_modulate = modulate;
     ps2GsCoreSetAlphaBlend(use_alpha);
+    ps2RendererTraceRecord(PS2_TRACE_ALPHA,
+        (use_alpha ? 1u : 0u) | (modulate ? 2u : 0u),
+        use_alpha ? 1u : 0u, modulate ? 1u : 0u, 0u, 0u);
 }
 
 static float ps2_clampf(float v, float lo, float hi)
@@ -3515,12 +3581,17 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len,
 
     const size_t stride = ps2_vbo_stride(s_shader);
     const size_t source_vertices = buf_vbo_num_tris * 3u;
+    ps2RendererTraceRecord(PS2_TRACE_DRAW_INPUT,
+        s_shader->plan.textured ?
+            (uint16_t)PS2_TRACE_FLAG_TEXTURED : 0u,
+        buf_vbo_num_tris, source_vertices, stride, buf_vbo_len);
     if (stride < 4u || stride > PS2_GS_CLIP_MAX_VERTEX_FLOATS ||
         buf_vbo_len < source_vertices * stride) {
         return;
     }
 
     size_t buffered_vertices = 0u;
+    size_t clipped_vertices_total = 0u;
     for (size_t triangle = 0u; triangle < buf_vbo_num_tris; ++triangle) {
         if (PS2_GFX_TRANSLATE_VERTS - buffered_vertices <
             PS2_GS_CLIP_MAX_OUTPUT_VERTICES) {
@@ -3539,12 +3610,17 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len,
             continue;
         }
         buffered_vertices += clipped_vertices;
+        clipped_vertices_total += clipped_vertices;
     }
 
     if (buffered_vertices != 0u) {
         ps2_draw_triangles_unclipped(s_clipped_vbo,
             buffered_vertices * stride, buffered_vertices / 3u);
     }
+    ps2RendererTraceRecord(PS2_TRACE_DRAW_CLIPPED,
+        s_shader->plan.textured ?
+            (uint16_t)PS2_TRACE_FLAG_TEXTURED : 0u,
+        buf_vbo_num_tris, source_vertices, clipped_vertices_total, 0u);
 }
 
 static void ps2_reset_viewport(void)
@@ -3632,6 +3708,8 @@ static void ps2_on_resize(void)
 
 static void ps2_start_frame(void)
 {
+    ps2RendererTraceBeginFrame();
+    ps2_trace_shader(s_shader);
     ps2RendererStatsBeginFrame();
     ps2GsCoreBeginFrame();
 }
@@ -3694,6 +3772,42 @@ static void ps2_end_frame(void)
 {
     ps2GsCoreSubmit();
 
+    if (ps2RendererTraceIsCapturing()) {
+        const uint64_t viewport_xy =
+            (uint32_t)s_viewport.x |
+            ((uint64_t)(uint32_t)s_viewport.y << 32u);
+        const uint64_t viewport_wh =
+            (uint32_t)s_viewport.width |
+            ((uint64_t)(uint32_t)s_viewport.height << 32u);
+        const uint64_t textures =
+            (uint32_t)s_selected_texture[0] |
+            ((uint64_t)(uint32_t)s_selected_texture[1] << 32u);
+        const uint16_t state_flags =
+            (s_depth_test ? 1u : 0u) |
+            (s_depth_update ? 2u : 0u) |
+            (s_depth_compare ? 4u : 0u) |
+            (s_alpha_blend ? 8u : 0u) |
+            (s_modulate ? 16u : 0u);
+        ps2RendererTraceRecord(PS2_TRACE_FRONTEND_STATE, state_flags,
+            viewport_xy, viewport_wh, textures,
+            (uint64_t)(uint32_t)s_active_texture_tile);
+        ps2GsCoreRecordTraceSnapshot();
+
+        struct Ps2RendererStats trace_stats;
+        ps2RendererStatsGet(&trace_stats);
+        ps2RendererTraceRecord(PS2_TRACE_RENDERER_STATS, 0u,
+            trace_stats.translation_batches,
+            trace_stats.translated_vertices,
+            trace_stats.path1_vertices,
+            trace_stats.path3_vertices);
+        ps2RendererTraceRecord(PS2_TRACE_RENDERER_STATS, 1u,
+            trace_stats.unsupported_shader_batches,
+            trace_stats.unsupported_shader_triangles,
+            trace_stats.vu1_rejected_batches,
+            trace_stats.vu1_wait_microseconds);
+        ps2RendererTraceEndFrameAndWrite();
+    }
+
     /* Filesystem close/reopen stays outside primitive submission hot paths. */
     if (s_pending_unsupported_shader_checkpoint) {
         ps2LogCheckpointForce();
@@ -3708,6 +3822,12 @@ static void ps2_end_frame(void)
     if (early_snapshot || stats.frames % 300u == 0u) {
         ps2_log_renderer_stats(stats, early_snapshot);
     }
+}
+
+extern "C" void gfxPs2RequestRendererCapture(
+    uint32_t stage, uint32_t warmup_frames)
+{
+    ps2RendererTraceRequest(stage, warmup_frames);
 }
 
 static void ps2_finish_render(void)
