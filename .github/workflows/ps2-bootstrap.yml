@@ -368,6 +368,13 @@ jobs:
       - name: Build full Perfect Dark PS2 runtime
         run: cmake --build build-ps2 --target pd_ps2_game -j2 --verbose
 
+      - name: Build standalone SPU2 audio diagnostic
+        run: |
+          cmake --build build-ps2 --target pd_ps2_audio_diag -j2 --verbose
+          test -f build-ps2/pd-ps2-audio-diag.elf
+          mips64r5900el-ps2-elf-size build-ps2/pd-ps2-audio-diag.elf
+          test -z "$(mips64r5900el-ps2-elf-nm -u build-ps2/pd-ps2-audio-diag.elf)"
+
       - name: Inspect EE ELF
         run: |
           test -f build-ps2/pd-ps2-bootstrap.elf
@@ -582,6 +589,14 @@ jobs:
           path: |
             build-ps2/pd-ps2-game.elf
             build-ps2/pd-ps2-game.map
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload standalone SPU2 audio diagnostic
+        uses: actions/upload-artifact@v4
+        with:
+          name: pd-ps2-audio-diag
+          path: build-ps2/pd-ps2-audio-diag.elf
           if-no-files-found: error
           retention-days: 14
 
