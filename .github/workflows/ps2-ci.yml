@@ -368,7 +368,15 @@ jobs:
           python3 tools/ps2_renderer_trace_decode.py \
             /tmp/pdps2-gs-trace.bin \
             --json /tmp/pdps2-gs-trace.json
-          test -s /tmp/pdps2-gs-trace.json
+          python3 - <<'PY'
+          import json
+
+          with open("/tmp/pdps2-gs-trace.json", encoding="utf-8") as stream:
+              trace = json.load(stream)
+          assert trace["analysis"]["paths"]["path1"]["submits"] == 1
+          assert trace["analysis"]["paths"]["path3"]["submits"] == 1
+          assert "by_pass_graph" in trace["analysis"]
+          PY
 
       - name: Test VU1 fog diagnostic VBO
         run: |

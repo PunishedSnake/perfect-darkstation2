@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import collections
 import json
 import struct
 import sys
@@ -42,9 +43,117 @@ GS_REGISTER_NAMES = {
     0x51: "TRXPOS", 0x52: "TRXREG", 0x53: "TRXDIR", 0x54: "HWREG",
 }
 
+PASS_GRAPH_NAMES = {
+    0: "direct",
+    1: "opaque_trilerp",
+    2: "opaque_input1_tex0_lerp",
+    3: "independent_tex0_alpha",
+    4: "trilerp_independent_alpha",
+    5: "alpha_trilerp_modulate",
+    6: "tex0_factor_lerp",
+    7: "tex1_alpha_factor_lerp",
+    8: "interference",
+}
+
 
 def _hex(value: int) -> str:
     return f"0x{value:016x}"
+
+
+def _event_value(event: dict, key: str) -> int:
+    return int(event[key], 16)
+
+
+def _analyze(events: list[dict]) -> dict:
+    paths = {
+        "path1": {"submits": 0, "requested_qwords": 0,
+                  "stored_qwords": 0, "uncaptured_submits": 0},
+        "path3": {"submits": 0, "requested_qwords": 0,
+                  "stored_qwords": 0, "uncaptured_submits": 0},
+    }
+    draw_totals = {
+        "input_draws": 0,
+        "input_triangles": 0,
+        "input_vertices": 0,
+        "clipped_vertices": 0,
+    }
+    by_pass = collections.defaultdict(lambda: {
+        "draws": 0, "input_triangles": 0, "clipped_vertices": 0,
+        "duration_microseconds": 0,
+        "path1_submits": 0, "path1_requested_qwords": 0,
+        "path3_submits": 0, "path3_requested_qwords": 0,
+    })
+    current_pass = 0
+    active_draw = None
+    gaps = []
+
+    for previous, current in zip(events, events[1:]):
+        delta = current["microseconds"] - previous["microseconds"]
+        gaps.append({
+            "microseconds": delta,
+            "after_sequence": previous["sequence"],
+            "after_type": previous["type"],
+            "before_type": current["type"],
+        })
+
+    for event in events:
+        event_type = event["type"]
+        if event_type == "shader":
+            current_pass = _event_value(event, "c") >> 32
+        elif event_type == "draw_input":
+            active_draw = {
+                "pass_graph": current_pass,
+                "start": event["microseconds"],
+                "triangles": _event_value(event, "a"),
+                "path1_submits": 0,
+                "path1_requested_qwords": 0,
+                "path3_submits": 0,
+                "path3_requested_qwords": 0,
+            }
+            draw_totals["input_draws"] += 1
+            draw_totals["input_triangles"] += active_draw["triangles"]
+            draw_totals["input_vertices"] += _event_value(event, "b")
+        elif event_type in ("path1_submit", "path3_submit"):
+            path_name = "path1" if event_type == "path1_submit" else "path3"
+            requested = _event_value(event, "c")
+            stored = _event_value(event, "b")
+            paths[path_name]["submits"] += 1
+            paths[path_name]["requested_qwords"] += requested
+            paths[path_name]["stored_qwords"] += stored
+            if stored == 0:
+                paths[path_name]["uncaptured_submits"] += 1
+            if active_draw is not None:
+                active_draw[f"{path_name}_submits"] += 1
+                active_draw[f"{path_name}_requested_qwords"] += requested
+        elif event_type == "draw_clipped" and active_draw is not None:
+            clipped = _event_value(event, "c")
+            draw_totals["clipped_vertices"] += clipped
+            pass_name = PASS_GRAPH_NAMES.get(
+                active_draw["pass_graph"],
+                f"unknown_{active_draw['pass_graph']}")
+            aggregate = by_pass[pass_name]
+            aggregate["draws"] += 1
+            aggregate["input_triangles"] += active_draw["triangles"]
+            aggregate["clipped_vertices"] += clipped
+            aggregate["duration_microseconds"] += max(
+                0, event["microseconds"] - active_draw["start"])
+            for path_name in ("path1", "path3"):
+                aggregate[f"{path_name}_submits"] += active_draw[
+                    f"{path_name}_submits"]
+                aggregate[f"{path_name}_requested_qwords"] += active_draw[
+                    f"{path_name}_requested_qwords"]
+            active_draw = None
+
+    return {
+        "paths": paths,
+        "draws": draw_totals,
+        "by_pass_graph": dict(sorted(
+            by_pass.items(),
+            key=lambda item: item[1]["duration_microseconds"],
+            reverse=True)),
+        "largest_event_gaps": sorted(
+            gaps, key=lambda gap: gap["microseconds"], reverse=True)[:10],
+    }
 
 
 def decode(path: Path) -> dict:
@@ -167,6 +276,7 @@ def decode(path: Path) -> dict:
         "event_stream": events,
         "path3_submissions": submissions,
         "path1_submissions": path1_submissions,
+        "analysis": _analyze(events),
         "reserved": reserved,
     }
 
@@ -185,6 +295,22 @@ def print_summary(trace: dict) -> None:
     print("event counts:")
     for name in sorted(counts):
         print(f"  {name}: {counts[name]}")
+    analysis = trace["analysis"]
+    print("pipeline traffic:")
+    for path_name in ("path1", "path3"):
+        path = analysis["paths"][path_name]
+        print(f"  {path_name.upper()}: submits={path['submits']} "
+              f"requested_qwords={path['requested_qwords']} "
+              f"stored_qwords={path['stored_qwords']} "
+              f"uncaptured_submits={path['uncaptured_submits']}")
+    print("draw cost by pass graph:")
+    for name, values in analysis["by_pass_graph"].items():
+        print(f"  {name}: draws={values['draws']} "
+              f"triangles={values['input_triangles']} "
+              f"clipped_vertices={values['clipped_vertices']} "
+              f"duration={values['duration_microseconds']} us "
+              f"PATH1={values['path1_submits']} "
+              f"PATH3={values['path3_submits']}")
     print("GS shadow:")
     for event in trace["event_stream"]:
         if event["type"] == "gs_register":

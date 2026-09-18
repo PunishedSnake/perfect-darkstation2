@@ -41,6 +41,30 @@ python3 tools/ps2_renderer_trace_decode.py pdps2-gs-trace.bin \
   --json pdps2-gs-trace.json
 ```
 
-The console summary is useful for a quick validity check. The JSON preserves
-the complete event stream and decoded PATH3 A+D register writes for analysis or
-comparison between two hardware captures.
+The console summary reports event counts, PATH1/PATH3 submission and qword
+traffic, draw cost grouped by pass graph, and the final GS shadow. The JSON
+preserves those aggregates together with the complete event stream and decoded
+PATH3 A+D register writes for analysis or comparison between two hardware
+captures.
+
+## First retail-hardware capture
+
+The stage 38 capture from 2026-09-18 contained 6,093 ordered events with no
+dropped event records. It isolated one transport pathology:
+
+- `alpha_trilerp_modulate` consumed 181,513 microseconds of the 246,962
+  microseconds covered by the capture;
+- 80 input triangles expanded to 327 clipped vertices through the exact tiled
+  material graph;
+- those draws caused 2,800 PATH1 and 2,800 PATH3 submissions, carrying 47,598
+  and 452,492 requested qwords respectively;
+- the other 30 draws together caused only 46 PATH1 and 43 PATH3 submissions.
+
+The alpha-trilerp graph was therefore not removed or approximated. Its
+three-vertex tile passes are now kept in the already-open PATH3 arena instead
+of paying a VIF1 chain, `FLUSHA`, VU1 launch and PATH ownership handoff for
+every triangle. Batches of at least four triangles remain eligible for VU1.
+This is a transport optimization; texture, combiner, alpha, depth and geometry
+semantics are unchanged. A second retail-hardware trace is required to measure
+the realized frame-time reduction and verify the expected collapse in PATH
+handoffs.
