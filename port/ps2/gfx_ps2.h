@@ -2,6 +2,7 @@
 #define PD_PS2_GFX_PS2_H
 
 #include "gfx_rendering_api.h"
+#include "gfx_ps2_capture.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -9,9 +10,6 @@ extern "C" {
 
 /* Fast3D backend consumes the already-initialised project GS core. */
 extern struct GfxRenderingAPI gfx_ps2_api;
-
-/* One-frame renderer/GS black-box capture, written beside the running ELF. */
-void gfxPs2RequestRendererCapture(uint32_t stage, uint32_t warmup_frames);
 
 struct GfxRdpTmemLiveTextureView;
 

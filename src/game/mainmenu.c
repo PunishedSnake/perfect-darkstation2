@@ -34,7 +34,7 @@
 #include "data.h"
 #include "types.h"
 #if defined(PLATFORM_PS2)
-#include "gfx_ps2.h"
+#include "gfx_ps2_capture.h"
 #endif
 
 u8 g_InventoryWeapon;
