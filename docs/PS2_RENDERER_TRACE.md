@@ -1,5 +1,7 @@
 # PS2 renderer trace
 
+Updated: 2026-09-18
+
 The retail-hardware renderer can capture one diagnostic frame without enabling
 the global `pdps2.log` file logger. The capture is intentionally synchronous
 and may stall gameplay while it writes to USB, but ordinary frames do not touch
@@ -8,7 +10,7 @@ the filesystem.
 ## Capture
 
 1. Start the normal `pd-ps2-game.elf` build from USB.
-2. Reach the main menu in Carrington Institute.
+2. Reach the main menu.
 3. Select **Carrington Institute**. The menu callback arms the recorder.
 4. The transition frame is skipped. The following complete scene frame is
    buffered in EE memory and written once as `pdps2-gs-trace.bin` beside the
