@@ -42,6 +42,7 @@ These remain useful, but dated observations inside them are evidence from a part
 | [PS2_LIBRARY_AUDIT.md](PS2_LIBRARY_AUDIT.md) | Linked-library footprint and dependency decisions at audit time. |
 | [PS2_SM64_PORT_COMPARISON.md](PS2_SM64_PORT_COMPARISON.md) | Techniques compared with the SM64 PS2 port and their applicability here. |
 | [PS2_MODERN_OPTIMIZATION_AUDIT.md](PS2_MODERN_OPTIMIZATION_AUDIT.md) | Broader optimization review and rejected shortcuts. |
+| [PS2_PORT_AUDIT_2026-09-18.md](PS2_PORT_AUDIT_2026-09-18.md) | Dated repository, CI and high-level renderer/dataflow audit after the menu/mission-loading milestone. |
 
 Historical sections should normally be preserved when they explain why a design decision exists. Add a current-status note rather than deleting useful hardware evidence.
 

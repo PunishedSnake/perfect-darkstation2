@@ -48,13 +48,17 @@ Fill this section for hardware-sensitive changes. If not tested on hardware, exp
 ```text
 commit:
 ELF SHA-256:
+PS2SDK/toolchain:
 PS2 model:
+hardware revision:
 loader:
 launch device:
 ROM:
 scene/stage:
 sound:
 file logging:
+active IRX:
+video mode:
 result:
 ```
 
@@ -79,6 +83,10 @@ candidate:
 metric:
 baseline value:
 candidate value:
+sample count:
+p50 / p95 / p99 / max:
+deadline misses:
+correctness hash:
 regressions:
 ```
 

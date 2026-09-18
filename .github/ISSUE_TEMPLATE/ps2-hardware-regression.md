@@ -30,6 +30,7 @@ artifact/profile:
 
 ```text
 PS2 model:
+hardware revision:
 loader:
 launch device:
 video mode/output:
@@ -46,6 +47,8 @@ sound enabled:
 file logging enabled:
 pd.ini differences:
 eeprom state:
+PS2SDK/toolchain:
+active IRX:
 ```
 
 ## Reproduction
@@ -83,6 +86,19 @@ Attach what is relevant:
 - `pdps2.log` only when the run intentionally used file logging.
 
 Do not upload copyrighted ROM images or extracted proprietary game assets.
+
+For a performance regression, also include:
+
+```text
+sample count:
+units:
+p50:
+p95:
+p99:
+maximum:
+deadline misses:
+correctness hash:
+```
 
 ## Notes
 

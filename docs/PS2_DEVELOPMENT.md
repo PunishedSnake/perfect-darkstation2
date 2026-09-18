@@ -14,6 +14,12 @@ For end-user project status, see the repository [README](../README.md). For deta
 
 New PS2 work should branch from `ps2` and pull requests should target `ps2`. The dedicated PS2 CI is also scoped to this branch.
 
+GitHub uses `ps2` as the repository default branch. A lightweight classic
+protection rule blocks force-pushes and deletion of `ps2`, but deliberately
+does not require a pull request, review or status check for every update. This
+keeps direct single-maintainer development possible while protecting the branch
+from the two destructive accidents which are hardest to recover from.
+
 ### `port`
 
 `port` is retained as the inherited portable/upstream baseline. It is useful for comparing PS2-specific changes with the desktop-oriented port, but new PS2 features should not be developed there.
@@ -100,8 +106,9 @@ Never compare different optimization profiles, ROMs, logging modes or scenes and
 A useful hardware test should identify:
 
 - commit SHA / ELF identity;
+- ELF SHA-256;
 - Og or O2 profile;
-- PS2 model and loader;
+- PS2 model/revision and loader;
 - launch device;
 - ROM identity;
 - stage/scene;
@@ -110,6 +117,11 @@ A useful hardware test should identify:
 - visible corruption;
 - whether the title/menu/mission path still progresses;
 - renderer trace or diagnostic log when relevant.
+
+For performance evidence, additionally record the PS2SDK/toolchain identity,
+active IRX set, video mode, sample count, units, correctness hash and
+`p50`/`p95`/`p99`/maximum/deadline misses. If the current instrumentation does
+not expose a field, write `not captured` instead of silently inventing it.
 
 The normal build should keep file logging disabled. Synchronous writes to `mass:` have already been proven capable of stalling frame progress on tested hardware.
 
@@ -226,5 +238,6 @@ At minimum:
 - Performance priority -> [PS2_OPTIMIZATION_ROADMAP.md](PS2_OPTIMIZATION_ROADMAP.md).
 - Runtime call-chain/fatal boundary -> [PS2_STARTUP_CHAIN.md](PS2_STARTUP_CHAIN.md).
 - One-off dated audit -> create or update the relevant audit without presenting old observations as the current frontier.
+- 2026-09-18 whole-port snapshot -> [PS2_PORT_AUDIT_2026-09-18.md](PS2_PORT_AUDIT_2026-09-18.md).
 
 The documentation index is [docs/README.md](README.md).

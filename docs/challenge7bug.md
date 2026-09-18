@@ -6,7 +6,7 @@ Thanks to the decompilation project we can easily see all the differences betwee
 
 ## The Root Cause
 
-The root cause is in a function that the decomp project has named bgReset which can be found in [src/game/bg.c](src/game/bg.c). This function is somewhat complex so we'll just cover the important parts here.
+The root cause is in a function that the decomp project has named bgReset which can be found in [src/game/bg.c](../src/game/bg.c). This function is somewhat complex so we'll just cover the important parts here.
 
 bgReset is called while the screen is black after accepting the challenge. It's responsible for loading the background (BG) file for a stage. BG files contain the stage polygon data, room information, a texture list and lighting information among other things. The exact format of the file is not important here, but you just need to know that it contains several sections and some of those sections are compressed, similar to a zip file.
 

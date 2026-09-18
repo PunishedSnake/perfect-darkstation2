@@ -32,6 +32,8 @@ cmake-build-debug
 /build-*/
 /pd-ps2*.elf
 /pdps2*.log
+/pdps2-gs-trace*.bin
+/pdps2-gs-trace*.json
 /pd.ini
 /eeprom.bin
 

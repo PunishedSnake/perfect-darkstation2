@@ -58,6 +58,17 @@ For changes involving any of the following, retail-hardware validation is strong
 
 Emulator results are useful evidence, but they do not replace retail-hardware validation for timing and DMA/VU/GS behaviour.
 
+Identify every hardware-test ELF before copying it to the launch device:
+
+```sh
+git rev-parse HEAD
+sha256sum build-ps2/pd-ps2-game.elf
+```
+
+Keep the matching `.map`, `.sections.txt` and build-metadata file from CI. Do
+not rename two different binaries to the same archival filename; include the
+short commit and profile when retaining an ELF for A/B testing.
+
 ## ROM and assets
 
 Do not commit or distribute copyrighted Perfect Dark ROM images or extracted proprietary game assets.
@@ -98,3 +109,7 @@ A useful pull request description should include:
 - known regressions or remaining uncertainty.
 
 Performance pull requests should compare the same ROM, scene, logging mode and build profile and should report measured results rather than impressions.
+
+For real-time measurements, report `p50`, `p95`, `p99`, maximum and deadline
+misses where the instrumentation supports them. An average or an impression
+alone is not a performance result.
