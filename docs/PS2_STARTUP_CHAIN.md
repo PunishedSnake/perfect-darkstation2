@@ -276,7 +276,7 @@ and historical ELFs differ only in the build-profile log/ABI changes and their
 resulting eight-byte text layout shift. Test that exact historical ELF from a
 clean directory before assigning the failure to renderer source.
 
-**POTWIERDZONE, retail PS2, 2026-09-15:** `pd-ps2-game-nolog` passed LEGAL,
+**HARDWARE-VALIDATED, retail PS2, 2026-09-15:** `pd-ps2-game-nolog` passed LEGAL,
 rendered the Rare, Nintendo 64 and Perfect Dark logos, entered the main menu
 and loaded missions. The same source with the file sink enabled stopped making
 visible progress after LEGAL. This isolates the apparent title regression to
@@ -333,7 +333,7 @@ to isolate indexed GS residency. All three contain the same homogeneous
 clipper, so a remaining difference is no longer attributable to eye-plane
 crossings.
 
-**POTWIERDZONE, retail PS2, 2026-09-16:** all three corners above and the
+**HARDWARE-VALIDATED, retail PS2, 2026-09-16:** all three corners above and the
 previous O2 artifact produce the same glyph corruption, black world and
 stretched geometry as the original photographs. This rejects VU1/PATH1,
 native indexed residency, compiler optimization and the missing homogeneous
@@ -348,7 +348,7 @@ those values unchanged. A 7-pixel glyph therefore addressed an 8-pixel GS
 extent, and analogous NPOT dimensions sampled padding or the following row.
 The renderer now scales each axis by `logical_extent / 2^ceil(log2(extent))`
 after accounting for a physically expanded mirror period. Host tests cover
-POT, NPOT, mirrored and zero-sized contracts. **HIPOTEZA DO TESTU:** this exact
+POT, NPOT, mirrored and zero-sized contracts. **HISTORICAL TEST HYPOTHESIS:** this exact
 correction should change the repeatable font and icon corruption; it is not
 claimed to repair black world materials or stretched geometry.
 
@@ -361,7 +361,7 @@ output belongs to texture/material planning. If it remains absent or retains
 the same spikes, investigate common positions, culling and depth state before
 adding another combiner approximation.
 
-**POTWIERDZONE, retail PS2, 2026-09-16:** the NPOT STQ correction fixes text
+**HARDWARE-VALIDATED, retail PS2, 2026-09-16:** the NPOT STQ correction fixes text
 in the menu and gameplay HUD, but LEGAL remains corrupted. The normal build
 otherwise retains the black world and earlier geometry faults. The untextured
 geometry baseline renders the mission transition as solid geometry without
@@ -379,13 +379,13 @@ near weapon triangles, matching the hardware symptom. Clear packets now force
 independent FRAME/ZBUF masks, full-target scissor, disabled alpha/destination
 tests and unblended sprites, then restore every persistent register.
 
-**HIPOTEZA DO TESTU:** CI publishes two additional untextured EE/PATH3
+**HISTORICAL TEST HYPOTHESIS:** CI publishes two additional untextured EE/PATH3
 controls. `geometry-no-cull` bypasses only Fast3D face culling;
 `geometry-no-depth` bypasses only GS depth testing and writes. Compare both
 against the repaired `geometry-baseline`. Do not promote either bypass to the
 normal renderer: they are fault-isolation controls, not visual fixes.
 
-**POTWIERDZONE, retail PS2, 2026-09-16:** after the state-independent clear
+**HARDWARE-VALIDATED, retail PS2, 2026-09-16:** after the state-independent clear
 fix, `geometry-baseline` displays the mission map. Some submitted models still
 cover the entire view at particular camera angles and can cover the weapon or
 UI. The same occluders appear in `geometry-baseline`, `geometry-no-depth` and
@@ -407,13 +407,13 @@ Both use the corrected clear, homogeneous clipper, normal depth state and
 EE/PATH3 transform. The first tests whether the apparent full-screen models
 were created solely by flattening transparent/invisible draw classes. The
 second bypasses combiner recipes and material pass graphs while preserving
-texture upload, selection, STQ and clamp. **HIPOTEZA DO TESTU:** recognizable
+texture upload, selection, STQ and clamp. **HISTORICAL TEST HYPOTHESIS:** recognizable
 world textures in `material-opaque` would place the normal build's black world
 after texture residency, in combiner/pass planning; corrupted or absent direct
 textures would keep the fault in texture materialization, selection or GS
 sampling.
 
-**POTWIERDZONE, retail PS2, 2026-09-16:** `geometry-opaque` removes the
+**HARDWARE-VALIDATED, retail PS2, 2026-09-16:** `geometry-opaque` removes the
 camera-angle-dependent full-screen occluder, but also removes much of the game
 because Perfect Dark marks a large fraction of its draws with alpha, texture
 edge or invisible behavior. This identifies the occluder as one of those draw
@@ -430,7 +430,7 @@ misalignment remains a separate sampling/layout defect.
 complex colour pass graphs, but retains source alpha blending, alpha threshold,
 texture-edge rejection, invisible/depth-only writes and TEXEL0 alpha. For an
 unsupported alpha graph it uses a conservative TEXEL0/input-alpha visibility
-approximation instead of forcing the draw opaque. **HIPOTEZA DO TESTU:** this
+approximation instead of forcing the draw opaque. **HISTORICAL TEST HYPOTHESIS:** this
 build should retain most of the world while avoiding the false opaque screen
 mask. It is a diagnostic visibility baseline, not an exact material renderer.
 
