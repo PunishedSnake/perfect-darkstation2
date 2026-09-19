@@ -537,6 +537,22 @@ python3 tools/ps2_renderer_trace_decode.py capture.bin \
 `--extract-payloads DIR` also writes `framebuffer.raw` and
 `framebuffer.png` next to VBO/texture payloads.
 
+For screenshot-led forensics, `--probe-pixel X Y` lists conservative draw
+candidates whose clipped-triangle bounds and draw scissor contain that
+framebuffer pixel. The list includes pass graph, shader, texture handles and,
+for captures made after the TMEM-identity instrumentation, the persistent
+64-bit live-TMEM `content_identity`. Bounding-box inclusion is intentionally
+not presented as exact rasterization, but it is a cheap way to reduce a visible
+artifact to a small set of frontend draws before inspecting their captured
+payloads.
+
+The per-draw sampler provenance now stores the live-TMEM content identity at
+texture upload time, independently of whether the one-frame recorder was
+already active. Source/palette payload hashes remain capture-local because
+rehashing old resident textures in the draw hot path would perturb the frame.
+The identity is the already-computed exact TMEM fingerprint used by the PS2
+texture cache, so it adds no new texture scan to ordinary rendering.
+
 The CI4/CI8 native-residency diagnostic was also reverted to the normal default
 (`PD_PS2_NATIVE_INDEXED_TEXTURES=ON`). The real-hardware A/B with native
 indexed residency disabled produced no visible correctness change, so keeping
