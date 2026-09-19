@@ -213,6 +213,12 @@ void gfxPs2TraceTmemTextureView(uint32_t texture_id,
     const struct GfxRdpTmemLiveTextureView *view,
     uint8_t format, uint8_t size, uint32_t palette_format);
 
+/* Full forensic hooks used only by the generated PS2 Fast3D frontend. */
+void gfxPs2TraceGfxCommands(
+    const void *commands, uint32_t depth, uint32_t entry_count);
+void gfxPs2TraceGfxSource(uint16_t kind, const void *data,
+    uint32_t size, uint64_t metadata);
+
 #ifdef __cplusplus
 }
 #endif
