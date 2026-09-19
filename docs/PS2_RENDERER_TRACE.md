@@ -384,3 +384,16 @@ The post-clip geometry diagnostics in frame 910 report no near-zero-W output.
 There are several thin or screen-spanning triangles, but the user reports that
 the intermittent black lines were absent in this run, so those triangles are
 not treated as causal evidence.
+
+
+### Trace-overhead correction after frame 910
+
+Frame 910 contains 1,295 `clipped_triangle_bounds` events because the first
+version of the geometry diagnostic recorded every clipped output triangle.
+Those events are useful for correctness but they make the captured frame a poor
+absolute timing benchmark. The trace path now emits this event only for
+screen-wide, screen-tall, very thin or near-zero-W output triangles. The same
+frame would have retained only 36 such events. Normal `draw_clipped` totals
+remain available, so future Select captures should perturb the workload much
+less while preserving the evidence needed for the intermittent black-strip
+investigation.

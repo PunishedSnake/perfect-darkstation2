@@ -4225,10 +4225,15 @@ static void ps2_trace_clipped_triangle_bounds(
         }
         if (near_zero_w) flags |= 0x0800u;
 
-        ps2RendererTraceRecord(PS2_TRACE_CLIPPED_TRIANGLE_BOUNDS, flags,
-            source_triangle, out / 3u,
-            ps2_trace_pack_screen_pair(min_x, min_y),
-            ps2_trace_pack_screen_pair(max_x, max_y));
+        const uint16_t diagnostic_flags =
+            flags & (0x0100u | 0x0200u | 0x0400u | 0x0800u);
+        if (diagnostic_flags != 0u) {
+            ps2RendererTraceRecord(
+                PS2_TRACE_CLIPPED_TRIANGLE_BOUNDS, flags,
+                source_triangle, out / 3u,
+                ps2_trace_pack_screen_pair(min_x, min_y),
+                ps2_trace_pack_screen_pair(max_x, max_y));
+        }
     }
 }
 
