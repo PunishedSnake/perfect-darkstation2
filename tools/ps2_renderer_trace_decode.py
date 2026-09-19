@@ -68,6 +68,26 @@ def _event_value(event: dict, key: str) -> int:
     return int(event[key], 16)
 
 
+def _u32_pair(value: int) -> tuple[int, int]:
+    return value & 0xffffffff, value >> 32
+
+
+def _float_pair(value: int) -> tuple[float, float]:
+    return struct.unpack("<ff", value.to_bytes(8, "little"))
+
+
+def _s32(value: int) -> int:
+    value &= 0xffffffff
+    return value - 0x100000000 if value & 0x80000000 else value
+
+
+def _fnv1a64(data: bytes) -> int:
+    value = 1469598103934665603
+    for byte in data:
+        value = ((value ^ byte) * 1099511628211) & 0xffffffffffffffff
+    return value
+
+
 def _analyze(events: list[dict]) -> dict:
     paths = {
         "path1": {"submits": 0, "requested_qwords": 0,
@@ -102,6 +122,10 @@ def _analyze(events: list[dict]) -> dict:
     texture_coord_ranges = []
     draw_states = collections.defaultdict(dict)
     draw_payloads = []
+    texture_details = []
+    build_config = {}
+    queue_waits = []
+    gs_draws = []
     gaps = []
 
     for previous, current in zip(events, events[1:]):
