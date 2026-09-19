@@ -194,11 +194,14 @@ def _analyze(events: list[dict]) -> dict:
                     },
                 }
         elif event_type == "independent_alpha_draw":
+            mode = _event_value(event, "c")
             independent_alpha_draws.append({
                 "sequence": event["sequence"],
                 "vertices": _event_value(event, "a"),
                 "triangles": _event_value(event, "b"),
-                "direct": bool(_event_value(event, "c")),
+                "mode": mode,
+                "direct": mode == 1,
+                "alpha_mask": mode == 2,
             })
         elif event_type == "texture_coord_range":
             def float_pair(value):
@@ -482,7 +485,11 @@ def print_summary(trace: dict) -> None:
         direct_triangles = sum(
             item["triangles"] for item in analysis["independent_alpha_draws"]
             if item["direct"])
+        mask_triangles = sum(
+            item["triangles"] for item in analysis["independent_alpha_draws"]
+            if item.get("alpha_mask"))
         print(f"independent alpha direct triangles: {direct_triangles}")
+        print(f"independent alpha mask triangles: {mask_triangles}")
     suspicious = [
         item for item in analysis["clipped_triangle_bounds"]
         if item["thin"] or item["near_zero_w"] or

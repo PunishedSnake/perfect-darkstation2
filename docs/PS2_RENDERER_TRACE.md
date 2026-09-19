@@ -397,3 +397,59 @@ frame would have retained only 36 such events. Normal `draw_clipped` totals
 remain available, so future Select captures should perturb the workload much
 less while preserving the evidence needed for the intermittent black-strip
 investigation.
+
+
+## Wombo-combo capture: frame 1887
+
+Frame 1887 (`pdps2-gs-trace(20260919-110938).bin`) was captured from
+`4334791d` while the user simultaneously observed an intermittent black strip,
+a missing texture, visibly wrong filtering and clipping trouble.
+
+The trace is complete: 101 draws / 834 input triangles, 10,964 requested PATH1
+qwords, 6,089 PATH3 qwords and zero dropped events/qwords. No unsupported
+shader is present. No recorded suspicious triangle has near-zero W. The clip
+diagnostic retains 37 suspicious outputs: 29 thin, six screen-tall and two
+full-screen triangles. Because an earlier no-strip capture contained comparable
+thin/screen-spanning geometry, these bounds are not sufficient evidence that
+the strip is a near-plane explosion.
+
+The strongest black-strip correlation is instead the independent-alpha
+execution choice. With the destination-alpha direct path enabled in frames 542
+and 910, the user reported the strips absent. Restoring the tiled
+`independent_tex0_alpha` correctness baseline restored the strips. In frame
+1887 that graph is active again for shader
+`0x0000000001081000/0x00000001`. **INFERENCE:** the per-triangle scratch
+reconstruction/composite is the leading strip suspect because it re-rasterizes
+triangle coverage through an intermediate target. This remains a correlation,
+not framebuffer-level proof.
+
+The previous destination-alpha shortcut stays disabled because it also caused a
+menu-text regression. The replacement is representation-driven: native
+IA4/IA8/I4/I8 textures now receive a small shared alternate CLUT whose RGB is
+fixed to GS MODULATE unity (0x80) while alpha exactly preserves the source
+intensity-format semantics. For the independent INPUT1-RGB / TEXEL0-alpha
+material this makes one ordinary textured GS pass exact:
+
+`RGB = 0x80 * INPUT1 -> INPUT1`
+`A   = TEXEL0.a * INPUT1.a`
+
+No scratch render target, framebuffer-alpha detour or second rasterization is
+required. `PD_PS2_INDEPENDENT_ALPHA_MASK=ON` is the default; unsupported
+texture representations keep the older tiled baseline. The destination-alpha
+experiment remains OFF.
+
+The capture also confirms the filtering mismatch as a separate issue. Every
+recorded texture selection requests the backend linear path. The project
+rendering API distinguishes `FILTER_LINEAR` and `FILTER_THREE_POINT`, and
+the OpenGL backend implements three-point filtering explicitly while selecting
+nearest hardware sampling for that mode. **CURRENT IMPLEMENTATION:** the PS2
+backend stores the global mode but still maps the per-sampler boolean directly
+to GS nearest/bilinear, so N64-style three-point filtering is not implemented.
+
+All texture handles selected in frame 1887 are resident and uploaded in the GS
+snapshot. The observed missing texture therefore is not explained by a missing
+resource at capture end. UV tracing contains finite coordinates; repeat/mirror
+coordinates may legitimately leave the normalized 0..1 interval, so such ranges
+must not be treated as an error by themselves. The remaining texture suspects
+are sampler/clamp semantics, palette/cache state, or earlier visibility/
+geometry rather than a simple failed upload.
