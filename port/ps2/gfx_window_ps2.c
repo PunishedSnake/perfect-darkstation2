@@ -4,6 +4,7 @@
 
 #include "gfx_window_ps2.h"
 #include "gs_core.h"
+#include "ps2_renderer_stats.h"
 #include "system.h"
 
 /*
@@ -28,6 +29,8 @@ static int s_target_fps = 60;
 static float s_display_aspect = 4.0f / 3.0f;
 static bool s_logical_dimensions;
 static void (*s_fullscreen_changed_cb)(bool);
+static uint64_t s_perf_frame_start_us;
+static bool s_perf_frame_active;
 
 static int ps2_window_refresh_rate(void)
 {
@@ -217,7 +220,14 @@ static void ps2_handle_events(void)
 
 static bool ps2_start_frame(void)
 {
-    return ps2GsCoreIsReady();
+    if (!ps2GsCoreIsReady()) {
+        s_perf_frame_active = false;
+        return false;
+    }
+    ps2RendererStatsPerfFrameBegin();
+    s_perf_frame_start_us = sysGetMicroseconds();
+    s_perf_frame_active = true;
+    return true;
 }
 
 static void ps2_swap_buffers_begin(void)
@@ -229,7 +239,18 @@ static void ps2_swap_buffers_end(void)
 {
     if (ps2GsCoreIsReady()) {
         ps2GsCorePresent();
+        if (s_perf_frame_active) {
+            const uint64_t frame_end_us = sysGetMicroseconds();
+            const int refresh = ps2_window_refresh_rate();
+            const uint32_t deadline_us = refresh > 0
+                ? 1000000u / (uint32_t)refresh : 0u;
+            ps2RendererStatsRecordFrame(
+                frame_end_us >= s_perf_frame_start_us
+                    ? frame_end_us - s_perf_frame_start_us : 0u,
+                deadline_us);
+        }
     }
+    s_perf_frame_active = false;
 }
 
 static double ps2_get_time(void)

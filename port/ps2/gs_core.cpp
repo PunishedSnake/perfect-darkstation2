@@ -1248,7 +1248,12 @@ extern "C" void ps2GsCorePresent(void)
      * dependency, so wait for a project-owned FINISH token here, then reclaim
      * texture blocks whose last baked TEX0 references are now consumer-free.
      */
-    if (!ps2GsNativeQueueWaitGs()) {
+    const uint64_t wait_start_us = sysGetMicroseconds();
+    const bool wait_ok = ps2GsNativeQueueWaitGs();
+    const uint64_t wait_end_us = sysGetMicroseconds();
+    ps2RendererStatsRecordPresentWait(
+        wait_end_us >= wait_start_us ? wait_end_us - wait_start_us : 0u);
+    if (!wait_ok) {
         if (!s_native_finish_failed) {
             sysLogPrintf(LOG_ERROR,
                 "GS core: native GS FINISH fence failed; frame not presented");

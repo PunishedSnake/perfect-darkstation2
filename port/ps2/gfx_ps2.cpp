@@ -284,6 +284,8 @@ static uint8_t s_draw_fog_g;
 static uint8_t s_draw_fog_b;
 static uint8_t s_draw_texture_edge_reference =
     PS2_GFX_TEXTURE_EDGE_THRESHOLD;
+static uint64_t s_perf_renderer_build_start_us;
+static bool s_perf_renderer_build_active;
 
 static struct Ps2GsTexturedVertex s_stq_vertices[2][PS2_GFX_TRANSLATE_VERTS];
 static struct Ps2GsColorVertex s_color_vertices[PS2_GFX_TRANSLATE_VERTS];
@@ -4933,6 +4935,9 @@ static void ps2_trace_build_config(void)
 static void ps2_start_frame(void)
 {
     ps2RendererTraceBeginFrame();
+    if (ps2RendererTraceIsCapturing()) {
+        ps2RendererStatsPerfSkipCurrentFrame();
+    }
     memset(s_trace_tmem_snapshot_identity, 0,
         sizeof(s_trace_tmem_snapshot_identity));
     if (ps2RendererTraceIsCapturing()) {
@@ -4947,6 +4952,8 @@ static void ps2_start_frame(void)
     }
     ps2_trace_shader(s_shader);
     ps2RendererStatsBeginFrame();
+    s_perf_renderer_build_start_us = sysGetMicroseconds();
+    s_perf_renderer_build_active = true;
     ps2GsCoreBeginFrame();
 }
 
@@ -4979,6 +4986,33 @@ static void ps2_log_renderer_stats(
         (unsigned long long)stats.unsupported_shader_triangles,
         (unsigned long long)stats.vu1_rejected_batches,
         (unsigned long long)stats.vu1_rejected_vertices);
+    struct Ps2RendererPerfSummary perf;
+    ps2RendererStatsGetPerfSummary(&perf);
+    if (perf.frame.sample_count != 0u) {
+        sysLogPrintf(LOG_NOTE,
+            "GfxPS2 perf frame[%u]: p50=%llu p95=%llu p99=%llu "
+            "max=%llu us deadline=%u us misses=%u",
+            perf.frame.sample_count,
+            (unsigned long long)perf.frame.p50_microseconds,
+            (unsigned long long)perf.frame.p95_microseconds,
+            (unsigned long long)perf.frame.p99_microseconds,
+            (unsigned long long)perf.frame.max_microseconds,
+            perf.deadline_microseconds,
+            perf.deadline_misses);
+        sysLogPrintf(LOG_NOTE,
+            "GfxPS2 perf split: build[%u] p50=%llu p95=%llu p99=%llu "
+            "max=%llu us; GS-wait[%u] p50=%llu p95=%llu p99=%llu max=%llu us",
+            perf.renderer_build.sample_count,
+            (unsigned long long)perf.renderer_build.p50_microseconds,
+            (unsigned long long)perf.renderer_build.p95_microseconds,
+            (unsigned long long)perf.renderer_build.p99_microseconds,
+            (unsigned long long)perf.renderer_build.max_microseconds,
+            perf.present_wait.sample_count,
+            (unsigned long long)perf.present_wait.p50_microseconds,
+            (unsigned long long)perf.present_wait.p95_microseconds,
+            (unsigned long long)perf.present_wait.p99_microseconds,
+            (unsigned long long)perf.present_wait.max_microseconds);
+    }
     sysLogPrintf(LOG_NOTE,
         "GfxPS2 VU1: transform_batches=%llu transform_vertices=%llu "
         "waits=%llu busy=%llu elided=%llu time=%llu us max=%llu us "
@@ -5007,6 +5041,13 @@ extern "C" void gfxPs2LogRendererStats(int checkpoint)
 static void ps2_end_frame(void)
 {
     ps2GsCoreSubmit();
+    if (s_perf_renderer_build_active) {
+        const uint64_t build_end_us = sysGetMicroseconds();
+        ps2RendererStatsRecordRendererBuild(
+            build_end_us >= s_perf_renderer_build_start_us
+                ? build_end_us - s_perf_renderer_build_start_us : 0u);
+        s_perf_renderer_build_active = false;
+    }
     ps2RendererTraceMarkFrameEnd();
 
     if (ps2RendererTraceIsCapturing()) {

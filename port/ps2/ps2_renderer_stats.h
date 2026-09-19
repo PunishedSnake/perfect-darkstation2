@@ -37,7 +37,30 @@ struct Ps2RendererStats {
     uint64_t vu1_wait_errors;
 };
 
+struct Ps2RendererTimingSummary {
+    uint32_t sample_count;
+    uint64_t p50_microseconds;
+    uint64_t p95_microseconds;
+    uint64_t p99_microseconds;
+    uint64_t max_microseconds;
+};
+
+struct Ps2RendererPerfSummary {
+    struct Ps2RendererTimingSummary frame;
+    struct Ps2RendererTimingSummary renderer_build;
+    struct Ps2RendererTimingSummary present_wait;
+    uint32_t deadline_microseconds;
+    uint32_t deadline_misses;
+};
+
 void ps2RendererStatsReset(void);
+void ps2RendererStatsPerfFrameBegin(void);
+void ps2RendererStatsPerfSkipCurrentFrame(void);
+void ps2RendererStatsRecordFrame(
+    uint64_t microseconds, uint32_t deadline_microseconds);
+void ps2RendererStatsRecordRendererBuild(uint64_t microseconds);
+void ps2RendererStatsRecordPresentWait(uint64_t microseconds);
+void ps2RendererStatsGetPerfSummary(struct Ps2RendererPerfSummary *summary);
 void ps2RendererStatsBeginFrame(void);
 void ps2RendererStatsRecordTranslation(
     uint32_t vertex_count, uint64_t microseconds);

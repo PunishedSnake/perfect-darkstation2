@@ -12,6 +12,42 @@ int main(void)
     const struct Ps2RendererStats empty = {};
     assert(memcmp(&stats, &empty, sizeof(stats)) == 0);
 
+    struct Ps2RendererPerfSummary perf;
+    memset(&perf, 0xff, sizeof(perf));
+    ps2RendererStatsGetPerfSummary(&perf);
+    assert(perf.frame.sample_count == 0u);
+    assert(perf.renderer_build.sample_count == 0u);
+    assert(perf.present_wait.sample_count == 0u);
+
+    ps2RendererStatsPerfFrameBegin();
+    ps2RendererStatsRecordRendererBuild(50u);
+    ps2RendererStatsRecordPresentWait(10u);
+    ps2RendererStatsRecordFrame(100u, 150u);
+    ps2RendererStatsPerfFrameBegin();
+    ps2RendererStatsRecordRendererBuild(100u);
+    ps2RendererStatsRecordPresentWait(20u);
+    ps2RendererStatsRecordFrame(200u, 150u);
+    ps2RendererStatsPerfFrameBegin();
+    ps2RendererStatsPerfSkipCurrentFrame();
+    ps2RendererStatsRecordRendererBuild(9999u);
+    ps2RendererStatsRecordPresentWait(9999u);
+    ps2RendererStatsRecordFrame(9999u, 150u);
+
+    ps2RendererStatsGetPerfSummary(&perf);
+    assert(perf.frame.sample_count == 2u);
+    assert(perf.frame.p50_microseconds == 100u);
+    assert(perf.frame.p95_microseconds == 200u);
+    assert(perf.frame.p99_microseconds == 200u);
+    assert(perf.frame.max_microseconds == 200u);
+    assert(perf.renderer_build.sample_count == 2u);
+    assert(perf.renderer_build.p50_microseconds == 50u);
+    assert(perf.renderer_build.p95_microseconds == 100u);
+    assert(perf.present_wait.sample_count == 2u);
+    assert(perf.present_wait.p50_microseconds == 10u);
+    assert(perf.present_wait.p95_microseconds == 20u);
+    assert(perf.deadline_microseconds == 150u);
+    assert(perf.deadline_misses == 1u);
+
     ps2RendererStatsBeginFrame();
     ps2RendererStatsBeginFrame();
     ps2RendererStatsRecordTranslation(81u, 240u);
