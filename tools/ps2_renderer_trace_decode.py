@@ -662,6 +662,20 @@ def decode(path: Path) -> dict:
             "packets": packets,
         })
 
+    analysis = _analyze(events)
+    for payload in analysis["draw_payloads"]:
+        payload["hash_ok"] = None
+        if not payload["stored"]:
+            continue
+        start = blob_offset + payload["offset"]
+        end = start + payload["size"]
+        if start < blob_offset or end > blob_end:
+            payload["stored"] = False
+            payload["error"] = "payload range exceeds blob section"
+            continue
+        payload["hash_ok"] = (
+            _fnv1a64(blob[start:end]) == int(payload["hash"], 16))
+
     return {
         "source": str(path),
         "version": version,
@@ -681,7 +695,7 @@ def decode(path: Path) -> dict:
         "event_stream": events,
         "path3_submissions": submissions,
         "path1_submissions": path1_submissions,
-        "analysis": _analyze(events),
+        "analysis": analysis,
         "reserved": reserved,
     }
 
@@ -695,8 +709,12 @@ def print_summary(trace: dict) -> None:
           f"duration={trace['duration_microseconds']} us")
     print(f"events={trace['events']['count']} "
           f"dropped={trace['events']['dropped']} "
-          f"PATH3_qwords={trace['qwords']['count']} "
+          f"qwords={trace['qwords']['count']}/{trace['qwords']['capacity']} "
           f"dropped={trace['qwords']['dropped']}")
+    if trace["version"] >= 2:
+        blob = trace["blob"]
+        print(f"blob={blob['size']}/{blob['capacity']} bytes "
+              f"dropped={blob['dropped']} profile={blob['capture_profile']}")
     print("event counts:")
     for name in sorted(counts):
         print(f"  {name}: {counts[name]}")
@@ -787,6 +805,46 @@ def print_summary(trace: dict) -> None:
                     f"linear={item['linear']} "
                     f"mode={item.get('filter_mode', 0)} "
                     f"region={item['region_s']}/{item['region_t']}")
+    if analysis["build_config"]:
+        cfg = analysis["build_config"]
+        print("build config:")
+        print(
+            f"  indexed={cfg.get('native_indexed_textures')} "
+            f"vu1={cfg.get('vu1_color_batch')} "
+            f"same_sample={cfg.get('alpha_same_sample_fastpath')} "
+            f"alpha_mask={cfg.get('independent_alpha_mask')} "
+            f"alpha_direct={cfg.get('independent_alpha_direct')} "
+            f"filter={cfg.get('filter_mode')} "
+            f"mipmap={cfg.get('mipmap_filter')} "
+            f"aniso={cfg.get('anisotropy')}")
+    if analysis["queue_waits"]:
+        print("queue/wait timing:")
+        grouped = collections.defaultdict(list)
+        for item in analysis["queue_waits"]:
+            grouped[item.get("name", f"subtype_{item['subtype']}")].append(item)
+        for name, items in sorted(grouped.items()):
+            values = [item.get("wait_microseconds", 0) for item in items]
+            print(
+                f"  {name}: count={len(items)} total={sum(values)} us "
+                f"max={max(values) if values else 0} us "
+                f"failures={sum(1 for item in items if item['failed'])}")
+    if analysis["gs_draws"]:
+        draws = analysis["gs_draws"]
+        print("GS draws:")
+        print(
+            f"  total={len(draws)} "
+            f"path1={sum(1 for x in draws if x['path'] == 'path1')} "
+            f"path3={sum(1 for x in draws if x['path'] == 'path3')} "
+            f"indexed={sum(1 for x in draws if x['indexed'])} "
+            f"clut_load={sum(1 for x in draws if x['clut_load'])} "
+            f"texflush={sum(1 for x in draws if x['texflush'])} "
+            f"rt_view={sum(1 for x in draws if x['render_target_view'])}")
+    if analysis["draw_payloads"]:
+        stored = [x for x in analysis["draw_payloads"] if x["stored"]]
+        bad_hash = [x for x in stored if x.get("hash_ok") is False]
+        print(
+            f"draw payloads: total={len(analysis['draw_payloads'])} "
+            f"stored={len(stored)} bad_hash={len(bad_hash)}")
     print("GS shadow:")
     for event in trace["event_stream"]:
         if event["type"] == "gs_register":
@@ -794,10 +852,38 @@ def print_summary(trace: dict) -> None:
             print(f"  {event.get('slot', event['a'])}: {event['b']} ({validity})")
 
 
+
+def extract_payloads(trace: dict, destination: Path) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
+    source_blob = Path(trace["source"]).read_bytes()
+    blob_base = trace["blob"]["offset"]
+    manifest = []
+    for payload in trace["analysis"]["draw_payloads"]:
+        entry = dict(payload)
+        if not payload["stored"]:
+            manifest.append(entry)
+            continue
+        start = blob_base + payload["offset"]
+        end = start + payload["size"]
+        data = source_blob[start:end]
+        suffix = payload["kind"]
+        filename = (
+            f"draw_{payload['draw_id']:05d}_{suffix}_"
+            f"{payload['chunk']:03d}_{payload['vertex_count']}v_"
+            f"{payload['stride_floats']}f.bin")
+        (destination / filename).write_bytes(data)
+        entry["file"] = filename
+        manifest.append(entry)
+    (destination / "manifest.json").write_text(
+        json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("trace", type=Path)
     parser.add_argument("--json", type=Path, dest="json_path")
+    parser.add_argument(
+        "--extract-payloads", type=Path, dest="payload_dir",
+        help="write captured VBO/clip-map payloads and a manifest")
     args = parser.parse_args()
     try:
         trace = decode(args.trace)
@@ -809,6 +895,9 @@ def main() -> int:
         args.json_path.write_text(json.dumps(trace, indent=2) + "\n",
                                   encoding="utf-8")
         print(f"JSON: {args.json_path}")
+    if args.payload_dir:
+        extract_payloads(trace, args.payload_dir)
+        print(f"payloads: {args.payload_dir}")
     return 0
 
 
