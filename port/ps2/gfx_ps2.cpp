@@ -241,6 +241,7 @@ static enum MipmapFilteringMode s_mipmap_filter = MIPMAP_DISABLED;
 static int s_anisotropy = 1;
 static uint32_t s_trace_draw_id;
 static uint32_t s_texture_upload_serial;
+static uint64_t s_trace_tmem_snapshot_identity[PS2_GFX_TEXTURE_STATE_SLOTS];
 
 static bool s_warned_framebuffer;
 static bool s_warned_mipmap;
@@ -690,6 +691,64 @@ extern "C" void gfxPs2SetTextureUploadMirror(uint8_t cms, uint8_t cmt)
 {
     s_upload_mirror_s = (cms & 1u) != 0u;
     s_upload_mirror_t = (cmt & 1u) != 0u;
+}
+
+extern "C" void gfxPs2TraceTmemTextureView(uint32_t texture_id,
+    const struct GfxRdpTmemLiveTextureView *view,
+    uint8_t format, uint8_t size, uint32_t palette_format)
+{
+    if (!ps2RendererTraceIsCapturing() || !view || !view->texels ||
+        view->size_bytes == 0u ||
+        texture_id == 0u || texture_id >= PS2_GFX_TEXTURE_STATE_SLOTS) {
+        return;
+    }
+
+    const Ps2GsTextureHandle handle = (Ps2GsTextureHandle)texture_id;
+    if (view->content_identity != 0u &&
+        s_trace_tmem_snapshot_identity[handle] == view->content_identity) {
+        return;
+    }
+
+    const uint64_t source_hash =
+        ps2_trace_hash(view->texels, view->size_bytes);
+    const uint64_t palette_hash =
+        view->palette && view->palette_count != 0u
+        ? ps2_trace_hash(
+            view->palette,
+            (size_t)view->palette_count * sizeof(uint16_t))
+        : 0u;
+
+    /*
+     * A cache hit means no upload occurs during this capture, so refresh only
+     * forensic provenance. Keep upload_serial unchanged: no GS residency was
+     * created or replaced here.
+     */
+    struct Ps2TextureSamplerState *sampler = &s_texture_sampler[handle];
+    sampler->source_format = format;
+    sampler->source_size = size;
+    sampler->palette_format = palette_format;
+    sampler->palette_count = view->palette_count;
+    sampler->source_hash = source_hash;
+    sampler->palette_hash = palette_hash;
+    sampler->content_identity = view->content_identity;
+
+    ps2RendererTraceRecord(PS2_TRACE_TEXTURE_DETAIL, 0x1200u,
+        handle, view->content_identity, source_hash, palette_hash);
+    ps2_trace_texture_blob(
+        handle, 0x0200u, view->texels, view->size_bytes,
+        (uint64_t)view->line_size_bytes |
+            ((uint64_t)(view->size_bytes / view->line_size_bytes) << 32u),
+        source_hash);
+    if (view->palette && view->palette_count != 0u) {
+        ps2_trace_texture_blob(
+            handle, 0x0300u, view->palette,
+            (size_t)view->palette_count * sizeof(uint16_t),
+            (uint64_t)view->palette_count |
+                ((uint64_t)palette_format << 32u),
+            palette_hash);
+    }
+
+    s_trace_tmem_snapshot_identity[handle] = view->content_identity;
 }
 
 extern "C" bool gfxPs2UploadTmemTexture(
@@ -4768,6 +4827,8 @@ static void ps2_trace_build_config(void)
 static void ps2_start_frame(void)
 {
     ps2RendererTraceBeginFrame();
+    memset(s_trace_tmem_snapshot_identity, 0,
+        sizeof(s_trace_tmem_snapshot_identity));
     if (ps2RendererTraceIsCapturing()) {
         s_trace_draw_id = 0u;
         ps2_trace_build_config();
