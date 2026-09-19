@@ -817,6 +817,46 @@ extern "C" void gfxPs2TraceTmemTextureView(uint32_t texture_id,
     s_trace_tmem_snapshot_identity[handle] = view->content_identity;
 }
 
+extern "C" void gfxPs2TraceGfxCommands(
+    const void *commands, uint32_t depth, uint32_t entry_count)
+{
+    if (!ps2RendererTraceIsCapturing() || !commands ||
+        entry_count == 0u || entry_count > 4u) {
+        return;
+    }
+
+    const uint32_t *words = (const uint32_t *)commands;
+    for (uint32_t entry = 0u; entry < entry_count; ++entry) {
+        const uint32_t w0 = words[entry * 2u];
+        const uint32_t w1 = words[entry * 2u + 1u];
+        const uint16_t flags = entry == 0u ? 0u : 0x0100u;
+        ps2RendererTraceRecord(PS2_TRACE_GFX_COMMAND, flags,
+            (uint64_t)(uint32_t)(uintptr_t)
+                ((const uint8_t *)commands + entry * 8u),
+            (uint64_t)depth | ((uint64_t)entry << 32u),
+            w0, w1);
+    }
+}
+
+extern "C" void gfxPs2TraceGfxSource(uint16_t kind, const void *data,
+    uint32_t size, uint64_t metadata)
+{
+    if (!ps2RendererTraceIsCapturing() || !data || size == 0u) {
+        return;
+    }
+
+    uint32_t offset = 0u;
+    const bool stored = ps2RendererTraceAppendBlob(
+        data, size, 16u, &offset);
+    const uint64_t hash = ps2RendererTraceHash(data, size);
+    ps2RendererTraceRecord(PS2_TRACE_GFX_SOURCE,
+        (uint16_t)(kind |
+            (stored ? 0u : PS2_TRACE_FLAG_DROPPED)),
+        (uint64_t)offset | ((uint64_t)size << 32u),
+        hash, metadata,
+        (uint64_t)(uint32_t)(uintptr_t)data);
+}
+
 extern "C" bool gfxPs2UploadTmemTexture(
     const struct GfxRdpTmemLiveTextureView *view,
     uint8_t format, uint8_t size, uint32_t palette_format,
