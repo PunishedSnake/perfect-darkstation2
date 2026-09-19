@@ -250,3 +250,36 @@ paths only when INPUT3 alpha is exactly zero at all three vertices.
 The original scalar/shuffle graph remains the correctness fallback whenever
 texture alpha is not proven opaque. Select traces report both fast-path triangle
 counts so hardware captures can quantify the removed work.
+
+
+## Seventh retail capture: fast-path validation and same-sample collapse
+
+Frame 297 (`pdps2-gs-trace(7).bin`) was captured from `8a4768f5`.
+The user reported the same visible output but subjectively faster rendering.
+The capture confirms a large renderer-side reduction. It contains 32 draws /
+248 input triangles, close to frame 187's 32 / 226, while the captured frame
+interval falls from 254,431 us to 121,744 us.
+
+PATH3 drops from 804,516 requested qwords in frame 187 to 104,362 in frame 297.
+`alpha_trilerp_modulate` falls from 191,791 us / 773,975 qwords to
+58,830 us / 81,562 qwords. Its clipped output contains 161 triangles; 134
+(83.2%) take the direct opaque fast path and therefore submit no workspace
+tiles. The remaining expensive work is concentrated in 27 clipped triangles
+and 129 workspace tiles using non-opaque textures, principally handles 45, 46
+and 9.
+
+A second exact redundancy is visible in the frontend state: every alpha-trilerp
+draw in this capture has the same GS texture handle selected for TEXEL0 and
+TEXEL1. Equal handles alone are not sufficient because the two cycles may carry
+different coordinates or region clamps. The renderer now has an additional,
+strict fast path enabled by `PD_PS2_ALPHA_SAME_SAMPLE_FASTPATH=ON`: it fires
+only when texture handle, wrap/clamp state, region-clamp state and all three
+vertices' TEXEL0/TEXEL1 coordinates compare exactly equal, and INPUT3 alpha is
+zero.
+
+Under those conditions both color and alpha lerps collapse algebraically to a
+single texture sample. The renderer submits one ordinary textured triangle with
+texture alpha enabled instead of any render-target/shuffle graph. The old path
+remains available with `-DPD_PS2_ALPHA_SAME_SAMPLE_FASTPATH=OFF`. Select
+captures report `fast_same_sample` so the hardware test will reveal whether
+Carrington's remaining 27 expensive triangles satisfy the exact condition.

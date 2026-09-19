@@ -167,6 +167,7 @@ struct Ps2AlphaTrilerpVertex {
     uint8_t primitive_alpha;
     uint8_t alpha_add;
     uint8_t final_alpha;
+    uint8_t direct_alpha;
     float signed_alpha_delta;
 };
 
@@ -2733,6 +2734,70 @@ static bool ps2_draw_trilerp_independent_alpha(uint32_t vertex_count)
     return success;
 }
 
+static bool ps2_alpha_trilerp_sampler_states_match(void)
+{
+    return s_selected_texture[0] == s_selected_texture[1] &&
+        s_sampler_cms[0] == s_sampler_cms[1] &&
+        s_sampler_cmt[0] == s_sampler_cmt[1] &&
+        s_draw_region_clamp[0].region_s ==
+            s_draw_region_clamp[1].region_s &&
+        s_draw_region_clamp[0].region_t ==
+            s_draw_region_clamp[1].region_t &&
+        s_draw_region_clamp[0].max_u ==
+            s_draw_region_clamp[1].max_u &&
+        s_draw_region_clamp[0].max_v ==
+            s_draw_region_clamp[1].max_v;
+}
+
+static bool ps2_alpha_trilerp_triangle_samples_match(
+    const struct Ps2AlphaTrilerpVertex *triangle)
+{
+    if (!triangle || !ps2_alpha_trilerp_sampler_states_match()) {
+        return false;
+    }
+    for (uint32_t i = 0u; i < 3u; ++i) {
+        if (triangle[i].tex_u[0] != triangle[i].tex_u[1] ||
+            triangle[i].tex_v[0] != triangle[i].tex_v[1]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void ps2_draw_alpha_trilerp_same_sample_triangle(
+    const struct Ps2AlphaTrilerpVertex *triangle)
+{
+    struct Ps2GsTexturedVertex vertices[3];
+    for (uint32_t i = 0u; i < 3u; ++i) {
+        const struct Ps2AlphaTrilerpVertex *vertex = &triangle[i];
+        vertices[i].rgbaq = ps2_pack_rgbaq(
+            vertex->shade_r, vertex->shade_g, vertex->shade_b,
+            vertex->direct_alpha, vertex->inv_w);
+        vertices[i].st = ps2_pack_st(
+            vertex->tex_u[0] * vertex->inv_w,
+            vertex->tex_v[0] * vertex->inv_w);
+        vertices[i].xyz2 = s_shader->features.opt_fog
+            ? ps2_pack_xyzf2(
+                vertex->x, vertex->y, vertex->z, vertex->fog)
+            : ps2_pack_xyz2(vertex->x, vertex->y, vertex->z);
+    }
+
+    ps2GsCoreSetDepthMode(s_depth_test, s_depth_update, s_depth_compare,
+        s_depth_compare_equal);
+    ps2GsCoreSetAlphaTest(
+        s_shader->features.opt_alpha_threshold,
+        s_shader->features.opt_alpha_threshold ?
+            PS2_GFX_ALPHA_THRESHOLD : 0u);
+    ps2GsCoreSetAlphaWrite(true);
+    ps2GsCoreSetTextureAlpha(true);
+    ps2GsCoreSetAlphaBlend(s_alpha_blend);
+    ps2GsCoreSetFog(s_shader->features.opt_fog,
+        s_draw_fog_r, s_draw_fog_g, s_draw_fog_b);
+    ps2_apply_texture_clamp(0);
+    ps2GsCoreDrawTexturedTriangles(
+        s_selected_texture[0], vertices, 3u);
+}
+
 static void ps2_draw_alpha_trilerp_direct_opaque_triangle(uint32_t vertex)
 {
     ps2_trilerp_set_base_state();
@@ -3037,6 +3102,7 @@ static bool ps2_draw_alpha_trilerp(uint32_t vertex_count)
     uint32_t draw_tiles = 0u;
     uint32_t direct_opaque_triangles = 0u;
     uint32_t vertex_alpha_triangles = 0u;
+    uint32_t same_sample_triangles = 0u;
     for (uint32_t vertex = 0u; vertex < vertex_count && success; vertex += 3u) {
         const struct Ps2AlphaTrilerpVertex *triangle =
             &s_alpha_trilerp_vertices[vertex];
@@ -3048,6 +3114,15 @@ static bool ps2_draw_alpha_trilerp(uint32_t vertex_count)
             triangle[0].final_alpha == 0x80u &&
             triangle[1].final_alpha == 0x80u &&
             triangle[2].final_alpha == 0x80u;
+
+#if defined(PERFECT_DARK_PS2_ALPHA_SAME_SAMPLE_FASTPATH)
+        if (zero_add &&
+            ps2_alpha_trilerp_triangle_samples_match(triangle)) {
+            ps2_draw_alpha_trilerp_same_sample_triangle(triangle);
+            ++same_sample_triangles;
+            continue;
+        }
+#endif
 
         if (opaque_texture_pair && zero_add && opaque_alpha) {
             ps2_draw_alpha_trilerp_direct_opaque_triangle(vertex);
@@ -3139,7 +3214,7 @@ static bool ps2_draw_alpha_trilerp(uint32_t vertex_count)
         ps2RendererTraceRecord(PS2_TRACE_PASS_GRAPH_DRAW,
             (uint16_t)(trace_flags | 0x0100u),
             s_shader->shader_id0, s_shader->shader_id1,
-            alpha_ranges, 0u);
+            alpha_ranges, same_sample_triangles);
     }
 
     const uint64_t now = sysGetMicroseconds();
@@ -3604,6 +3679,8 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
                 vertex->primitive_alpha = 0u;
                 vertex->alpha_add = 0u;
                 vertex->final_alpha = 0x80u;
+                vertex->direct_alpha =
+                    ps2_texture_alpha_fragment_component(input[1][3]);
                 vertex->signed_alpha_delta = 0.0f;
                 if (ps2_independent_alpha_is_custom22_23(
                         &s_shader->plan)) {

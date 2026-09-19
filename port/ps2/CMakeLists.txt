@@ -45,6 +45,10 @@ option(PD_PS2_ALPHA_SPARSE_SHUFFLE
   "Omit definitely untouched 8x2 channel-shuffle sprites in alpha pass graphs"
   ON
 )
+option(PD_PS2_ALPHA_SAME_SAMPLE_FASTPATH
+  "Collapse alpha trilerp when both cycles provably sample the same texels"
+  ON
+)
 option(PD_PS2_DISABLE_CULLING_DIAGNOSTIC
   "Disable Fast3D triangle culling in the PS2 generated frontend"
   OFF
@@ -357,6 +361,11 @@ endif()
 if(PD_PS2_ALPHA_SPARSE_SHUFFLE)
   target_compile_definitions(pd_ps2_bootstrap PRIVATE
     PERFECT_DARK_PS2_ALPHA_SPARSE_SHUFFLE=1
+  )
+endif()
+if(PD_PS2_ALPHA_SAME_SAMPLE_FASTPATH)
+  target_compile_definitions(pd_ps2_bootstrap PRIVATE
+    PERFECT_DARK_PS2_ALPHA_SAME_SAMPLE_FASTPATH=1
   )
 endif()
 
@@ -686,6 +695,11 @@ endif()
 if(PD_PS2_ALPHA_SPARSE_SHUFFLE)
   target_compile_definitions(pd_ps2_game PRIVATE
     PERFECT_DARK_PS2_ALPHA_SPARSE_SHUFFLE=1
+  )
+endif()
+if(PD_PS2_ALPHA_SAME_SAMPLE_FASTPATH)
+  target_compile_definitions(pd_ps2_game PRIVATE
+    PERFECT_DARK_PS2_ALPHA_SAME_SAMPLE_FASTPATH=1
   )
 endif()
 if(PD_PS2_GEOMETRY_BASELINE_DIAGNOSTIC)
