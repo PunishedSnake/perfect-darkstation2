@@ -109,6 +109,11 @@ void ps2GsCorePresent(void);
  */
 void ps2GsCorePrepareTraceScreenshot(void);
 bool ps2GsCoreCaptureTraceScreenshot(void);
+/*
+ * Post-frame forensic local->host dump of the complete 4 MiB GS address
+ * space, viewed as a 1024x1024 PSMCT32 surface and streamed in safe strips.
+ */
+bool ps2GsCoreCaptureTraceVram(void);
 /* Append the authoritative software GS shadow and resident VRAM inventory. */
 void ps2GsCoreRecordTraceSnapshot(void);
 
