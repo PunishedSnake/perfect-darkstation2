@@ -537,14 +537,15 @@ python3 tools/ps2_renderer_trace_decode.py capture.bin \
 `--extract-payloads DIR` also writes `framebuffer.raw` and
 `framebuffer.png` next to VBO/texture payloads.
 
-For screenshot-led forensics, `--probe-pixel X Y` lists conservative draw
-candidates whose clipped-triangle bounds and draw scissor contain that
-framebuffer pixel. The list includes pass graph, shader, texture handles and,
-for captures made after the TMEM-identity instrumentation, the persistent
-64-bit live-TMEM `content_identity`. Bounding-box inclusion is intentionally
-not presented as exact rasterization, but it is a cheap way to reduce a visible
-artifact to a small set of frontend draws before inspecting their captured
-payloads.
+For screenshot-led forensics, `--probe-pixel X Y` projects the captured
+post-clip triangle payloads through each draw's captured viewport, applies the
+captured scissor and performs an exact screen-space point-in-triangle test.
+The result lists the frontend draws that could rasterize that pixel together
+with pass graph, shader, texture handles and, for captures made after the
+TMEM-identity instrumentation, the persistent 64-bit live-TMEM
+`content_identity`. Depth/alpha tests and final GS write ordering can still
+reject a listed triangle, so the probe narrows the suspect set without
+pretending to emulate the entire GS.
 
 The per-draw sampler provenance now stores the live-TMEM content identity at
 texture upload time, independently of whether the one-frame recorder was
