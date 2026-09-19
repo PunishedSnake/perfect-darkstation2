@@ -226,18 +226,18 @@ extern "C" void ps2RendererTraceRecordPath1Qwords(const void *qwords,
         (uint64_t)register_count | ((uint64_t)vertex_count << 32u));
 }
 
-extern "C" bool ps2RendererTraceAppendBlob(
-    const void *data, uint32_t size, uint32_t alignment, uint32_t *offset)
+extern "C" void *ps2RendererTraceReserveBlob(
+    uint32_t size, uint32_t alignment, uint32_t *offset)
 {
-    if (s_state != PS2_TRACE_CAPTURING || !data || size == 0u ||
+    if (s_state != PS2_TRACE_CAPTURING || size == 0u ||
         !s_blob || !offset) {
-        return false;
+        return NULL;
     }
     if (alignment == 0u) {
         alignment = 1u;
     }
     if (alignment > 64u || (alignment & (alignment - 1u)) != 0u) {
-        return false;
+        return NULL;
     }
 
     const uint32_t aligned =
@@ -245,14 +245,28 @@ extern "C" bool ps2RendererTraceAppendBlob(
     if (aligned > s_blob_capacity ||
         size > s_blob_capacity - aligned) {
         s_dropped_blob_bytes += size;
-        return false;
+        return NULL;
     }
     if (aligned > s_blob_size) {
         memset(s_blob + s_blob_size, 0, aligned - s_blob_size);
     }
-    memcpy(s_blob + aligned, data, size);
     *offset = aligned;
     s_blob_size = aligned + size;
+    return s_blob + aligned;
+}
+
+extern "C" bool ps2RendererTraceAppendBlob(
+    const void *data, uint32_t size, uint32_t alignment, uint32_t *offset)
+{
+    if (!data) {
+        return false;
+    }
+    void *destination = ps2RendererTraceReserveBlob(
+        size, alignment, offset);
+    if (!destination) {
+        return false;
+    }
+    memcpy(destination, data, size);
     return true;
 }
 

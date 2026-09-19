@@ -119,6 +119,8 @@ void ps2RendererTraceRecordPath1Qwords(const void *qwords,
  * Metadata events keep recording if this storage fills; dropped bytes are
  * reported in the header instead of corrupting the rest of the capture.
  */
+void *ps2RendererTraceReserveBlob(
+    uint32_t size, uint32_t alignment, uint32_t *offset);
 bool ps2RendererTraceAppendBlob(const void *data, uint32_t size,
     uint32_t alignment, uint32_t *offset);
 bool ps2RendererTraceEndFrameAndWrite(void);
