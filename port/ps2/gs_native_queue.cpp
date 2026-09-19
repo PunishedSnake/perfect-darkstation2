@@ -449,6 +449,46 @@ static bool ps2GsNativeQueueUploadTextureInternal(GSGLOBAL *gs,
         return false;
     }
     if (ps2RendererTraceIsCapturing()) {
+        const uint32_t chain_bytes = chain_qw * 16u;
+        uint32_t payload_offset = 0u;
+        uint32_t chain_offset = 0u;
+        const bool stored_payload = ps2RendererTraceAppendBlob(
+            slot->payload, payload_bytes, 64u, &payload_offset);
+        const bool stored_chain = ps2RendererTraceAppendBlob(
+            slot->chain, chain_bytes, 16u, &chain_offset);
+        const uint64_t payload_hash =
+            ps2RendererTraceHash(slot->payload, payload_bytes);
+        const uint64_t chain_hash =
+            ps2RendererTraceHash(slot->chain, chain_bytes);
+
+        ps2RendererTraceRecord(PS2_TRACE_GS_UPLOAD, 0u,
+            (uint64_t)texture->Width |
+                ((uint64_t)texture->Height << 32u),
+            (uint64_t)texture->Vram |
+                ((uint64_t)texture->TBW << 32u),
+            (uint64_t)(uint32_t)texture->PSM |
+                ((uint64_t)(uint32_t)encoding << 32u),
+            (uint64_t)source_bytes |
+                ((uint64_t)output_bytes << 32u));
+        ps2RendererTraceRecord(PS2_TRACE_GS_UPLOAD,
+            (uint16_t)(1u |
+                (stored_payload ? 0u : PS2_TRACE_FLAG_DROPPED)),
+            (uint64_t)payload_offset |
+                ((uint64_t)payload_bytes << 32u),
+            payload_hash,
+            payload_qw,
+            (uint64_t)source_width |
+                ((uint64_t)source_height << 32u));
+        ps2RendererTraceRecord(PS2_TRACE_GS_UPLOAD,
+            (uint16_t)(2u |
+                (stored_chain ? 0u : PS2_TRACE_FLAG_DROPPED)),
+            (uint64_t)chain_offset |
+                ((uint64_t)chain_bytes << 32u),
+            chain_hash,
+            chain_qw,
+            (uint64_t)(mirror_s ? 1u : 0u) |
+                ((uint64_t)(mirror_t ? 1u : 0u) << 1u));
+
         const uint64_t stage_end = sysGetMicroseconds();
         ps2RendererTraceRecord(PS2_TRACE_QUEUE_WAIT, 4u,
             stage_end - trace_stage_start,
