@@ -633,7 +633,7 @@ static void ps2_trace_build_info(void)
     const bool stored = ps2RendererTraceAppendBlob(
         commit, bytes, 1u, &offset);
     ps2RendererTraceRecord(PS2_TRACE_BUILD_INFO,
-        stored ? 0u : PS2_TRACE_FLAG_DROPPED,
+        stored ? (uint16_t)0u : (uint16_t)PS2_TRACE_FLAG_DROPPED,
         (uint64_t)offset | ((uint64_t)bytes << 32u),
         ps2RendererTraceHash(commit, bytes),
         0u, 0u);
@@ -650,7 +650,7 @@ static void ps2_trace_tmem_component(
         data, bytes, 16u, &offset);
     ps2RendererTraceRecord(PS2_TRACE_TMEM_SNAPSHOT,
         (uint16_t)(subtype |
-            (stored ? 0u : PS2_TRACE_FLAG_DROPPED)),
+            (stored ? (uint16_t)0u : (uint16_t)PS2_TRACE_FLAG_DROPPED)),
         (uint64_t)offset | ((uint64_t)bytes << 32u),
         ps2RendererTraceHash(data, bytes),
         metadata, 0u);
@@ -851,7 +851,7 @@ extern "C" void gfxPs2TraceGfxSource(uint16_t kind, const void *data,
     const uint64_t hash = ps2RendererTraceHash(data, size);
     ps2RendererTraceRecord(PS2_TRACE_GFX_SOURCE,
         (uint16_t)(kind |
-            (stored ? 0u : PS2_TRACE_FLAG_DROPPED)),
+            (stored ? (uint16_t)0u : (uint16_t)PS2_TRACE_FLAG_DROPPED)),
         (uint64_t)offset | ((uint64_t)size << 32u),
         hash, metadata,
         (uint64_t)(uint32_t)(uintptr_t)data);
