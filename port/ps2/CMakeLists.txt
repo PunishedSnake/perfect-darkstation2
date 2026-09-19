@@ -23,7 +23,7 @@ option(PD_PS2_GAME_VU1
 )
 option(PD_PS2_NATIVE_INDEXED_TEXTURES
   "Keep exact CI/IA/I textures in native GS PSMT4/PSMT8 residency"
-  OFF
+  ON
 )
 option(PD_PS2_GEOMETRY_BASELINE_DIAGNOSTIC
   "Render game triangles as untextured diagnostic colors"
@@ -417,7 +417,7 @@ target_link_directories(pd_ps2_bootstrap PRIVATE "${GSKIT}/lib")
 # bootstrap only until the full build has a platform dependency layer.
 # libpadx matches the ROM XPADMAN module used by the current PS2SDK padx sample.
 target_link_libraries(pd_ps2_bootstrap PRIVATE
-  gskit dmakit padx z audsrv patches kernel)
+  gskit dmakit padx z audsrv debug patches kernel)
 
 # Standalone hardware probe for the EE -> SIF/RPC -> audsrv -> SPU2 path.
 # It deliberately has no renderer or game-mixer dependency, so an audible
@@ -769,7 +769,7 @@ target_link_options(pd_ps2_game PRIVATE
   "-Wl,-Map,${PD_PS2_GAME_LINK_MAP}"
 )
 target_link_libraries(pd_ps2_game PRIVATE
-  gskit dmakit padx z audsrv patches kernel m)
+  gskit dmakit padx z audsrv debug patches kernel m)
 set_target_properties(pd_ps2_game PROPERTIES
   OUTPUT_NAME "pd-ps2-game"
   SUFFIX ".elf"

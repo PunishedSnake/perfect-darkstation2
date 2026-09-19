@@ -55,6 +55,7 @@ enum Ps2RendererTraceEventType {
     PS2_TRACE_GS_DRAW,
     PS2_TRACE_RESOURCE_OP,
     PS2_TRACE_CAPTURE_INFO,
+    PS2_TRACE_SCREENSHOT,
 };
 
 enum Ps2RendererTraceFlags {

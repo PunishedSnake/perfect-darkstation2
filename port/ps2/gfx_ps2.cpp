@@ -4768,6 +4768,13 @@ static void ps2_start_frame(void)
     ps2_trace_shader(s_shader);
     ps2RendererStatsBeginFrame();
     ps2GsCoreBeginFrame();
+    if (ps2RendererTraceIsCapturing()) {
+        /*
+         * Screenshot storage has priority over verbose VBO/texture payloads.
+         * The actual local-to-host transfer remains post-frame.
+         */
+        ps2GsCorePrepareTraceScreenshot();
+    }
 }
 
 static void ps2_log_renderer_stats(
@@ -4862,6 +4869,13 @@ static void ps2_end_frame(void)
             trace_stats.unsupported_shader_triangles,
             trace_stats.vu1_rejected_batches,
             trace_stats.vu1_wait_microseconds);
+
+        /*
+         * MarkFrameEnd above already froze the measured frame interval. The
+         * synchronous GS local-to-host readback is forensic-only and therefore
+         * cannot masquerade as renderer time.
+         */
+        ps2GsCoreCaptureTraceScreenshot();
         ps2RendererTraceEndFrameAndWrite();
     }
 

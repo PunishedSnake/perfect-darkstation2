@@ -102,6 +102,13 @@ int ps2GsCoreGetOffsetY(void);
 void ps2GsCoreBeginFrame(void);
 void ps2GsCoreSubmit(void);
 void ps2GsCorePresent(void);
+/*
+ * Reserve the final scanout image before lower-priority forensic payloads and
+ * read it back only after the measured frame has ended. The captured buffer is
+ * the completed draw buffer that the following present will expose.
+ */
+void ps2GsCorePrepareTraceScreenshot(void);
+bool ps2GsCoreCaptureTraceScreenshot(void);
 /* Append the authoritative software GS shadow and resident VRAM inventory. */
 void ps2GsCoreRecordTraceSnapshot(void);
 
