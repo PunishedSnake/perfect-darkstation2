@@ -390,6 +390,7 @@ endif()
 if(PD_PS2_VU1_COLOR_DIAGNOSTIC)
   target_compile_definitions(pd_ps2_bootstrap PRIVATE
     PERFECT_DARK_PS2_VU1_COLOR_BATCH=1
+    PERFECT_DARK_PS2_VU1_AD_TRANSPORT=1
   )
 endif()
 

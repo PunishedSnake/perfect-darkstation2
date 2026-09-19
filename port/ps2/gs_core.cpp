@@ -2480,6 +2480,15 @@ extern "C" void ps2GsCoreReleaseTexture(Ps2GsTextureHandle handle)
     }
 }
 
+static bool ps2GsCoreVu1AdTransportEnabled(void)
+{
+#if defined(PERFECT_DARK_PS2_VU1_AD_TRANSPORT)
+    return true;
+#else
+    return false;
+#endif
+}
+
 static void ps2GsCoreTraceDraw(
     bool textured, bool path1, uint16_t extra_flags,
     uint32_t vertex_count, uint32_t register_count,
@@ -2537,7 +2546,8 @@ extern "C" void ps2GsCoreDrawColorTriangles(const struct Ps2GsColorVertex *verti
     const bool emit_prim = ps2GsStateShadowNeedsWrite(
         &s_state_shadow, PS2_GS_STATE_PRIM, prim);
 
-    if (ps2GsVu1QueueEnabled() &&
+    if (ps2GsCoreVu1AdTransportEnabled() &&
+        ps2GsVu1QueueEnabled() &&
         ps2GsVu1BatchWorthwhile(vertex_count)) {
         const struct Ps2GsPackedReg prim_record = { prim, GS_PRIM };
         if (ps2GsVu1QueueSubmitColor(
@@ -2648,7 +2658,16 @@ static bool ps2GsCoreDrawTexturedTrianglesInternal(GSTEXTURE *tex,
         (s_texture_alpha ? 0x1000u : 0u) |
         (s_gs->PrimAlphaEnable ? 0x2000u : 0u);
 
-    if (ps2GsVu1QueueEnabled() &&
+    /*
+     * VU1 is valuable here when it actually transforms clip-space vertices.
+     * Sending already-final A+D records through VIF1 -> VU1 -> XGKICK only
+     * adds an UNPACK plus FLUSHA/MSCAL/FLUSH ownership round trip before the
+     * same GIF packet reaches GS. Keep that pass-through path diagnostic-only;
+     * normal game builds send final records directly through PATH3.
+     */
+    const bool vu1_has_work = transform_vertices != NULL ||
+        ps2GsCoreVu1AdTransportEnabled();
+    if (vu1_has_work && ps2GsVu1QueueEnabled() &&
         ps2GsVu1BatchWorthwhile(vertex_count)) {
         struct Ps2GsPackedReg prefix[5];
         struct Ps2GsPackedReg suffix[1];
