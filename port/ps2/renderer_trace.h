@@ -54,6 +54,7 @@ enum Ps2RendererTraceEventType {
     PS2_TRACE_QUEUE_WAIT,
     PS2_TRACE_GS_DRAW,
     PS2_TRACE_RESOURCE_OP,
+    PS2_TRACE_CAPTURE_INFO,
 };
 
 enum Ps2RendererTraceFlags {

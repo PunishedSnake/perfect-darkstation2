@@ -289,10 +289,17 @@ extern "C" bool ps2RendererTraceEndFrameAndWrite(void)
     if (s_state != PS2_TRACE_CAPTURING) {
         return false;
     }
+    const bool had_explicit_frame_end = s_frame_end_marked;
     if (!s_frame_end_marked) {
         ps2RendererTraceMarkFrameEnd();
     }
     const uint64_t forensic_end = sysGetMicroseconds();
+    if (had_explicit_frame_end) {
+        ps2RendererTraceRecord(PS2_TRACE_CAPTURE_INFO, 0u,
+            forensic_end >= s_header.end_microseconds
+                ? forensic_end - s_header.end_microseconds : 0u,
+            s_blob_size, s_header.event_count, s_header.qword_count);
+    }
     s_header.qword_offset = s_header.event_offset +
         s_header.event_count * sizeof(*s_events);
     const uint32_t blob_offset = s_header.qword_offset +
@@ -302,8 +309,6 @@ extern "C" bool ps2RendererTraceEndFrameAndWrite(void)
     s_header.reserved[2] = s_dropped_blob_bytes;
     s_header.reserved[3] = blob_offset;
     s_header.reserved[4] = 1u;
-    s_header.reserved[5] = forensic_end >= s_header.end_microseconds
-        ? forensic_end - s_header.end_microseconds : 0u;
     if (s_header.dropped_events != 0u ||
         s_header.dropped_qwords != 0u ||
         s_dropped_blob_bytes != 0u) {

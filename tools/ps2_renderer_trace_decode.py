@@ -27,7 +27,7 @@ EVENT_NAMES = {
     27: "texture_coord_range", 28: "draw_state",
     29: "draw_payload", 30: "texture_detail",
     31: "build_config", 32: "queue_wait", 33: "gs_draw",
-    34: "resource_op",
+    34: "resource_op", 35: "capture_info",
 }
 
 GS_STATE_NAMES = [
@@ -670,7 +670,6 @@ def decode(path: Path) -> dict:
     dropped_blob = reserved[2] if version >= 2 else 0
     blob_offset = reserved[3] if version >= 2 else qword_end
     capture_profile = reserved[4] if version >= 2 else 0
-    forensic_microseconds = reserved[5] if version >= 2 else 0
     blob_end = blob_offset + blob_size
     if (event_offset < header_size or event_end > len(blob) or
         qword_end > len(blob) or blob_offset < qword_end or
@@ -802,8 +801,7 @@ def decode(path: Path) -> dict:
                    "dropped": dropped_qwords},
         "blob": {"size": blob_size, "capacity": blob_capacity,
                  "dropped": dropped_blob, "offset": blob_offset,
-                 "capture_profile": capture_profile,
-                 "post_frame_forensic_microseconds": forensic_microseconds},
+                 "capture_profile": capture_profile},
         "event_stream": events,
         "path3_submissions": submissions,
         "path1_submissions": path1_submissions,
@@ -826,8 +824,7 @@ def print_summary(trace: dict) -> None:
     if trace["version"] >= 2:
         blob = trace["blob"]
         print(f"blob={blob['size']}/{blob['capacity']} bytes "
-              f"dropped={blob['dropped']} profile={blob['capture_profile']} "
-              f"post_frame={blob['post_frame_forensic_microseconds']} us")
+              f"dropped={blob['dropped']} profile={blob['capture_profile']}")
     print("event counts:")
     for name in sorted(counts):
         print(f"  {name}: {counts[name]}")
