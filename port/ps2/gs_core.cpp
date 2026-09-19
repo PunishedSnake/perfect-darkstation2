@@ -107,6 +107,8 @@ static_assert(sizeof(Ps2GsColorVertex) == sizeof(GSPRIMPOINT),
 static_assert(sizeof(Ps2GsTexturedVertex) == sizeof(GSPRIMSTQPOINT),
     "packet-ready textured vertex must match current gsKit A+D source layout");
 
+static uint64_t ps2GsCoreTracePair(uint32_t low, uint32_t high);
+
 static struct Ps2GsTextureSlot *ps2GsCoreTextureSlot(Ps2GsTextureHandle handle)
 {
     if (handle == PS2_GS_TEXTURE_INVALID || handle > PS2_GS_MAX_TEXTURES) {

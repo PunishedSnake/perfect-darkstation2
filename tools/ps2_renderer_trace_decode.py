@@ -27,6 +27,7 @@ EVENT_NAMES = {
     27: "texture_coord_range", 28: "draw_state",
     29: "draw_payload", 30: "texture_detail",
     31: "build_config", 32: "queue_wait", 33: "gs_draw",
+    34: "resource_op",
 }
 
 GS_STATE_NAMES = [
@@ -126,6 +127,7 @@ def _analyze(events: list[dict]) -> dict:
     build_config = {}
     queue_waits = []
     gs_draws = []
+    resource_ops = []
     gaps = []
 
     for previous, current in zip(events, events[1:]):
@@ -497,6 +499,22 @@ def _analyze(events: list[dict]) -> dict:
                 "texture_vram": texture_vram,
                 "clut_vram": clut_vram,
             })
+        elif event_type == "resource_op":
+            subtype = event["flags"] & 0xff
+            names = {
+                1: "texture_create", 2: "texture_release",
+                3: "texture_upload", 4: "indexed_upload",
+                5: "intensity_upload", 10: "rt_create",
+                11: "rt_bind", 12: "rt_release", 13: "clear",
+                20: "vram_retire", 21: "vram_reclaim",
+            }
+            resource_ops.append({
+                "sequence": event["sequence"],
+                "subtype": subtype,
+                "name": names.get(subtype, f"subtype_{subtype}"),
+                "a": event["a"], "b": event["b"],
+                "c": event["c"], "d": event["d"],
+            })
         elif event_type == "draw_clipped" and active_draw is not None:
             clipped = _event_value(event, "c")
             draw_totals["clipped_vertices"] += clipped
@@ -545,6 +563,7 @@ def _analyze(events: list[dict]) -> dict:
         "build_config": build_config,
         "queue_waits": queue_waits,
         "gs_draws": gs_draws,
+        "resource_ops": resource_ops,
         "largest_event_gaps": sorted(
             gaps, key=lambda gap: gap["microseconds"], reverse=True)[:10],
     }
