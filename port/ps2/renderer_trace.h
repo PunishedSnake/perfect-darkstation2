@@ -62,6 +62,7 @@ enum Ps2RendererTraceEventType {
     PS2_TRACE_BUILD_INFO,
     PS2_TRACE_GFX_COMMAND,
     PS2_TRACE_GFX_SOURCE,
+    PS2_TRACE_GS_VRAM_DUMP,
 };
 
 enum Ps2RendererTraceFlags {
