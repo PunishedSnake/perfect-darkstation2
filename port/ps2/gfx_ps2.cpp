@@ -3084,6 +3084,77 @@ static bool ps2_draw_trilerp_independent_alpha_tile(
         s_alpha_trilerp_color_target, composite, 3u, false);
 }
 
+static bool ps2_alpha_trilerp_sampler_states_match(void);
+static bool ps2_alpha_trilerp_triangle_samples_match(
+    const struct Ps2AlphaTrilerpVertex *triangle);
+
+static bool ps2_independent_alpha_same_sample_batch(uint32_t vertex_count)
+{
+    if (!s_shader ||
+        s_shader->plan.alpha_recipe != PS2_ALPHA_INPUT1 ||
+        s_shader->features.opt_texture_edge ||
+        !ps2_alpha_trilerp_sampler_states_match()) {
+        return false;
+    }
+
+    for (uint32_t vertex = 0u; vertex < vertex_count; vertex += 3u) {
+        if (!ps2_alpha_trilerp_triangle_samples_match(
+                &s_alpha_trilerp_vertices[vertex])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void ps2_draw_independent_alpha_same_sample(uint32_t vertex_count)
+{
+    /*
+     * If both combiner texture inputs resolve to the exact same sample,
+     * lerp(TEX0, TEX1, LOD) collapses algebraically to TEX0.  INPUT1 alpha is
+     * independent of that RGB lerp, so preserve it directly in vertex alpha
+     * and avoid the per-tile render-target reconstruction entirely.
+     */
+    for (uint32_t i = 0u; i < vertex_count; ++i) {
+        const struct Ps2AlphaTrilerpVertex *vertex =
+            &s_alpha_trilerp_vertices[i];
+        struct Ps2GsTexturedVertex *out = &s_stq_vertices[0][i];
+        out->rgbaq = ps2_pack_rgbaq(
+            vertex->shade_r, vertex->shade_g, vertex->shade_b,
+            vertex->independent_alpha, vertex->inv_w);
+        out->st = ps2_pack_st(
+            vertex->tex_u[0] * vertex->inv_w,
+            vertex->tex_v[0] * vertex->inv_w);
+        out->xyz2 = s_shader->features.opt_fog
+            ? ps2_pack_xyzf2(
+                vertex->x, vertex->y, vertex->z, vertex->fog)
+            : ps2_pack_xyz2(vertex->x, vertex->y, vertex->z);
+    }
+
+    ps2GsCoreSetDepthMode(
+        s_depth_test, s_depth_update, s_depth_compare,
+        s_depth_compare_equal);
+    ps2GsCoreSetColorWrite(true);
+    ps2GsCoreSetAlphaWrite(true);
+    ps2GsCoreSetAlphaTest(
+        s_shader->features.opt_alpha_threshold,
+        s_shader->features.opt_alpha_threshold
+            ? PS2_GFX_ALPHA_THRESHOLD : 0u);
+    ps2GsCoreSetFramebufferAlphaForce(false);
+    ps2GsCoreSetAlphaBlend(s_alpha_blend);
+    ps2GsCoreSetTextureAlpha(false);
+    ps2GsCoreSetFog(
+        s_shader->features.opt_fog,
+        s_draw_fog_r, s_draw_fog_g, s_draw_fog_b);
+    ps2_apply_texture_clamp(0);
+    ps2GsCoreDrawTexturedTriangles(
+        s_selected_texture[0], s_stq_vertices[0], vertex_count);
+
+    ps2RendererTraceRecord(
+        PS2_TRACE_INDEPENDENT_ALPHA_DRAW,
+        (uint16_t)PS2_TRACE_FLAG_SUPPORTED,
+        vertex_count, vertex_count / 3u, 3u, 0u);
+}
+
 static bool ps2_draw_trilerp_independent_alpha(uint32_t vertex_count)
 {
     if (s_modulate) {
@@ -3094,6 +3165,12 @@ static bool ps2_draw_trilerp_independent_alpha(uint32_t vertex_count)
         }
         return false;
     }
+#if defined(PERFECT_DARK_PS2_ALPHA_SAME_SAMPLE_FASTPATH)
+    if (ps2_independent_alpha_same_sample_batch(vertex_count)) {
+        ps2_draw_independent_alpha_same_sample(vertex_count);
+        return true;
+    }
+#endif
     const bool custom24 = ps2_independent_alpha_is_custom24(
         &s_shader->plan);
     const bool custom22_23 = ps2_independent_alpha_is_custom22_23(
