@@ -1691,6 +1691,54 @@ static bool ps2_draw_independent_tex0_alpha_direct(uint32_t vertex_count)
     return true;
 }
 
+static bool ps2_draw_independent_tex0_alpha_mask(uint32_t vertex_count)
+{
+    if (!ps2GsCoreTextureHasAlphaMask(s_selected_texture[0])) {
+        return false;
+    }
+
+    for (uint32_t i = 0u; i < vertex_count; ++i) {
+        const struct Ps2IndependentTex0AlphaVertex *vertex =
+            &s_independent_tex0_alpha_vertices[i];
+        s_stq_vertices[0][i].rgbaq = ps2_pack_rgbaq(
+            vertex->input[0], vertex->input[1], vertex->input[2],
+            vertex->input[3], vertex->inv_w);
+        s_stq_vertices[0][i].st = ps2_pack_st(
+            vertex->tex_u * vertex->inv_w,
+            vertex->tex_v * vertex->inv_w);
+        s_stq_vertices[0][i].xyz2 = s_shader->features.opt_fog
+            ? ps2_pack_xyzf2(
+                vertex->x, vertex->y, vertex->z, vertex->fog)
+            : ps2_pack_xyz2(vertex->x, vertex->y, vertex->z);
+    }
+
+    const bool texture_edge = s_shader->features.opt_texture_edge;
+    ps2GsCoreSetDepthMode(s_depth_test, s_depth_update, s_depth_compare,
+        s_depth_compare_equal);
+    ps2GsCoreSetColorWrite(true);
+    ps2GsCoreSetAlphaWrite(true);
+    ps2GsCoreSetAlphaTest(
+        texture_edge || s_shader->features.opt_alpha_threshold,
+        texture_edge ? PS2_GFX_TEXTURE_EDGE_THRESHOLD :
+            (s_shader->features.opt_alpha_threshold ?
+                PS2_GFX_ALPHA_THRESHOLD : 0u));
+    ps2GsCoreSetFramebufferAlphaForce(texture_edge);
+    ps2GsCoreSetAlphaBlend(texture_edge ? false : s_alpha_blend);
+    ps2GsCoreSetTextureAlpha(true);
+    ps2GsCoreSetFog(s_shader->features.opt_fog,
+        s_draw_fog_r, s_draw_fog_g, s_draw_fog_b);
+    ps2_apply_texture_clamp(0);
+
+    const bool success = ps2GsCoreDrawTextureAlphaMaskTriangles(
+        s_selected_texture[0], s_stq_vertices[0], vertex_count);
+    if (success) {
+        ps2RendererTraceRecord(PS2_TRACE_INDEPENDENT_ALPHA_DRAW,
+            (uint16_t)PS2_TRACE_FLAG_SUPPORTED,
+            vertex_count, vertex_count / 3u, 2u, 0u);
+    }
+    return success;
+}
+
 static bool ps2_draw_independent_tex0_alpha(uint32_t vertex_count)
 {
     if (s_modulate) {
@@ -1701,6 +1749,11 @@ static bool ps2_draw_independent_tex0_alpha(uint32_t vertex_count)
         }
         return false;
     }
+#if defined(PERFECT_DARK_PS2_INDEPENDENT_ALPHA_MASK)
+    if (ps2GsCoreTextureHasAlphaMask(s_selected_texture[0])) {
+        return ps2_draw_independent_tex0_alpha_mask(vertex_count);
+    }
+#endif
 #if defined(PERFECT_DARK_PS2_INDEPENDENT_ALPHA_DIRECT)
     if (!s_shader->features.opt_texture_edge &&
         !s_shader->features.opt_alpha_threshold) {

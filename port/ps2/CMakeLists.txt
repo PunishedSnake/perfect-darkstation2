@@ -49,6 +49,10 @@ option(PD_PS2_ALPHA_SAME_SAMPLE_FASTPATH
   "Collapse alpha trilerp when both cycles provably sample the same texels"
   ON
 )
+option(PD_PS2_INDEPENDENT_ALPHA_MASK
+  "Use indexed alpha-mask CLUTs for exact one-pass independent-alpha materials"
+  ON
+)
 option(PD_PS2_INDEPENDENT_ALPHA_DIRECT
   "Use destination alpha to avoid tiled INPUT1 RGB / TEXEL0 alpha composites"
   OFF
@@ -370,6 +374,11 @@ endif()
 if(PD_PS2_ALPHA_SAME_SAMPLE_FASTPATH)
   target_compile_definitions(pd_ps2_bootstrap PRIVATE
     PERFECT_DARK_PS2_ALPHA_SAME_SAMPLE_FASTPATH=1
+  )
+endif()
+if(PD_PS2_INDEPENDENT_ALPHA_MASK)
+  target_compile_definitions(pd_ps2_bootstrap PRIVATE
+    PERFECT_DARK_PS2_INDEPENDENT_ALPHA_MASK=1
   )
 endif()
 if(PD_PS2_INDEPENDENT_ALPHA_DIRECT)
@@ -709,6 +718,11 @@ endif()
 if(PD_PS2_ALPHA_SAME_SAMPLE_FASTPATH)
   target_compile_definitions(pd_ps2_game PRIVATE
     PERFECT_DARK_PS2_ALPHA_SAME_SAMPLE_FASTPATH=1
+  )
+endif()
+if(PD_PS2_INDEPENDENT_ALPHA_MASK)
+  target_compile_definitions(pd_ps2_game PRIVATE
+    PERFECT_DARK_PS2_INDEPENDENT_ALPHA_MASK=1
   )
 endif()
 if(PD_PS2_INDEPENDENT_ALPHA_DIRECT)
