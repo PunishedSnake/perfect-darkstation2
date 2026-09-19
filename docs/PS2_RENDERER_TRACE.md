@@ -319,3 +319,27 @@ first room. Select captures now record post-clip screen bounds for every output
 triangle. The decoder flags near-zero-W, extremely thin, and screen-spanning
 triangles so a capture taken while a black strip is visible can distinguish a
 clip/geometry failure from a material/texture failure.
+
+
+## Ninth retail capture: direct independent-alpha blend-order regression
+
+Frame 542 (`pdps2-gs-trace(9).bin`) validates the performance gain from
+`81df9184` but exposes a correctness regression in the new direct
+`independent_tex0_alpha` path. The user reports light sprites becoming opaque
+white rectangles. The capture contains one direct independent-alpha draw with
+18 triangles; that draw completes in 896 us. The full frame requests only
+2,465 PATH3 qwords plus 1,291 PATH1 qwords and spans 60,743 us. Alpha-trilerp
+still uses the same-sample path for all 152 clipped triangles and submits zero
+workspace tiles.
+
+**POTWIERDZONE in current source:** `ps2GsCoreSetAlphaBlend(true)` resets the
+GS ALPHA equation to `SOURCE_OVER`. The direct independent-alpha path installed
+`DESTINATION_ALPHA_LERP` first and then enabled blending, immediately
+overwriting the custom equation. The RGB pass therefore used its own opaque
+fragment alpha instead of the alpha captured into framebuffer destination
+alpha, exactly matching the observed white opaque quads.
+
+The fix is intentionally minimal: enable blending first, then install
+`DESTINATION_ALPHA_LERP`. The direct path and its performance benefit remain
+otherwise unchanged. Hardware validation must confirm restored sprite
+transparency before this path is treated as correctness-proven.

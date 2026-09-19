@@ -1665,9 +1665,14 @@ static bool ps2_draw_independent_tex0_alpha_direct(uint32_t vertex_count)
         ps2GsCoreSetFog(s_shader->features.opt_fog,
             s_draw_fog_r, s_draw_fog_g, s_draw_fog_b);
         if (s_alpha_blend) {
+            /*
+             * SetAlphaBlend(true) intentionally restores SOURCE_OVER in the
+             * core, so enable blending first and only then install the
+             * destination-alpha equation for this RGB pass.
+             */
+            ps2GsCoreSetAlphaBlend(true);
             ps2GsCoreSetAlphaBlendEquation(
                 PS2_GS_ALPHA_BLEND_DESTINATION_ALPHA_LERP);
-            ps2GsCoreSetAlphaBlend(true);
         } else {
             ps2GsCoreSetAlphaBlend(false);
         }
