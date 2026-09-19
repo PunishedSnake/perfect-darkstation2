@@ -55,6 +55,14 @@ bool ps2GsConvertN64Ia16PaletteToGsCt32(const uint16_t *source,
 bool ps2GsBuildN64IntensityClut(enum Ps2GsN64IntensityEncoding encoding,
     uint32_t *destination, uint32_t entry_count);
 
+/*
+ * Preserve N64 intensity alpha while forcing texture RGB to GS MODULATE
+ * unity (0x80). This is an exact alpha-mask view of the same indexed texels.
+ */
+bool ps2GsBuildN64IntensityAlphaMaskClut(
+    enum Ps2GsN64IntensityEncoding encoding,
+    uint32_t *destination, uint32_t entry_count);
+
 /* CSM1-ordered i -> RGBA(i,i,i,i) mapping for GS channel views. */
 bool ps2GsBuildIdentityRgba8Clut(uint32_t *destination,
     uint32_t entry_count);

@@ -247,6 +247,38 @@ extern "C" bool ps2GsBuildN64IntensityClut(
     return true;
 }
 
+extern "C" bool ps2GsBuildN64IntensityAlphaMaskClut(
+    enum Ps2GsN64IntensityEncoding encoding,
+    uint32_t *destination, uint32_t entry_count)
+{
+    const bool four_bit = encoding == PS2_GS_N64_IA4 ||
+        encoding == PS2_GS_N64_I4;
+    const bool eight_bit = encoding == PS2_GS_N64_IA8 ||
+        encoding == PS2_GS_N64_I8;
+    if (!destination || (!four_bit && !eight_bit) ||
+        entry_count != (four_bit ? 16u : 256u)) {
+        return false;
+    }
+
+    for (uint32_t i = 0u; i < entry_count; ++i) {
+        uint8_t alpha;
+        if (encoding == PS2_GS_N64_IA4) {
+            alpha = (i & 1u) != 0u ? 0xffu : 0u;
+        } else if (encoding == PS2_GS_N64_IA8) {
+            alpha = (uint8_t)((i & 0x0fu) * 0x11u);
+        } else if (encoding == PS2_GS_N64_I4) {
+            alpha = (uint8_t)(i * 0x11u);
+        } else {
+            alpha = (uint8_t)i;
+        }
+        destination[i] =
+            UINT32_C(0x00808080) | ((uint32_t)alpha << 24u);
+    }
+
+    ps2GsPermuteCsm1(destination, 4u, entry_count);
+    return true;
+}
+
 extern "C" bool ps2GsBuildIdentityRgba8Clut(
     uint32_t *destination, uint32_t entry_count)
 {

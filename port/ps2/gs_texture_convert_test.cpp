@@ -385,6 +385,51 @@ static void test_n64_intensity_cluts(void)
     assert(!ps2GsBuildN64IntensityClut(PS2_GS_N64_I8, NULL, 256u));
 }
 
+static void test_n64_intensity_alpha_mask_cluts(void)
+{
+    uint32_t clut[256] = {};
+
+    assert(ps2GsBuildN64IntensityAlphaMaskClut(
+        PS2_GS_N64_IA4, clut, 16u));
+    for (uint32_t i = 0u; i < 16u; ++i) {
+        const uint32_t alpha = (i & 1u) != 0u ? 0xffu : 0u;
+        assert(clut[i] == 0x00808080u + (alpha << 24u));
+    }
+
+    assert(ps2GsBuildN64IntensityAlphaMaskClut(
+        PS2_GS_N64_I4, clut, 16u));
+    for (uint32_t i = 0u; i < 16u; ++i) {
+        const uint32_t alpha = i * 0x11u;
+        assert(clut[i] == 0x00808080u + (alpha << 24u));
+    }
+
+    assert(ps2GsBuildN64IntensityAlphaMaskClut(
+        PS2_GS_N64_IA8, clut, 256u));
+    for (uint32_t destination = 0u; destination < 256u; ++destination) {
+        const uint32_t source = intensity_clut_source_index(
+            destination, 256u);
+        const uint32_t alpha = (source & 0x0fu) * 0x11u;
+        assert(clut[destination] ==
+            0x00808080u + (alpha << 24u));
+    }
+
+    assert(ps2GsBuildN64IntensityAlphaMaskClut(
+        PS2_GS_N64_I8, clut, 256u));
+    for (uint32_t destination = 0u; destination < 256u; ++destination) {
+        const uint32_t source = intensity_clut_source_index(
+            destination, 256u);
+        assert(clut[destination] ==
+            0x00808080u + (source << 24u));
+    }
+
+    assert(!ps2GsBuildN64IntensityAlphaMaskClut(
+        PS2_GS_N64_IA4, clut, 256u));
+    assert(!ps2GsBuildN64IntensityAlphaMaskClut(
+        (enum Ps2GsN64IntensityEncoding)99, clut, 256u));
+    assert(!ps2GsBuildN64IntensityAlphaMaskClut(
+        PS2_GS_N64_I8, NULL, 256u));
+}
+
 static void test_identity_rgba8_clut(void)
 {
     uint32_t clut[256] = {};
@@ -415,6 +460,7 @@ int main(void)
     test_ia16_palette_conversion_and_csm1_order();
     test_gs_texture_buffer_width_alignment();
     test_n64_intensity_cluts();
+    test_n64_intensity_alpha_mask_cluts();
     test_identity_rgba8_clut();
     puts("gs_texture_convert tests passed");
     return 0;
