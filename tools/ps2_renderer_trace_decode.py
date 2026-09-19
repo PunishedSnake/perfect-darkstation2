@@ -386,6 +386,16 @@ def _analyze(events: list[dict]) -> dict:
                     "upload_serial": upload_serial,
                     "palette_hash": event["c"],
                 })
+            elif subtype in (11, 12):
+                slot = subtype - 11
+                handle, upload_serial = _u32_pair(b)
+                provenance = state.setdefault(
+                    f"sampler{slot}", {}).setdefault("provenance", {})
+                provenance.update({
+                    "handle": handle,
+                    "upload_serial": upload_serial,
+                    "content_identity": event["c"],
+                })
             else:
                 state[f"subtype_{subtype}"] = {
                     "b": event["b"], "c": event["c"], "d": event["d"],
@@ -1156,6 +1166,89 @@ def extract_payloads(trace: dict, destination: Path) -> None:
             "screenshot": screenshot_manifest,
         }, indent=2) + "\n", encoding="utf-8")
 
+def probe_pixel(trace: dict, x: float, y: float) -> list[dict]:
+    """Return draw candidates whose clipped-triangle bounds contain a pixel.
+
+    This is an intentionally conservative screen-space filter. A triangle
+    bounding box can contain a pixel that lies outside the triangle itself, so
+    the result is a candidate list rather than a rasterization oracle.
+    """
+    analysis = trace["analysis"]
+    records = {
+        record.get("draw_id"): record
+        for record in analysis["draw_records"]
+        if record.get("draw_id") is not None
+    }
+    candidates = {}
+    for triangle in analysis["clipped_triangle_bounds"]:
+        bbox = triangle["bbox"]
+        if not (bbox["min_x"] <= x <= bbox["max_x"] and
+                bbox["min_y"] <= y <= bbox["max_y"]):
+            continue
+        draw_id = triangle.get("draw_id")
+        if draw_id is None:
+            continue
+        state = analysis["draw_states"].get(draw_id, {})
+        scissor = state.get("scissor")
+        if scissor is not None:
+            if not (scissor["x"] <= x < scissor["x"] + scissor["width"] and
+                    scissor["y"] <= y < scissor["y"] + scissor["height"]):
+                continue
+        entry = candidates.setdefault(draw_id, {
+            "draw_id": draw_id,
+            "triangle_hits": 0,
+            "smallest_bbox_area": None,
+            "pass_graph": records.get(draw_id, {}).get("pass_graph"),
+            "shader": records.get(draw_id, {}).get("shader"),
+            "textures": state.get("textures"),
+            "scissor": scissor,
+            "sampler0": state.get("sampler0"),
+            "sampler1": state.get("sampler1"),
+        })
+        entry["triangle_hits"] += 1
+        area = max(0.0, bbox["max_x"] - bbox["min_x"]) * max(
+            0.0, bbox["max_y"] - bbox["min_y"])
+        if (entry["smallest_bbox_area"] is None or
+                area < entry["smallest_bbox_area"]):
+            entry["smallest_bbox_area"] = area
+    return sorted(
+        candidates.values(),
+        key=lambda item: (
+            item["smallest_bbox_area"]
+            if item["smallest_bbox_area"] is not None else float("inf"),
+            item["draw_id"],
+        ),
+    )
+
+
+def print_pixel_probe(trace: dict, x: float, y: float) -> None:
+    candidates = probe_pixel(trace, x, y)
+    print(f"pixel probe ({x:g}, {y:g}): {len(candidates)} candidate draws")
+    for item in candidates:
+        shader = item.get("shader") or {}
+        shader_text = (
+            f"{shader.get('id0')}/{shader.get('id1')}"
+            if shader else "unknown"
+        )
+        textures = item.get("textures")
+        print(
+            f"  draw {item['draw_id']}: pass={item.get('pass_graph')} "
+            f"tri_hits={item['triangle_hits']} "
+            f"bbox_area={item['smallest_bbox_area']:.1f} "
+            f"textures={textures} shader={shader_text}"
+        )
+        for slot in (0, 1):
+            sampler = item.get(f"sampler{slot}") or {}
+            provenance = sampler.get("provenance") or {}
+            identity = provenance.get("content_identity")
+            if identity is not None:
+                print(
+                    f"    tex{slot}: handle={sampler.get('handle')} "
+                    f"upload={provenance.get('upload_serial')} "
+                    f"identity={identity}"
+                )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("trace", type=Path)
@@ -1166,6 +1259,9 @@ def main() -> int:
     parser.add_argument(
         "--extract-screenshot", type=Path, dest="screenshot_path",
         help="write the captured framebuffer as PNG or native raw pixels")
+    parser.add_argument(
+        "--probe-pixel", nargs=2, type=float, metavar=("X", "Y"),
+        help="list conservative draw candidates covering framebuffer pixel X Y")
     args = parser.parse_args()
     try:
         trace = decode(args.trace)
@@ -1187,6 +1283,8 @@ def main() -> int:
             print(f"error: {exc}", file=sys.stderr)
             return 1
         print(f"screenshot: {args.screenshot_path}")
+    if args.probe_pixel:
+        print_pixel_probe(trace, args.probe_pixel[0], args.probe_pixel[1])
     return 0
 
 
