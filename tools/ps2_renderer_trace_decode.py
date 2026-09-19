@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import collections
 import json
+import shutil
 import struct
 import sys
 import zlib
@@ -1271,16 +1272,26 @@ def _write_rgba_png(path: Path, width: int, height: int, rgba: bytes) -> None:
     path.write_bytes(png)
 
 
-def extract_screenshot(trace: dict, destination: Path) -> None:
-    screenshot = trace["analysis"].get("screenshot", {})
-    if not screenshot.get("stored") or not screenshot.get("success"):
-        raise ValueError("trace does not contain a successful screenshot")
+def _payload_bytes(trace: dict, payload: dict) -> bytes:
+    if not payload.get("stored"):
+        raise ValueError("payload was not stored")
     source_blob = Path(trace["source"]).read_bytes()
-    start = trace["blob"]["offset"] + screenshot["offset"]
-    end = start + screenshot["size"]
-    raw = source_blob[start:end]
-    if screenshot.get("hash_ok") is False:
-        raise ValueError("screenshot payload hash mismatch")
+    start = trace["blob"]["offset"] + payload["offset"]
+    end = start + payload["size"]
+    data = source_blob[start:end]
+    if payload.get("hash_ok") is False:
+        raise ValueError("payload hash mismatch")
+    return data
+
+
+def extract_screenshot(
+        trace: dict, destination: Path, which: str = "draw") -> None:
+    screenshots = trace["analysis"].get("screenshots", {})
+    screenshot = screenshots.get(
+        which, trace["analysis"].get("screenshot", {}) if which == "draw" else {})
+    if not screenshot.get("stored") or not screenshot.get("success"):
+        raise ValueError(f"trace does not contain a successful {which} screenshot")
+    raw = _payload_bytes(trace, screenshot)
     if destination.suffix.lower() == ".png":
         rgba = _screenshot_rgba(
             raw, screenshot["width"], screenshot["height"], screenshot["psm"])
@@ -1289,60 +1300,152 @@ def extract_screenshot(trace: dict, destination: Path) -> None:
     else:
         destination.write_bytes(raw)
 
-def extract_payloads(trace: dict, destination: Path) -> None:
-    destination.mkdir(parents=True, exist_ok=True)
-    source_blob = Path(trace["source"]).read_bytes()
-    blob_base = trace["blob"]["offset"]
+
+def _extract_blob_collection(
+        trace: dict, payloads: list[dict], directory: Path,
+        filename_fn) -> list[dict]:
+    directory.mkdir(parents=True, exist_ok=True)
     manifest = []
-    for payload in trace["analysis"]["draw_payloads"]:
+    for payload in payloads:
         entry = dict(payload)
-        if not payload["stored"]:
+        if not payload.get("stored"):
             manifest.append(entry)
             continue
-        start = blob_base + payload["offset"]
-        end = start + payload["size"]
-        data = source_blob[start:end]
-        suffix = payload["kind"]
-        filename = (
-            f"draw_{payload['draw_id']:05d}_{suffix}_"
-            f"{payload['chunk']:03d}_{payload['vertex_count']}v_"
-            f"{payload['stride_floats']}f.bin")
-        (destination / filename).write_bytes(data)
-        entry["file"] = filename
+        data = _payload_bytes(trace, payload)
+        filename = filename_fn(payload)
+        (directory / filename).write_bytes(data)
+        entry["file"] = str(Path(directory.name) / filename)
         manifest.append(entry)
-    texture_manifest = []
-    for payload in trace["analysis"]["texture_details"]:
-        if payload.get("kind") not in ("source_payload", "palette_payload"):
+    return manifest
+
+
+def extract_payloads(trace: dict, destination: Path) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
+    analysis = trace["analysis"]
+
+    draw_manifest = _extract_blob_collection(
+        trace,
+        analysis["draw_payloads"],
+        destination / "draws",
+        lambda p: (
+            f"draw_{p['draw_id']:05d}_{p['kind']}_"
+            f"{p['chunk']:03d}_{p['vertex_count']}v_"
+            f"{p['stride_floats']}f.bin"),
+    )
+
+    texture_payloads = [
+        payload for payload in analysis["texture_details"]
+        if payload.get("kind") in ("source_payload", "palette_payload")
+    ]
+    texture_manifest = _extract_blob_collection(
+        trace,
+        texture_payloads,
+        destination / "textures",
+        lambda p: (
+            f"texture_{p['handle']:03d}_{p['kind']}_"
+            f"{p['sequence']:05d}.bin"),
+    )
+
+    gs_upload_manifest = _extract_blob_collection(
+        trace,
+        [p for p in analysis.get("gs_uploads", [])
+         if p.get("kind") in ("payload", "dma_chain")],
+        destination / "gs_uploads",
+        lambda p: (
+            f"gs_upload_{p['sequence']:05d}_{p['kind']}.bin"),
+    )
+
+    tmem_manifest = _extract_blob_collection(
+        trace,
+        analysis.get("tmem_snapshots", []),
+        destination / "tmem",
+        lambda p: f"tmem_{p['kind']}_{p['sequence']:05d}.bin",
+    )
+
+    gfx_source_manifest = _extract_blob_collection(
+        trace,
+        analysis.get("gfx_sources", []),
+        destination / "gfx_sources",
+        lambda p: (
+            f"gfx_{p['kind']}_{p['sequence']:05d}_"
+            f"{p['size']}b.bin"),
+    )
+
+    framebuffer_manifest = {}
+    framebuffer_dir = destination / "framebuffers"
+    framebuffer_dir.mkdir(parents=True, exist_ok=True)
+    for which in ("draw", "other"):
+        screenshot = analysis.get("screenshots", {}).get(which, {})
+        if not screenshot.get("stored") or not screenshot.get("success"):
+            framebuffer_manifest[which] = dict(screenshot)
             continue
-        entry = dict(payload)
-        if not payload["stored"]:
-            texture_manifest.append(entry)
-            continue
-        start = blob_base + payload["offset"]
-        end = start + payload["size"]
-        data = source_blob[start:end]
-        filename = (
-            f"texture_{payload['handle']:03d}_"
-            f"{payload['kind']}_{payload['sequence']:05d}.bin")
-        (destination / filename).write_bytes(data)
-        entry["file"] = filename
-        texture_manifest.append(entry)
-    screenshot_manifest = None
-    screenshot = trace["analysis"].get("screenshot", {})
-    if screenshot.get("stored") and screenshot.get("success"):
-        raw_path = destination / "framebuffer.raw"
-        png_path = destination / "framebuffer.png"
-        extract_screenshot(trace, raw_path)
-        extract_screenshot(trace, png_path)
-        screenshot_manifest = dict(screenshot)
-        screenshot_manifest["raw_file"] = raw_path.name
-        screenshot_manifest["png_file"] = png_path.name
+        raw_path = framebuffer_dir / f"{which}.raw"
+        png_path = framebuffer_dir / f"{which}.png"
+        extract_screenshot(trace, raw_path, which)
+        extract_screenshot(trace, png_path, which)
+        entry = dict(screenshot)
+        entry["raw_file"] = str(Path("framebuffers") / raw_path.name)
+        entry["png_file"] = str(Path("framebuffers") / png_path.name)
+        framebuffer_manifest[which] = entry
+
+    build_info = dict(analysis.get("build_info", {}))
+    if build_info.get("stored"):
+        data = _payload_bytes(trace, build_info)
+        build_dir = destination / "build"
+        build_dir.mkdir(parents=True, exist_ok=True)
+        (build_dir / "git-commit.txt").write_bytes(data)
+        build_info["file"] = "build/git-commit.txt"
+
+    sibling_vram = Path(trace["source"]).with_name(
+        "pdps2-gs-trace.vram-ct32.bin")
+    vram_manifest = dict(analysis.get("gs_vram_dump", {}))
+    if sibling_vram.exists() and vram_manifest.get("success"):
+        vram_dir = destination / "gs_vram"
+        vram_dir.mkdir(parents=True, exist_ok=True)
+        target = vram_dir / "vram-ct32.bin"
+        shutil.copyfile(sibling_vram, target)
+        vram_manifest["file"] = "gs_vram/vram-ct32.bin"
+        vram_manifest["hash_ok"] = (
+            _fnv1a64(target.read_bytes()) ==
+            int(vram_manifest.get("hash", "0"), 16)
+        )
+
+    metadata_dir = destination / "metadata"
+    metadata_dir.mkdir(parents=True, exist_ok=True)
+    metadata_files = {
+        "events.json": trace["event_stream"],
+        "analysis.json": analysis,
+        "path1_submissions.json": trace["path1_submissions"],
+        "path3_submissions.json": trace["path3_submissions"],
+        "gfx_commands.json": analysis.get("gfx_commands", []),
+        "gs_draw_states.json": analysis.get("gs_draw_states", []),
+        "draw_states.json": analysis.get("draw_states", {}),
+        "resource_ops.json": analysis.get("resource_ops", []),
+    }
+    for filename, value in metadata_files.items():
+        (metadata_dir / filename).write_text(
+            json.dumps(value, indent=2) + "\n", encoding="utf-8")
+
+    manifest = {
+        "trace_version": trace["version"],
+        "stage": trace["stage"],
+        "frame_number": trace["frame_number"],
+        "duration_microseconds": trace["duration_microseconds"],
+        "events": trace["events"],
+        "qwords": trace["qwords"],
+        "blob": trace["blob"],
+        "build_info": build_info,
+        "draw_payloads": draw_manifest,
+        "texture_payloads": texture_manifest,
+        "gs_uploads": gs_upload_manifest,
+        "tmem": tmem_manifest,
+        "gfx_sources": gfx_source_manifest,
+        "framebuffers": framebuffer_manifest,
+        "gs_vram": vram_manifest,
+    }
     (destination / "manifest.json").write_text(
-        json.dumps({
-            "draw_payloads": manifest,
-            "texture_payloads": texture_manifest,
-            "screenshot": screenshot_manifest,
-        }, indent=2) + "\n", encoding="utf-8")
+        json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
 
 def _point_in_triangle(
         x: float, y: float,
@@ -1494,7 +1597,10 @@ def main() -> int:
         help="write captured VBO/clip-map/texture payloads and framebuffer")
     parser.add_argument(
         "--extract-screenshot", type=Path, dest="screenshot_path",
-        help="write the captured framebuffer as PNG or native raw pixels")
+        help="write the captured draw framebuffer as PNG or native raw pixels")
+    parser.add_argument(
+        "--extract-other-screenshot", type=Path, dest="other_screenshot_path",
+        help="write the other GS screen buffer as PNG or native raw pixels")
     parser.add_argument(
         "--probe-pixel", nargs=2, type=float, metavar=("X", "Y"),
         help="list conservative draw candidates covering framebuffer pixel X Y")
@@ -1514,11 +1620,18 @@ def main() -> int:
         print(f"payloads: {args.payload_dir}")
     if args.screenshot_path:
         try:
-            extract_screenshot(trace, args.screenshot_path)
+            extract_screenshot(trace, args.screenshot_path, "draw")
         except ValueError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
         print(f"screenshot: {args.screenshot_path}")
+    if args.other_screenshot_path:
+        try:
+            extract_screenshot(trace, args.other_screenshot_path, "other")
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        print(f"other screenshot: {args.other_screenshot_path}")
     if args.probe_pixel:
         print_pixel_probe(trace, args.probe_pixel[0], args.probe_pixel[1])
     return 0
