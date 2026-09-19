@@ -72,6 +72,99 @@ def patch(source: str) -> str:
 
     source = replace_once(
         source,
+        "static void gfx_run_dl(Gfx* cmd) {\n",
+        "static void gfx_run_dl(Gfx* cmd, uint32_t ps2_trace_depth) {\n",
+        "display-list recursion depth",
+    )
+
+    source = replace_once(
+        source,
+        "    for (;;) {\n"
+        "        uint32_t opcode = cmd->words.w0 >> 24;\n"
+        "        // gfx_print_cmd(cmd);\n",
+        "    for (;;) {\n"
+        "        uint32_t opcode = cmd->words.w0 >> 24;\n"
+        "        uint32_t ps2_trace_entries = 1u;\n"
+        "        if (opcode == G_TEXRECT || opcode == G_TEXRECTFLIP ||\n"
+        "            opcode == G_TEXRECT_WIDE_EXT || opcode == G_IMAGERECT_EXT) {\n"
+        "            ps2_trace_entries = 3u;\n"
+        "        } else if (opcode == G_FILLRECT_WIDE_EXT) {\n"
+        "            ps2_trace_entries = 2u;\n"
+        "        }\n"
+        "        gfxPs2TraceGfxCommands(cmd, ps2_trace_depth, ps2_trace_entries);\n"
+        "        // gfx_print_cmd(cmd);\n",
+        "raw display-list command stream",
+    )
+
+    source = replace_once(
+        source,
+        "            case G_MTX: {\n"
+        "                gfx_sp_matrix(C0(16, 8), (const int32_t*)seg_addr(cmd->words.w1));\n"
+        "                break;\n"
+        "            }\n",
+        "            case G_MTX: {\n"
+        "                const void *ps2_mtx_source = seg_addr(cmd->words.w1);\n"
+        "                gfxPs2TraceGfxSource(1u, ps2_mtx_source, 64u, C0(16, 8));\n"
+        "                gfx_sp_matrix(C0(16, 8), (const int32_t*)ps2_mtx_source);\n"
+        "                break;\n"
+        "            }\n",
+        "matrix source payload",
+    )
+
+    source = replace_once(
+        source,
+        "            case G_VTX:\n"
+        "                gfx_sp_vertex(C0(0, 16) / sizeof(Vtx), C0(16, 4), (const Vtx*)seg_addr(cmd->words.w1));\n"
+        "                break;\n",
+        "            case G_VTX: {\n"
+        "                const uint32_t ps2_vtx_count = C0(16, 4);\n"
+        "                const Vtx *ps2_vtx_source = (const Vtx*)seg_addr(cmd->words.w1);\n"
+        "                gfxPs2TraceGfxSource(2u, ps2_vtx_source,\n"
+        "                    ps2_vtx_count * (uint32_t)sizeof(Vtx),\n"
+        "                    (uint64_t)ps2_vtx_count |\n"
+        "                        ((uint64_t)(C0(0, 16) / sizeof(Vtx)) << 32u));\n"
+        "                gfx_sp_vertex(C0(0, 16) / sizeof(Vtx),\n"
+        "                    ps2_vtx_count, ps2_vtx_source);\n"
+        "                break;\n"
+        "            }\n",
+        "vertex source payload",
+    )
+
+    source = replace_once(
+        source,
+        "                        gfx_run_dl(subGFX);\n",
+        "                        gfx_run_dl(subGFX, ps2_trace_depth + 1u);\n",
+        "nested display-list depth",
+    )
+
+    source = replace_once(
+        source,
+        "            case G_COL:\n"
+        "                gfx_sp_set_vertex_colors(C0(0, 16) / 4, (NormalColor *)seg_addr(cmd->words.w1));\n"
+        "                break;\n",
+        "            case G_COL: {\n"
+        "                const uint32_t ps2_color_count = C0(0, 16) / 4u;\n"
+        "                const NormalColor *ps2_color_source =\n"
+        "                    (const NormalColor *)seg_addr(cmd->words.w1);\n"
+        "                gfxPs2TraceGfxSource(3u, ps2_color_source,\n"
+        "                    ps2_color_count * (uint32_t)sizeof(NormalColor),\n"
+        "                    ps2_color_count);\n"
+        "                gfx_sp_set_vertex_colors(\n"
+        "                    ps2_color_count, ps2_color_source);\n"
+        "                break;\n"
+        "            }\n",
+        "vertex color source payload",
+    )
+
+    source = replace_once(
+        source,
+        "    gfx_run_dl(commands);\n",
+        "    gfx_run_dl(commands, 0u);\n",
+        "top-level display-list depth",
+    )
+
+    source = replace_once(
+        source,
         "static void gfx_dp_set_texture_image(uint32_t format, uint32_t size, uint32_t width, uint32_t tex_flags, const void* addr) {\n"
         "    rdp.texture_to_load.addr = (const uint8_t*)addr;\n",
         "static void gfx_dp_set_texture_image(uint32_t format, uint32_t size, uint32_t width, uint32_t tex_flags, const void* addr) {\n"
