@@ -286,23 +286,216 @@ def _analyze(events: list[dict]) -> dict:
             draw_id = _event_value(event, "a") & 0xffffffff
             state = draw_states[draw_id]
             state["draw_id"] = draw_id
-            state[f"subtype_{subtype}"] = {
-                "b": event["b"], "c": event["c"], "d": event["d"],
-            }
+            b = _event_value(event, "b")
+            c = _event_value(event, "c")
+            value_d = _event_value(event, "d")
+            if subtype == 0:
+                tex0, tex1 = _u32_pair(b)
+                state["textures"] = [tex0, tex1]
+                state["filter_mode"] = c & 0xff
+                state["mipmap_filter"] = (c >> 8) & 0xff
+                state["anisotropy"] = (c >> 16) & 0xffff
+                state["active_texture_tile"] = (c >> 32) & 0xffffffff
+                state["flags"] = {
+                    "depth_test": bool(value_d & (1 << 0)),
+                    "depth_update": bool(value_d & (1 << 1)),
+                    "depth_compare": bool(value_d & (1 << 2)),
+                    "depth_equal": bool(value_d & (1 << 3)),
+                    "depth_decal": bool(value_d & (1 << 4)),
+                    "alpha_blend": bool(value_d & (1 << 5)),
+                    "modulate": bool(value_d & (1 << 6)),
+                    "alpha_threshold": bool(value_d & (1 << 7)),
+                    "texture_edge": bool(value_d & (1 << 8)),
+                    "fog": bool(value_d & (1 << 9)),
+                    "invisible": bool(value_d & (1 << 10)),
+                    "two_cycle": bool(value_d & (1 << 11)),
+                }
+                state["fog_rgb"] = [
+                    (value_d >> 16) & 0xff,
+                    (value_d >> 24) & 0xff,
+                    (value_d >> 32) & 0xff,
+                ]
+            elif subtype == 1:
+                vx, vy = _u32_pair(b)
+                vw, vh = _u32_pair(c)
+                state["viewport"] = {
+                    "x": _s32(vx), "y": _s32(vy),
+                    "width": _s32(vw), "height": _s32(vh),
+                }
+                state["depth_range"] = list(_float_pair(value_d))
+            elif subtype == 2:
+                sx, sy = _u32_pair(b)
+                sw, sh = _u32_pair(c)
+                state["scissor"] = {
+                    "x": _s32(sx), "y": _s32(sy),
+                    "width": _s32(sw), "height": _s32(sh),
+                }
+            elif subtype in (3, 4):
+                handle, logical_width = _u32_pair(b)
+                logical_height, slot = _u32_pair(c)
+                state[f"sampler{slot}"] = {
+                    "handle": handle,
+                    "logical_width": logical_width,
+                    "logical_height": logical_height,
+                    "cms": value_d & 0xff,
+                    "cmt": (value_d >> 8) & 0xff,
+                    "linear": bool((value_d >> 16) & 1),
+                    "region_s": bool((value_d >> 17) & 1),
+                    "region_t": bool((value_d >> 18) & 1),
+                    "max_u": (value_d >> 24) & 0xffff,
+                    "max_v": (value_d >> 40) & 0xffff,
+                    "mirror_s": bool((value_d >> 56) & 1),
+                    "mirror_t": bool((value_d >> 57) & 1),
+                    "monochrome_rgb": bool((value_d >> 58) & 1),
+                }
+            elif subtype in (5, 6):
+                slot = subtype - 5
+                state.setdefault(f"sampler{slot}", {})[
+                    "coordinate_scale"] = list(_float_pair(b))
+            elif subtype in (7, 8):
+                slot = subtype - 7
+                handle, upload_serial = _u32_pair(b)
+                provenance = state.setdefault(
+                    f"sampler{slot}", {}).setdefault("provenance", {})
+                provenance.update({
+                    "handle": handle,
+                    "upload_serial": upload_serial,
+                    "format": c & 0xff,
+                    "size": (c >> 8) & 0xff,
+                    "palette_format": (c >> 16) & 0xffff,
+                    "palette_count": (c >> 32) & 0xffff,
+                    "source_hash": event["d"],
+                })
+            elif subtype in (9, 10):
+                slot = subtype - 9
+                handle, upload_serial = _u32_pair(b)
+                provenance = state.setdefault(
+                    f"sampler{slot}", {}).setdefault("provenance", {})
+                provenance.update({
+                    "handle": handle,
+                    "upload_serial": upload_serial,
+                    "palette_hash": event["c"],
+                })
+            else:
+                state[f"subtype_{subtype}"] = {
+                    "b": event["b"], "c": event["c"], "d": event["d"],
+                }
         elif event_type == "draw_payload":
             packed_id = _event_value(event, "a")
             packed_storage = _event_value(event, "b")
             packed_shape = _event_value(event, "c")
+            kind_id = event["flags"] & 0xff
             draw_payloads.append({
                 "draw_id": packed_id & 0xffffffff,
                 "chunk": packed_id >> 32,
-                "kind": "input" if (event["flags"] & 0xff) == 1 else "clipped",
+                "kind_id": kind_id,
+                "kind": {1: "input", 2: "clipped", 3: "clip_map"}.get(
+                    kind_id, f"unknown_{kind_id}"),
                 "stored": not bool(event["flags"] & 0x8000),
                 "offset": packed_storage & 0xffffffff,
                 "size": packed_storage >> 32,
                 "vertex_count": packed_shape & 0xffffffff,
                 "stride_floats": packed_shape >> 32,
                 "hash": event["d"],
+            })
+        elif event_type == "texture_detail":
+            texture_details.append({
+                "sequence": event["sequence"],
+                "subtype": event["flags"] & 0x7fff,
+                "handle": _event_value(event, "a"),
+                "b": event["b"], "c": event["c"], "d": event["d"],
+            })
+        elif event_type == "build_config":
+            flags = _event_value(event, "a")
+            translate, slots = _u32_pair(_event_value(event, "b"))
+            alpha_ref, edge_ref = _u32_pair(_event_value(event, "c"))
+            runtime = _event_value(event, "d")
+            build_config = {
+                "flags_raw": _hex(flags),
+                "native_indexed_textures": bool(flags & (1 << 0)),
+                "vu1_color_batch": bool(flags & (1 << 1)),
+                "alpha_sparse_shuffle": bool(flags & (1 << 2)),
+                "alpha_same_sample_fastpath": bool(flags & (1 << 3)),
+                "independent_alpha_mask": bool(flags & (1 << 4)),
+                "independent_alpha_direct": bool(flags & (1 << 5)),
+                "geometry_baseline": bool(flags & (1 << 6)),
+                "material_baseline": bool(flags & (1 << 7)),
+                "translate_vertices": translate,
+                "texture_state_slots": slots,
+                "alpha_threshold": alpha_ref,
+                "texture_edge_threshold": edge_ref,
+                "filter_mode": runtime & 0xffff,
+                "mipmap_filter": (runtime >> 16) & 0xffff,
+                "anisotropy": (runtime >> 32) & 0xffffffff,
+            }
+        elif event_type == "queue_wait":
+            subtype = event["flags"] & 0xff
+            item = {
+                "sequence": event["sequence"],
+                "subtype": subtype,
+                "failed": bool(event["flags"] & 0x8000),
+                "a": _event_value(event, "a"),
+                "b": _event_value(event, "b"),
+                "c": _event_value(event, "c"),
+                "d": _event_value(event, "d"),
+            }
+            if subtype == 0:
+                item.update({
+                    "name": "path3_ownership",
+                    "wait_microseconds": item["a"],
+                    "used_qwords": item["b"],
+                    "arena": item["c"],
+                    "path1_handoff": bool(item["d"]),
+                })
+            elif subtype == 1:
+                item.update({
+                    "name": "texture_upload_ownership",
+                    "wait_microseconds": item["a"],
+                    "payload_bytes": item["b"],
+                    "chain_qwords": item["c"],
+                    "encoding": item["d"],
+                })
+            elif subtype == 2:
+                item.update({
+                    "name": "gs_finish",
+                    "ownership_microseconds": item["a"],
+                    "finish_dma_microseconds": item["b"],
+                    "gs_poll_microseconds": item["c"],
+                    "wait_microseconds": item["d"],
+                })
+            elif subtype == 4:
+                encoded = item["d"]
+                item.update({
+                    "name": "texture_staging",
+                    "wait_microseconds": item["a"],
+                    "payload_bytes": item["b"],
+                    "source_bytes": item["c"],
+                    "encoding": encoded & 0xffffffff,
+                    "mirror_s": bool((encoded >> 32) & 1),
+                    "mirror_t": bool((encoded >> 33) & 1),
+                })
+            else:
+                item["name"] = f"subtype_{subtype}"
+            queue_waits.append(item)
+        elif event_type == "gs_draw":
+            packed = _event_value(event, "a")
+            texture_vram, clut_vram = _u32_pair(_event_value(event, "d"))
+            gs_draws.append({
+                "sequence": event["sequence"],
+                "vertices": packed & 0xffffffff,
+                "register_count": packed >> 32,
+                "path": "path1" if event["flags"] & 1 else "path3",
+                "textured": bool(event["flags"] & 4),
+                "indexed": bool(event["flags"] & 0x0100),
+                "clut_load": bool(event["flags"] & 0x0200),
+                "texflush": bool(event["flags"] & 0x0400),
+                "render_target_view": bool(event["flags"] & 0x0800),
+                "texture_alpha": bool(event["flags"] & 0x1000),
+                "alpha_blend": bool(event["flags"] & 0x2000),
+                "primary_state": event["b"],
+                "secondary_state": event["c"],
+                "texture_vram": texture_vram,
+                "clut_vram": clut_vram,
             })
         elif event_type == "draw_clipped" and active_draw is not None:
             clipped = _event_value(event, "c")
@@ -348,6 +541,10 @@ def _analyze(events: list[dict]) -> dict:
         "texture_coord_ranges": texture_coord_ranges,
         "draw_states": dict(sorted(draw_states.items())),
         "draw_payloads": draw_payloads,
+        "texture_details": texture_details,
+        "build_config": build_config,
+        "queue_waits": queue_waits,
+        "gs_draws": gs_draws,
         "largest_event_gaps": sorted(
             gaps, key=lambda gap: gap["microseconds"], reverse=True)[:10],
     }
