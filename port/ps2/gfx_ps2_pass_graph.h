@@ -36,6 +36,18 @@ struct Ps2GfxPassGraphSample {
     float t;
 };
 
+#define PS2_GFX_PASS_GRAPH_SHUFFLE_ROW_HEIGHT 2
+#define PS2_GFX_PASS_GRAPH_SHUFFLE_ROWS \
+    ((PS2_GFX_PASS_GRAPH_TILE_HEIGHT + \
+      PS2_GFX_PASS_GRAPH_SHUFFLE_ROW_HEIGHT - 1) / \
+     PS2_GFX_PASS_GRAPH_SHUFFLE_ROW_HEIGHT)
+
+struct Ps2GfxPassGraphRowSpans {
+    uint16_t x0[PS2_GFX_PASS_GRAPH_SHUFFLE_ROWS];
+    uint16_t x1[PS2_GFX_PASS_GRAPH_SHUFFLE_ROWS];
+    uint32_t row_count;
+};
+
 enum Ps2GfxAlphaEdgeComparison {
     PS2_GFX_ALPHA_EDGE_REJECT = 0,
     PS2_GFX_ALPHA_EDGE_ALWAYS,
@@ -89,6 +101,18 @@ bool ps2GfxGetPassGraphTile(
 /* GS STQ is normalized; convert a screen point into one workspace texture. */
 struct Ps2GfxPassGraphSample ps2GfxMapPassGraphSample(
     float screen_x, float screen_y, int tile_origin_x, int tile_origin_y);
+
+/*
+ * Conservatively describe the horizontal pixel span touched by the triangle
+ * for every 2-pixel row of one pass-graph tile. The result is deliberately
+ * expanded by one pixel before clamping to the tile so a sparse 8x2 GS channel
+ * shuffle may omit definitely untouched blocks without changing edge coverage.
+ * x0/x1 are tile-local half-open pixel coordinates.
+ */
+bool ps2GfxDescribePassGraphRowSpans(
+    const struct Ps2GfxPassGraphTriangle *triangle,
+    const struct Ps2GfxPassGraphRect *tile,
+    struct Ps2GfxPassGraphRowSpans *spans);
 
 /*
  * Clip one triangle to delta >= 0 or delta < 0 and return a triangle list.

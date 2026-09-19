@@ -172,6 +172,16 @@ bool ps2GsCoreBlitRenderTargetChannelToActiveAlpha(
 bool ps2GsCoreBlitRenderTargetChannelRectToActiveAlpha(
     Ps2GsRenderTargetHandle source, enum Ps2GsCt32Channel channel,
     uint32_t width, uint32_t height);
+/*
+ * Sparse variant for pass-graph triangles. Each entry describes the tile-local
+ * half-open x range that may be consumed for one 2-pixel destination row.
+ * Definitely untouched 8x2 shuffle sprites are omitted from the GIF stream.
+ */
+bool ps2GsCoreBlitRenderTargetChannelSpansToActiveAlpha(
+    Ps2GsRenderTargetHandle source, enum Ps2GsCt32Channel channel,
+    uint32_t width, uint32_t height,
+    const uint16_t *span_x0, const uint16_t *span_x1,
+    uint32_t span_count);
 bool ps2GsCoreBlitRenderTargetRedToActiveAlpha(
     Ps2GsRenderTargetHandle source);
 

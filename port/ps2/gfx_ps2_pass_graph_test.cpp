@@ -82,6 +82,44 @@ static void test_maps_screen_pixels_to_normalized_stq(void)
     assert(sample.t == 1.0f);
 }
 
+static void test_describes_sparse_shuffle_row_spans(void)
+{
+    const struct Ps2GfxPassGraphTriangle triangle = {
+        { 0.0f, 16.0f, 0.0f },
+        { 0.0f, 0.0f, 8.0f },
+    };
+    const struct Ps2GfxPassGraphRect tile = { 0, 0, 16, 8 };
+    struct Ps2GfxPassGraphRowSpans spans = {};
+    assert(ps2GfxDescribePassGraphRowSpans(
+        &triangle, &tile, &spans));
+    assert(spans.row_count == 4u);
+
+    assert(spans.x0[0] == 0u);
+    assert(spans.x1[0] == 16u);
+    for (uint32_t row = 1u; row < spans.row_count; ++row) {
+        assert(spans.x0[row] == 0u);
+        assert(spans.x1[row] <= spans.x1[row - 1u]);
+        assert(spans.x1[row] > 0u);
+    }
+    assert(spans.x1[3] < 16u);
+
+    const struct Ps2GfxPassGraphRect shifted = { 4, 2, 8, 4 };
+    assert(ps2GfxDescribePassGraphRowSpans(
+        &triangle, &shifted, &spans));
+    assert(spans.row_count == 2u);
+    for (uint32_t row = 0u; row < spans.row_count; ++row) {
+        assert(spans.x1[row] <= 8u);
+        assert(spans.x0[row] <= spans.x1[row]);
+    }
+
+    const struct Ps2GfxPassGraphRect too_tall = {
+        0, 0, PS2_GFX_PASS_GRAPH_TILE_WIDTH,
+        PS2_GFX_PASS_GRAPH_TILE_HEIGHT + 1,
+    };
+    assert(!ps2GfxDescribePassGraphRowSpans(
+        &triangle, &too_tall, &spans));
+}
+
 static void test_splits_signed_alpha_and_preserves_stq_planes(void)
 {
     const struct Ps2GfxSignedAlphaVertex triangle[3] = {
@@ -146,6 +184,7 @@ int main(void)
     test_respects_nonzero_scissor();
     test_rejects_empty_or_outside_geometry();
     test_maps_screen_pixels_to_normalized_stq();
+    test_describes_sparse_shuffle_row_spans();
     test_splits_signed_alpha_and_preserves_stq_planes();
     test_signed_alpha_edge_test_plan();
     puts("gfx_ps2_pass_graph tests passed");

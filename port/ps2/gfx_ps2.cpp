@@ -2746,6 +2746,10 @@ static bool ps2_draw_alpha_trilerp_tile(
     struct Ps2GsTexturedVertex composite[3];
     const bool add_input3 = s_shader->plan.alpha_recipe ==
         PS2_ALPHA_TEX01_LERP_INPUT1_MUL_INPUT2_PLUS_INPUT3;
+    const bool add_input3_nonzero = add_input3 &&
+        (triangle[0].alpha_add != 0u ||
+         triangle[1].alpha_add != 0u ||
+         triangle[2].alpha_add != 0u);
     ps2_make_alpha_trilerp_texture_triangle(
         triangle, 0, tile->x, tile->y, true, false, texture0_alpha);
     ps2_make_alpha_trilerp_texture_triangle(
@@ -2760,7 +2764,7 @@ static bool ps2_draw_alpha_trilerp_tile(
     ps2_make_alpha_trilerp_workspace_triangle(
         triangle, tile->x, tile->y, 0u, true, false, false,
         alpha_lerp);
-    if (add_input3) {
+    if (add_input3_nonzero) {
         ps2_make_alpha_trilerp_add_triangle(
             triangle, tile->x, tile->y, alpha_add);
     }
@@ -2811,7 +2815,7 @@ static bool ps2_draw_alpha_trilerp_tile(
             s_alpha_trilerp_color_target, alpha_lerp, 3u, false)) {
         return false;
     }
-    if (add_input3) {
+    if (add_input3_nonzero) {
         ps2GsCoreSetColorChannelWriteMask(PS2_GS_COLOR_WRITE_RED);
         ps2GsCoreSetAlphaWrite(false);
         ps2GsCoreSetAlphaBlendEquation(
@@ -2836,11 +2840,28 @@ static bool ps2_draw_alpha_trilerp_tile(
         s_selected_texture[1], texture1_color, 3u);
     ps2GsCoreSetAlphaWrite(true);
     ps2GsCoreSetAlphaBlend(false);
+#if defined(PERFECT_DARK_PS2_ALPHA_SPARSE_SHUFFLE)
+    const struct Ps2GfxPassGraphTriangle shuffle_geometry = {
+        { triangle[0].x, triangle[1].x, triangle[2].x },
+        { triangle[0].y, triangle[1].y, triangle[2].y },
+    };
+    struct Ps2GfxPassGraphRowSpans shuffle_spans = {};
+    if (!ps2GfxDescribePassGraphRowSpans(
+            &shuffle_geometry, tile, &shuffle_spans) ||
+        !ps2GsCoreBlitRenderTargetChannelSpansToActiveAlpha(
+            s_alpha_trilerp_scalar_target, PS2_GS_CT32_CHANNEL_RED,
+            (uint32_t)tile->width, (uint32_t)tile->height,
+            shuffle_spans.x0, shuffle_spans.x1,
+            shuffle_spans.row_count)) {
+        return false;
+    }
+#else
     if (!ps2GsCoreBlitRenderTargetChannelRectToActiveAlpha(
             s_alpha_trilerp_scalar_target, PS2_GS_CT32_CHANNEL_RED,
             (uint32_t)tile->width, (uint32_t)tile->height)) {
         return false;
     }
+#endif
 
     ps2GsCoreBindDefaultRenderTarget();
     ps2GsCoreSetScissor(tile->x, tile->y, tile->width, tile->height);

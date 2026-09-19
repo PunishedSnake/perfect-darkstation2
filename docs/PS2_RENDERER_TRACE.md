@@ -180,3 +180,38 @@ Ordinary gameplay frames do not perform this extra range scan. This should let
 a paired screenshot identify whether the couch/computer geometry reaches a
 valid tiled composite and whether its effective alpha inputs collapse near
 zero.
+
+
+## Fifth retail capture: remove definitely unused shuffle work
+
+Frame 187 (`pdps2-gs-trace(5).bin`) was captured with the per-draw
+pass-graph instrumentation from `7bc0e68e`. It contains 32 draws / 226 input
+triangles and zero unsupported shaders. The recorded frame spans 254,431 us.
+
+`alpha_trilerp_modulate` remains the dominant cost: 20 draws / 117 input
+triangles account for 191,791 us and 773,975 requested PATH3 qwords, versus
+804,516 PATH3 qwords for the complete frame. The instrumented alpha graph
+contains 635 workspace-tile invocations after clipping.
+
+The four draws using additive-alpha shader
+`0x320d020d818a818a/0x0000000000000513` report `INPUT3.a == 0` at every
+captured vertex. **POTWIERDZONE for this frame:** their additive triangle pass
+does no useful mathematical work, so the renderer now skips that draw whenever
+all three triangle vertices have zero additive alpha. The final normalization
+remains unchanged.
+
+The larger source of redundant transport is the CT32-red-to-alpha channel
+shuffle. The old path emits every 8x2 shuffle sprite in the rectangular tile
+even though the final composite samples only the source triangle. The new
+default `PD_PS2_ALPHA_SPARSE_SHUFFLE=ON` path computes a conservative
+2-pixel-row span for each triangle/tile and omits only 8x2 blocks that cannot
+intersect the triangle. A one-pixel guard is included around the mathematical
+coverage to avoid raster-edge false negatives. The original rectangular path
+remains available as an A/B baseline with
+`-DPD_PS2_ALPHA_SPARSE_SHUFFLE=OFF`.
+
+**HIPOTEZA DO TESTU:** this should reduce PATH3 qwords substantially for large,
+diagonal alpha-trilerp triangles without changing the pass equation. The next
+real-hardware capture must compare requested PATH3 qwords, alpha-trilerp time,
+visible edges and the existing missing-couch/computer symptoms. A lower qword
+count is not accepted as a win if coverage changes.

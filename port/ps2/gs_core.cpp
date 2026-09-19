@@ -2427,9 +2427,11 @@ static bool ps2GsCoreRestoreChannelBlitState(
     return true;
 }
 
-extern "C" bool ps2GsCoreBlitRenderTargetChannelRectToActiveAlpha(
+static bool ps2GsCoreBlitRenderTargetChannelRectToActiveAlphaImpl(
     Ps2GsRenderTargetHandle source, enum Ps2GsCt32Channel channel,
-    uint32_t width, uint32_t height)
+    uint32_t width, uint32_t height,
+    const uint16_t *span_x0, const uint16_t *span_x1,
+    uint32_t span_count)
 {
     if (!s_gs || !s_frame_building ||
         s_active_render_target == PS2_GS_RENDER_TARGET_DEFAULT ||
@@ -2451,6 +2453,26 @@ extern "C" bool ps2GsCoreBlitRenderTargetChannelRectToActiveAlpha(
         width > source_slot->layout.width ||
         height > source_slot->layout.height) {
         return false;
+    }
+
+    const bool sparse = span_x0 != NULL || span_x1 != NULL;
+    const uint32_t required_span_count = (height + 1u) / 2u;
+    if (sparse) {
+        if (!span_x0 || !span_x1 ||
+            span_count != required_span_count) {
+            return false;
+        }
+        bool any_span = false;
+        for (uint32_t row = 0u; row < span_count; ++row) {
+            if (span_x0[row] > span_x1[row] ||
+                span_x1[row] > width) {
+                return false;
+            }
+            any_span = any_span || span_x0[row] != span_x1[row];
+        }
+        if (!any_span) {
+            return true;
+        }
     }
 
     struct Ps2GsSharedClut *shared = NULL;
@@ -2537,13 +2559,32 @@ extern "C" bool ps2GsCoreBlitRenderTargetChannelRectToActiveAlpha(
             const uint32_t destination_x = page_x * 64u;
             const uint32_t page_width = width - destination_x < 64u ?
                 width - destination_x : 64u;
-            const uint32_t tile_count =
-                ((page_width + 7u) / 8u) *
-                ((page_height + 1u) / 2u);
+            uint32_t tile_count = 0u;
+            for (uint32_t y = 0u; y < page_height; y += 2u) {
+                const uint32_t row_index =
+                    (destination_y + y) / 2u;
+                for (uint32_t tile_x = 0u;
+                     tile_x < page_width; tile_x += 8u) {
+                    const uint32_t tile_width =
+                        page_width - tile_x < 8u ?
+                        page_width - tile_x : 8u;
+                    const uint32_t x0 = destination_x + tile_x;
+                    const uint32_t x1 = x0 + tile_width;
+                    if (sparse &&
+                        (x1 <= span_x0[row_index] ||
+                         x0 >= span_x1[row_index])) {
+                        continue;
+                    }
+                    ++tile_count;
+                }
+            }
+            if (tile_count == 0u) {
+                continue;
+            }
+
             const uint32_t register_count = 1u + tile_count * 5u;
             struct Ps2GsPackedReg *p =
-                tile_count != 0u ?
-                ps2GsCoreReserveChunk(register_count) : NULL;
+                ps2GsCoreReserveChunk(register_count);
             if (!p) {
                 success = false;
                 break;
@@ -2588,7 +2629,14 @@ extern "C" bool ps2GsCoreBlitRenderTargetChannelRectToActiveAlpha(
                         tile_x * 2u + (right_lane ? 8u : 0u);
                     const uint32_t u_xor = first.u - raw_tile_x;
                     const uint32_t x0 = destination_x + tile_x;
+                    const uint32_t x1 = x0 + tile_width;
                     const uint32_t y0 = destination_y + y;
+                    const uint32_t row_index = y0 / 2u;
+                    if (sparse &&
+                        (x1 <= span_x0[row_index] ||
+                         x0 >= span_x1[row_index])) {
+                        continue;
+                    }
 
                     ps2GsCoreWriteReg(&p[out++],
                         GS_SETREG_CLAMP(
@@ -2642,6 +2690,25 @@ extern "C" bool ps2GsCoreBlitRenderTargetChannelRectToActiveAlpha(
     ps2GsStateShadowInvalidate(&s_state_shadow, PS2_GS_STATE_TEX1);
     ps2GsStateShadowInvalidate(&s_state_shadow, PS2_GS_STATE_PRIM);
     return success && restored;
+}
+
+extern "C" bool ps2GsCoreBlitRenderTargetChannelRectToActiveAlpha(
+    Ps2GsRenderTargetHandle source, enum Ps2GsCt32Channel channel,
+    uint32_t width, uint32_t height)
+{
+    return ps2GsCoreBlitRenderTargetChannelRectToActiveAlphaImpl(
+        source, channel, width, height, NULL, NULL, 0u);
+}
+
+extern "C" bool ps2GsCoreBlitRenderTargetChannelSpansToActiveAlpha(
+    Ps2GsRenderTargetHandle source, enum Ps2GsCt32Channel channel,
+    uint32_t width, uint32_t height,
+    const uint16_t *span_x0, const uint16_t *span_x1,
+    uint32_t span_count)
+{
+    return ps2GsCoreBlitRenderTargetChannelRectToActiveAlphaImpl(
+        source, channel, width, height,
+        span_x0, span_x1, span_count);
 }
 
 extern "C" bool ps2GsCoreBlitRenderTargetChannelToActiveAlpha(

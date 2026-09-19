@@ -41,6 +41,10 @@ option(PD_PS2_ALPHA_MATERIAL_DIAGNOSTIC
   "Render direct TEXEL0 materials while preserving alpha visibility state"
   OFF
 )
+option(PD_PS2_ALPHA_SPARSE_SHUFFLE
+  "Omit definitely untouched 8x2 channel-shuffle sprites in alpha pass graphs"
+  ON
+)
 option(PD_PS2_DISABLE_CULLING_DIAGNOSTIC
   "Disable Fast3D triangle culling in the PS2 generated frontend"
   OFF
@@ -348,6 +352,11 @@ add_executable(pd_ps2_bootstrap
 if(PD_PS2_ALPHA_TRILERP_DIAGNOSTIC)
   target_compile_definitions(pd_ps2_bootstrap PRIVATE
     PERFECT_DARK_PS2_ALPHA_TRILERP_DIAGNOSTIC=1
+  )
+endif()
+if(PD_PS2_ALPHA_SPARSE_SHUFFLE)
+  target_compile_definitions(pd_ps2_bootstrap PRIVATE
+    PERFECT_DARK_PS2_ALPHA_SPARSE_SHUFFLE=1
   )
 endif()
 
@@ -672,6 +681,11 @@ endif()
 if(PD_PS2_NATIVE_INDEXED_TEXTURES)
   target_compile_definitions(pd_ps2_game PRIVATE
     PERFECT_DARK_PS2_NATIVE_INDEXED_TEXTURES=1
+  )
+endif()
+if(PD_PS2_ALPHA_SPARSE_SHUFFLE)
+  target_compile_definitions(pd_ps2_game PRIVATE
+    PERFECT_DARK_PS2_ALPHA_SPARSE_SHUFFLE=1
   )
 endif()
 if(PD_PS2_GEOMETRY_BASELINE_DIAGNOSTIC)

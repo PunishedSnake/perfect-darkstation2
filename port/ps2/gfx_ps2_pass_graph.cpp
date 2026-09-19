@@ -128,6 +128,119 @@ extern "C" struct Ps2GfxPassGraphSample ps2GfxMapPassGraphSample(
     return sample;
 }
 
+static void ps2GfxIncludeSpanX(
+    float x, bool *hit, float *min_x, float *max_x)
+{
+    if (!*hit) {
+        *min_x = x;
+        *max_x = x;
+        *hit = true;
+        return;
+    }
+    if (x < *min_x) *min_x = x;
+    if (x > *max_x) *max_x = x;
+}
+
+static void ps2GfxIncludeEdgeAtY(
+    float ax, float ay, float bx, float by, float y,
+    bool *hit, float *min_x, float *max_x)
+{
+    if (ay == by) {
+        return;
+    }
+    const float edge_min_y = ay < by ? ay : by;
+    const float edge_max_y = ay > by ? ay : by;
+    if (y < edge_min_y || y > edge_max_y) {
+        return;
+    }
+    const float factor = (y - ay) / (by - ay);
+    ps2GfxIncludeSpanX(
+        ax + (bx - ax) * factor, hit, min_x, max_x);
+}
+
+extern "C" bool ps2GfxDescribePassGraphRowSpans(
+    const struct Ps2GfxPassGraphTriangle *triangle,
+    const struct Ps2GfxPassGraphRect *tile,
+    struct Ps2GfxPassGraphRowSpans *spans)
+{
+    if (!triangle || !tile || !spans ||
+        tile->width <= 0 || tile->height <= 0 ||
+        tile->width > PS2_GFX_PASS_GRAPH_TILE_WIDTH ||
+        tile->height > PS2_GFX_PASS_GRAPH_TILE_HEIGHT) {
+        return false;
+    }
+
+    const uint32_t row_count = (uint32_t)(
+        (tile->height + PS2_GFX_PASS_GRAPH_SHUFFLE_ROW_HEIGHT - 1) /
+        PS2_GFX_PASS_GRAPH_SHUFFLE_ROW_HEIGHT);
+    if (row_count > PS2_GFX_PASS_GRAPH_SHUFFLE_ROWS) {
+        return false;
+    }
+
+    spans->row_count = row_count;
+    for (uint32_t row = 0u; row < row_count; ++row) {
+        const int local_y0 =
+            (int)row * PS2_GFX_PASS_GRAPH_SHUFFLE_ROW_HEIGHT;
+        int local_y1 =
+            local_y0 + PS2_GFX_PASS_GRAPH_SHUFFLE_ROW_HEIGHT;
+        if (local_y1 > tile->height) {
+            local_y1 = tile->height;
+        }
+
+        /*
+         * Expand the strip and x extent by one pixel. The GS shuffle works in
+         * coarse 8x2 blocks; spending at most one neighbouring block here is
+         * much cheaper than risking a raster-edge false negative.
+         */
+        const float strip_y0 = (float)(tile->y + local_y0) - 1.0f;
+        const float strip_y1 = (float)(tile->y + local_y1) + 1.0f;
+        bool hit = false;
+        float min_x = 0.0f;
+        float max_x = 0.0f;
+
+        for (uint32_t i = 0u; i < 3u; ++i) {
+            const float y = triangle->y[i];
+            if (y >= strip_y0 && y <= strip_y1) {
+                ps2GfxIncludeSpanX(
+                    triangle->x[i], &hit, &min_x, &max_x);
+            }
+        }
+
+        for (uint32_t i = 0u; i < 3u; ++i) {
+            const uint32_t j = (i + 1u) % 3u;
+            ps2GfxIncludeEdgeAtY(
+                triangle->x[i], triangle->y[i],
+                triangle->x[j], triangle->y[j],
+                strip_y0, &hit, &min_x, &max_x);
+            ps2GfxIncludeEdgeAtY(
+                triangle->x[i], triangle->y[i],
+                triangle->x[j], triangle->y[j],
+                strip_y1, &hit, &min_x, &max_x);
+        }
+
+        if (!hit) {
+            spans->x0[row] = 0u;
+            spans->x1[row] = 0u;
+            continue;
+        }
+
+        const int tile_x1 = tile->x + tile->width;
+        int x0 = ps2GfxFloorToInt(min_x - 1.0f);
+        int x1 = ps2GfxCeilToInt(max_x + 1.0f);
+        x0 = ps2GfxMaxInt(x0, tile->x);
+        x1 = ps2GfxMinInt(x1, tile_x1);
+        if (x0 >= x1) {
+            spans->x0[row] = 0u;
+            spans->x1[row] = 0u;
+            continue;
+        }
+
+        spans->x0[row] = (uint16_t)(x0 - tile->x);
+        spans->x1[row] = (uint16_t)(x1 - tile->x);
+    }
+    return true;
+}
+
 static struct Ps2GfxSignedAlphaVertex ps2GfxInterpolateSignedAlphaVertex(
     const struct Ps2GfxSignedAlphaVertex *a,
     const struct Ps2GfxSignedAlphaVertex *b)
