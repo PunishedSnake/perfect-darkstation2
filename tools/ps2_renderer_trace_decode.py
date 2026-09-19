@@ -1193,17 +1193,62 @@ def print_summary(trace: dict) -> None:
         print(
             f"draw payloads: total={len(analysis['draw_payloads'])} "
             f"stored={len(stored)} bad_hash={len(bad_hash)}")
-    screenshot = analysis.get("screenshot", {})
-    if screenshot:
+    if analysis.get("build_info"):
+        info = analysis["build_info"]
         print(
-            "screenshot: "
-            f"{screenshot.get('width', 0)}x{screenshot.get('height', 0)} "
-            f"psm=0x{screenshot.get('psm', 0):02x} "
-            f"buffer={screenshot.get('buffer_index')} "
-            f"bytes={screenshot.get('size', 0)} "
-            f"success={screenshot.get('success', False)} "
-            f"hash_ok={screenshot.get('hash_ok')} "
-            f"readback={screenshot.get('readback_microseconds', 0)} us")
+            "build identity: "
+            f"commit={info.get('git_commit', '?')} "
+            f"hash_ok={info.get('hash_ok')}")
+    if analysis.get("gfx_commands"):
+        commands = analysis["gfx_commands"]
+        print(
+            f"Fast3D command stream: entries={len(commands)} "
+            f"max_depth={max((x['depth'] for x in commands), default=0)}")
+    if analysis.get("gfx_sources"):
+        stored = [x for x in analysis["gfx_sources"] if x.get("stored")]
+        bad_hash = [x for x in stored if x.get("hash_ok") is False]
+        print(
+            f"Fast3D source payloads: total={len(analysis['gfx_sources'])} "
+            f"stored={len(stored)} bad_hash={len(bad_hash)}")
+    if analysis.get("gs_draw_states"):
+        print(
+            f"per-draw GS state records: {len(analysis['gs_draw_states'])}")
+    if analysis.get("gs_uploads"):
+        stored = [
+            x for x in analysis["gs_uploads"]
+            if x.get("kind") in ("payload", "dma_chain") and x.get("stored")
+        ]
+        bad_hash = [x for x in stored if x.get("hash_ok") is False]
+        print(
+            f"GS upload forensic records: total={len(analysis['gs_uploads'])} "
+            f"stored_payloads={len(stored)} bad_hash={len(bad_hash)}")
+    if analysis.get("tmem_snapshots"):
+        stored = [x for x in analysis["tmem_snapshots"] if x.get("stored")]
+        bad_hash = [x for x in stored if x.get("hash_ok") is False]
+        print(
+            f"TMEM snapshot components: total={len(analysis['tmem_snapshots'])} "
+            f"stored={len(stored)} bad_hash={len(bad_hash)}")
+    for name, screenshot in analysis.get(
+            "screenshots", {"draw": analysis.get("screenshot", {})}).items():
+        if screenshot:
+            print(
+                f"{name} framebuffer: "
+                f"{screenshot.get('width', 0)}x{screenshot.get('height', 0)} "
+                f"psm=0x{screenshot.get('psm', 0):02x} "
+                f"buffer={screenshot.get('buffer_index')} "
+                f"bytes={screenshot.get('size', 0)} "
+                f"success={screenshot.get('success', False)} "
+                f"hash_ok={screenshot.get('hash_ok')} "
+                f"readback={screenshot.get('readback_microseconds', 0)} us")
+    if analysis.get("gs_vram_dump"):
+        vram = analysis["gs_vram_dump"]
+        print(
+            "GS VRAM dump: "
+            f"bytes={vram.get('written_bytes', 0)} "
+            f"strips={vram.get('strips', 0)} "
+            f"success={vram.get('success', False)} "
+            f"readback={vram.get('readback_microseconds', 0)} us "
+            f"hash={vram.get('hash', '0')}")
     print("GS shadow:")
     for event in trace["event_stream"]:
         if event["type"] == "gs_register":
@@ -1603,7 +1648,7 @@ def main() -> int:
         help="write the other GS screen buffer as PNG or native raw pixels")
     parser.add_argument(
         "--probe-pixel", nargs=2, type=float, metavar=("X", "Y"),
-        help="list conservative draw candidates covering framebuffer pixel X Y")
+        help="list captured post-clip triangles covering framebuffer pixel X Y")
     args = parser.parse_args()
     try:
         trace = decode(args.trace)
