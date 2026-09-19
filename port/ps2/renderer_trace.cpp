@@ -443,7 +443,8 @@ static bool ps2RendererTraceWriteManifest(
         "qwords=pdps2-gs-trace.qwords.bin\n"
         "blob=pdps2-gs-trace.blob.bin\n"
         "framebuffer_draw=pdps2-gs-trace.framebuffer.raw\n"
-        "framebuffer_other=pdps2-gs-trace.framebuffer-other.raw\n",
+        "framebuffer_other=pdps2-gs-trace.framebuffer-other.raw\n"
+        "gs_vram_ct32=pdps2-gs-trace.vram-ct32.bin\n",
         s_header.version,
         PD_PS2_GIT_COMMIT,
         s_header.stage,
