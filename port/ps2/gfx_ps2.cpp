@@ -4643,11 +4643,55 @@ static void ps2_on_resize(void)
     ps2_reset_viewport();
 }
 
+static void ps2_trace_build_config(void)
+{
+    if (!ps2RendererTraceIsCapturing()) {
+        return;
+    }
+
+    uint64_t build_flags = 0u;
+#if defined(PERFECT_DARK_PS2_NATIVE_INDEXED_TEXTURES)
+    build_flags |= UINT64_C(1) << 0u;
+#endif
+#if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
+    build_flags |= UINT64_C(1) << 1u;
+#endif
+#if defined(PERFECT_DARK_PS2_ALPHA_SPARSE_SHUFFLE)
+    build_flags |= UINT64_C(1) << 2u;
+#endif
+#if defined(PERFECT_DARK_PS2_ALPHA_SAME_SAMPLE_FASTPATH)
+    build_flags |= UINT64_C(1) << 3u;
+#endif
+#if defined(PERFECT_DARK_PS2_INDEPENDENT_ALPHA_MASK)
+    build_flags |= UINT64_C(1) << 4u;
+#endif
+#if defined(PERFECT_DARK_PS2_INDEPENDENT_ALPHA_DIRECT)
+    build_flags |= UINT64_C(1) << 5u;
+#endif
+#if defined(PERFECT_DARK_PS2_GEOMETRY_BASELINE)
+    build_flags |= UINT64_C(1) << 6u;
+#endif
+#if defined(PERFECT_DARK_PS2_MATERIAL_BASELINE)
+    build_flags |= UINT64_C(1) << 7u;
+#endif
+
+    ps2RendererTraceRecord(PS2_TRACE_BUILD_CONFIG, 0u,
+        build_flags,
+        (uint64_t)PS2_GFX_TRANSLATE_VERTS |
+            ((uint64_t)PS2_GFX_TEXTURE_STATE_SLOTS << 32u),
+        (uint64_t)PS2_GFX_ALPHA_THRESHOLD |
+            ((uint64_t)PS2_GFX_TEXTURE_EDGE_THRESHOLD << 32u),
+        (uint64_t)(uint32_t)s_filter_mode |
+            ((uint64_t)(uint32_t)s_mipmap_filter << 16u) |
+            ((uint64_t)(uint32_t)s_anisotropy << 32u));
+}
+
 static void ps2_start_frame(void)
 {
     ps2RendererTraceBeginFrame();
     if (ps2RendererTraceIsCapturing()) {
         s_trace_draw_id = 0u;
+        ps2_trace_build_config();
     }
     ps2_trace_shader(s_shader);
     ps2RendererStatsBeginFrame();
