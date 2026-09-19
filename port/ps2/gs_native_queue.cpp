@@ -378,6 +378,9 @@ static bool ps2GsNativeQueueUploadTextureInternal(GSGLOBAL *gs,
         return false;
     }
 
+    const uint64_t trace_stage_start = ps2RendererTraceIsCapturing()
+        ? sysGetMicroseconds() : 0u;
+
     /*
      * Stage before claiming GIF ownership. The alternating slot is no longer
      * referenced by DMA: every later GIF submission waits for the immediately
@@ -445,6 +448,15 @@ static bool ps2GsNativeQueueUploadTextureInternal(GSGLOBAL *gs,
     if (chain_qw == 0 || chain_qw > PS2_GS_UPLOAD_CHAIN_QW) {
         return false;
     }
+    if (ps2RendererTraceIsCapturing()) {
+        const uint64_t stage_end = sysGetMicroseconds();
+        ps2RendererTraceRecord(PS2_TRACE_QUEUE_WAIT, 4u,
+            stage_end - trace_stage_start,
+            payload_bytes, source_bytes,
+            (uint64_t)(uint32_t)encoding |
+                ((uint64_t)(mirror_s ? 1u : 0u) << 32u) |
+                ((uint64_t)(mirror_t ? 1u : 0u) << 33u));
+    }
 
     /*
      * submit early, wait late: CPU staging and chain construction happen before
@@ -452,8 +464,22 @@ static bool ps2GsNativeQueueUploadTextureInternal(GSGLOBAL *gs,
      * Return immediately after submission; the next GIF claimant performs the
      * dependency wait instead of forcing completion here.
      */
-    if (!ps2GsVu1QueueWaitIdle() ||
-        dmaKit_wait(DMA_CHANNEL_GIF, 0) < 0) {
+    const uint64_t upload_wait_start = ps2RendererTraceIsCapturing()
+        ? sysGetMicroseconds() : 0u;
+    const bool upload_vu1_idle = ps2GsVu1QueueWaitIdle();
+    const int upload_gif_wait = upload_vu1_idle
+        ? dmaKit_wait(DMA_CHANNEL_GIF, 0) : -1;
+    if (ps2RendererTraceIsCapturing()) {
+        const uint64_t upload_wait_end = sysGetMicroseconds();
+        ps2RendererTraceRecord(PS2_TRACE_QUEUE_WAIT,
+            (uint16_t)(1u |
+                ((!upload_vu1_idle || upload_gif_wait < 0)
+                    ? PS2_TRACE_FLAG_DROPPED : 0u)),
+            upload_wait_end - upload_wait_start,
+            payload_bytes, chain_qw,
+            (uint64_t)(uint32_t)encoding);
+    }
+    if (!upload_vu1_idle || upload_gif_wait < 0) {
         return false;
     }
     dmaKit_send_chain(DMA_CHANNEL_GIF, slot->chain, chain_qw);
@@ -508,8 +534,22 @@ static bool ps2GsNativeQueueSubmitInternal(bool *vif_idle_after_submit)
      * to claim it. Texture IMAGE transfers use the same rule, so their TEXFLUSH
      * is ordered before any dependent draw chain submitted here.
      */
-    if (!ps2GsVu1QueueWaitIdle() ||
-        dmaKit_wait(DMA_CHANNEL_GIF, 0) < 0) {
+    const uint64_t submit_wait_start = ps2RendererTraceIsCapturing()
+        ? sysGetMicroseconds() : 0u;
+    const bool submit_vu1_idle = ps2GsVu1QueueWaitIdle();
+    const int submit_gif_wait = submit_vu1_idle
+        ? dmaKit_wait(DMA_CHANNEL_GIF, 0) : -1;
+    if (ps2RendererTraceIsCapturing()) {
+        const uint64_t submit_wait_end = sysGetMicroseconds();
+        ps2RendererTraceRecord(PS2_TRACE_QUEUE_WAIT,
+            (uint16_t)(0u |
+                ((!submit_vu1_idle || submit_gif_wait < 0)
+                    ? PS2_TRACE_FLAG_DROPPED : 0u)),
+            submit_wait_end - submit_wait_start,
+            arena->used_qw, s_build_arena,
+            vif_idle_after_submit ? 1u : 0u);
+    }
+    if (!submit_vu1_idle || submit_gif_wait < 0) {
         return false;
     }
     if (vif_idle_after_submit) {
@@ -551,16 +591,49 @@ extern "C" bool ps2GsNativeQueueWaitGs(void)
      * before submitting this token, then distinguish GIF completion from actual
      * GS completion by polling the privileged FINISH bit.
      */
-    if (!ps2GsVu1QueueWaitIdle() ||
-        dmaKit_wait(DMA_CHANNEL_GIF, 0) < 0) {
+    const bool trace_capture = ps2RendererTraceIsCapturing();
+    const uint64_t wait_start = trace_capture ? sysGetMicroseconds() : 0u;
+    const bool vu1_idle = ps2GsVu1QueueWaitIdle();
+    const int ownership_wait = vu1_idle
+        ? dmaKit_wait(DMA_CHANNEL_GIF, 0) : -1;
+    const uint64_t ownership_end =
+        trace_capture ? sysGetMicroseconds() : 0u;
+    if (!vu1_idle || ownership_wait < 0) {
+        if (trace_capture) {
+            ps2RendererTraceRecord(PS2_TRACE_QUEUE_WAIT,
+                (uint16_t)(2u | PS2_TRACE_FLAG_DROPPED),
+                ownership_end - wait_start, 0u, 0u,
+                ownership_end - wait_start);
+        }
         return false;
     }
+
     GS_SETREG_CSR_FINISH(1);
     dmaKit_send_ucab(DMA_CHANNEL_GIF, s_finish_ucab, 2);
-    if (dmaKit_wait(DMA_CHANNEL_GIF, 0) < 0) {
+    const int finish_dma_wait = dmaKit_wait(DMA_CHANNEL_GIF, 0);
+    const uint64_t dma_end = trace_capture ? sysGetMicroseconds() : 0u;
+    if (finish_dma_wait < 0) {
+        if (trace_capture) {
+            ps2RendererTraceRecord(PS2_TRACE_QUEUE_WAIT,
+                (uint16_t)(2u | PS2_TRACE_FLAG_DROPPED),
+                ownership_end - wait_start,
+                dma_end - ownership_end, 0u,
+                dma_end - wait_start);
+        }
         return false;
     }
+
+    const uint64_t gs_poll_start =
+        trace_capture ? sysGetMicroseconds() : 0u;
     while (!(GS_CSR_FINISH)) {
+    }
+    if (trace_capture) {
+        const uint64_t finish_end = sysGetMicroseconds();
+        ps2RendererTraceRecord(PS2_TRACE_QUEUE_WAIT, 2u,
+            ownership_end - wait_start,
+            dma_end - ownership_end,
+            finish_end - gs_poll_start,
+            finish_end - wait_start);
     }
     return true;
 }
