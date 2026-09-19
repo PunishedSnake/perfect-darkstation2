@@ -962,46 +962,66 @@ def decode(path: Path) -> dict:
         })
 
     analysis = _analyze(events)
-    for payload in analysis["draw_payloads"]:
+
+    def validate_blob_payload(payload: dict) -> None:
         payload["hash_ok"] = None
-        if not payload["stored"]:
-            continue
+        if not payload.get("stored"):
+            return
         start = blob_offset + payload["offset"]
         end = start + payload["size"]
         if start < blob_offset or end > blob_end:
             payload["stored"] = False
             payload["error"] = "payload range exceeds blob section"
-            continue
-        payload["hash_ok"] = (
-            _fnv1a64(blob[start:end]) == int(payload["hash"], 16))
+            return
+        expected_hash = payload.get("hash")
+        if expected_hash is None:
+            return
+        if isinstance(expected_hash, str):
+            expected_hash = int(expected_hash, 16)
+        payload["hash_ok"] = _fnv1a64(blob[start:end]) == expected_hash
+
+    for payload in analysis["draw_payloads"]:
+        validate_blob_payload(payload)
 
     for payload in analysis["texture_details"]:
-        if payload.get("kind") not in ("source_payload", "palette_payload"):
-            continue
-        payload["hash_ok"] = None
-        if not payload["stored"]:
-            continue
-        start = blob_offset + payload["offset"]
-        end = start + payload["size"]
-        if start < blob_offset or end > blob_end:
-            payload["stored"] = False
-            payload["error"] = "payload range exceeds blob section"
-            continue
-        payload["hash_ok"] = (
-            _fnv1a64(blob[start:end]) == int(payload["hash"], 16))
+        if payload.get("kind") in ("source_payload", "palette_payload"):
+            validate_blob_payload(payload)
 
-    screenshot = analysis["screenshot"]
-    screenshot["hash_ok"] = None
-    if screenshot.get("stored") and screenshot.get("success"):
-        start = blob_offset + screenshot["offset"]
-        end = start + screenshot["size"]
-        if start < blob_offset or end > blob_end:
-            screenshot["stored"] = False
-            screenshot["error"] = "screenshot range exceeds blob section"
-        else:
-            screenshot["hash_ok"] = (
-                _fnv1a64(blob[start:end]) ==
-                int(screenshot.get("hash", "0"), 16))
+    for payload in analysis.get("tmem_snapshots", []):
+        validate_blob_payload(payload)
+
+    for payload in analysis.get("gs_uploads", []):
+        if payload.get("kind") in ("payload", "dma_chain"):
+            validate_blob_payload(payload)
+
+    for payload in analysis.get("gfx_sources", []):
+        validate_blob_payload(payload)
+
+    build_info = analysis.get("build_info", {})
+    if build_info:
+        validate_blob_payload(build_info)
+        if build_info.get("stored") and build_info.get("hash_ok") is not False:
+            start = blob_offset + build_info["offset"]
+            end = start + build_info["size"]
+            build_info["git_commit"] = (
+                blob[start:end].split(b"\0", 1)[0].decode(
+                    "utf-8", errors="replace")
+            )
+
+    for screenshot in analysis.get(
+            "screenshots", {"draw": analysis.get("screenshot", {})}).values():
+        screenshot["hash_ok"] = None
+        if screenshot.get("stored") and screenshot.get("success"):
+            start = blob_offset + screenshot["offset"]
+            end = start + screenshot["size"]
+            if start < blob_offset or end > blob_end:
+                screenshot["stored"] = False
+                screenshot["error"] = "screenshot range exceeds blob section"
+            else:
+                screenshot["hash_ok"] = (
+                    _fnv1a64(blob[start:end]) ==
+                    int(screenshot.get("hash", "0"), 16))
+
 
     return {
         "source": str(path),
