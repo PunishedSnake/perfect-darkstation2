@@ -4519,6 +4519,19 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len,
     ps2_trace_draw_payload(trace_draw_id, 0u, 1u,
         buf_vbo, (uint32_t)source_vertices, (uint32_t)stride);
 
+    uint16_t *trace_clip_map = NULL;
+    uint32_t trace_clip_map_offset = 0u;
+    uint32_t trace_clip_map_bytes = 0u;
+    if (trace_draw_id != 0u && buf_vbo_num_tris <= UINT32_MAX / 2u) {
+        trace_clip_map_bytes = (uint32_t)buf_vbo_num_tris *
+            (uint32_t)sizeof(uint16_t);
+        trace_clip_map = (uint16_t *)ps2RendererTraceReserveBlob(
+            trace_clip_map_bytes, 2u, &trace_clip_map_offset);
+        if (trace_clip_map) {
+            memset(trace_clip_map, 0, trace_clip_map_bytes);
+        }
+    }
+
     size_t buffered_vertices = 0u;
     size_t clipped_vertices_total = 0u;
     uint32_t trace_clip_chunk = 0u;
@@ -4540,6 +4553,10 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len,
             &s_clipped_vbo[buffered_vertices * stride],
             PS2_GFX_TRANSLATE_VERTS - buffered_vertices,
             &clipped_vertices);
+        if (trace_clip_map) {
+            trace_clip_map[triangle] = clipped
+                ? (uint16_t)clipped_vertices : 0u;
+        }
         if (!clipped) {
             continue;
         }
@@ -4557,6 +4574,19 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len,
             (uint32_t)stride);
         ps2_draw_triangles_unclipped(s_clipped_vbo,
             buffered_vertices * stride, buffered_vertices / 3u);
+    }
+    if (trace_draw_id != 0u) {
+        const bool stored = trace_clip_map != NULL;
+        const uint16_t flags = 3u |
+            (stored ? 0u : (uint16_t)PS2_TRACE_FLAG_DROPPED);
+        ps2RendererTraceRecord(PS2_TRACE_DRAW_PAYLOAD, flags,
+            trace_draw_id,
+            (uint64_t)trace_clip_map_offset |
+                ((uint64_t)trace_clip_map_bytes << 32u),
+            (uint64_t)(uint32_t)buf_vbo_num_tris |
+                ((uint64_t)sizeof(uint16_t) << 32u),
+            stored ? ps2_trace_hash(
+                trace_clip_map, trace_clip_map_bytes) : 0u);
     }
     ps2RendererTraceRecord(PS2_TRACE_DRAW_CLIPPED,
         s_shader->plan.textured ?
