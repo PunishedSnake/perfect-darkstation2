@@ -613,6 +613,26 @@ static uint64_t ps2_trace_hash(const void *data, size_t size)
     return hash;
 }
 
+static void ps2_trace_texture_blob(
+    Ps2GsTextureHandle handle, uint16_t subtype,
+    const void *data, size_t size, uint64_t metadata, uint64_t hash)
+{
+    if (!ps2RendererTraceIsCapturing() || !data || size == 0u ||
+        size > UINT32_MAX) {
+        return;
+    }
+
+    uint32_t offset = 0u;
+    const uint32_t bytes = (uint32_t)size;
+    const bool stored = ps2RendererTraceAppendBlob(
+        data, bytes, 16u, &offset);
+    ps2RendererTraceRecord(PS2_TRACE_TEXTURE_DETAIL,
+        subtype | (stored ? 0u : (uint16_t)PS2_TRACE_FLAG_DROPPED),
+        handle,
+        (uint64_t)offset | ((uint64_t)bytes << 32u),
+        metadata, hash);
+}
+
 static void ps2_upload_texture(const uint8_t *rgba32_buf, uint32_t width, uint32_t height, bool gen_mipmaps)
 {
     if (s_active_texture_tile < 0 || s_active_texture_tile > 1) {
@@ -639,6 +659,10 @@ static void ps2_upload_texture(const uint8_t *rgba32_buf, uint32_t width, uint32
         ps2RendererTraceRecord(PS2_TRACE_TEXTURE_UPLOAD,
             gen_mipmaps ? 1u : 0u, handle,
             ((uint64_t)width << 32u) | height, upload_bytes,
+            upload_hash);
+        ps2_trace_texture_blob(
+            handle, 0x0200u, rgba32_buf, upload_bytes,
+            (uint64_t)width | ((uint64_t)height << 32u),
             upload_hash);
     }
     bool mirror_s;
@@ -706,6 +730,20 @@ extern "C" bool gfxPs2UploadTmemTexture(
         if (view->palette && view->palette_count != 0u) {
             ps2RendererTraceRecord(PS2_TRACE_TEXTURE_DETAIL, 0x0100u,
                 handle, view->palette_count, palette_format, palette_hash);
+        }
+        ps2_trace_texture_blob(
+            handle, 0x0200u, view->texels, view->size_bytes,
+            (uint64_t)view->line_size_bytes |
+                ((uint64_t)height << 32u),
+            source_hash);
+        if (view->palette && view->palette_count != 0u) {
+            const size_t palette_bytes =
+                (size_t)view->palette_count * sizeof(uint16_t);
+            ps2_trace_texture_blob(
+                handle, 0x0300u, view->palette, palette_bytes,
+                (uint64_t)view->palette_count |
+                    ((uint64_t)palette_format << 32u),
+                palette_hash);
         }
     }
 
