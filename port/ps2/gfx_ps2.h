@@ -204,6 +204,15 @@ bool gfxPs2UploadTmemTexture(const struct GfxRdpTmemLiveTextureView *view,
     uint8_t format, uint8_t size, uint32_t palette_format,
     bool gen_mipmaps);
 
+/*
+ * Capture an exact live-TMEM view even when the PS2 texture cache hits an
+ * already-resident GS texture. This is trace-only and does no work unless a
+ * one-frame renderer capture is active.
+ */
+void gfxPs2TraceTmemTextureView(uint32_t texture_id,
+    const struct GfxRdpTmemLiveTextureView *view,
+    uint8_t format, uint8_t size, uint32_t palette_format);
+
 #ifdef __cplusplus
 }
 #endif
