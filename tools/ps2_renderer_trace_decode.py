@@ -1166,56 +1166,113 @@ def extract_payloads(trace: dict, destination: Path) -> None:
             "screenshot": screenshot_manifest,
         }, indent=2) + "\n", encoding="utf-8")
 
-def probe_pixel(trace: dict, x: float, y: float) -> list[dict]:
-    """Return draw candidates whose clipped-triangle bounds contain a pixel.
+def _point_in_triangle(
+        x: float, y: float,
+        a: tuple[float, float], b: tuple[float, float],
+        c: tuple[float, float]) -> bool:
+    def edge(p0, p1, px, py):
+        return ((p1[0] - p0[0]) * (py - p0[1]) -
+                (p1[1] - p0[1]) * (px - p0[0]))
 
-    This is an intentionally conservative screen-space filter. A triangle
-    bounding box can contain a pixel that lies outside the triangle itself, so
-    the result is a candidate list rather than a rasterization oracle.
-    """
+    e0 = edge(a, b, x, y)
+    e1 = edge(b, c, x, y)
+    e2 = edge(c, a, x, y)
+    epsilon = 1e-5
+    has_negative = e0 < -epsilon or e1 < -epsilon or e2 < -epsilon
+    has_positive = e0 > epsilon or e1 > epsilon or e2 > epsilon
+    return not (has_negative and has_positive)
+
+
+def probe_pixel(trace: dict, x: float, y: float) -> list[dict]:
+    """Return draws whose captured clipped triangles actually contain a pixel."""
     analysis = trace["analysis"]
+    source_blob = Path(trace["source"]).read_bytes()
+    blob_base = trace["blob"]["offset"]
     records = {
         record.get("draw_id"): record
         for record in analysis["draw_records"]
         if record.get("draw_id") is not None
     }
     candidates = {}
-    for triangle in analysis["clipped_triangle_bounds"]:
-        bbox = triangle["bbox"]
-        if not (bbox["min_x"] <= x <= bbox["max_x"] and
-                bbox["min_y"] <= y <= bbox["max_y"]):
+
+    for payload in analysis["draw_payloads"]:
+        if (payload.get("kind") != "clipped" or
+                not payload.get("stored") or
+                payload.get("hash_ok") is False):
             continue
-        draw_id = triangle.get("draw_id")
-        if draw_id is None:
-            continue
+        draw_id = payload["draw_id"]
         state = analysis["draw_states"].get(draw_id, {})
+        viewport = state.get("viewport")
+        if viewport is None:
+            continue
         scissor = state.get("scissor")
         if scissor is not None:
             if not (scissor["x"] <= x < scissor["x"] + scissor["width"] and
                     scissor["y"] <= y < scissor["y"] + scissor["height"]):
                 continue
+
+        stride = payload["stride_floats"]
+        vertex_count = payload["vertex_count"]
+        if stride < 4 or vertex_count < 3:
+            continue
+        start = blob_base + payload["offset"]
+        end = start + payload["size"]
+        data = source_blob[start:end]
+        expected = vertex_count * stride * 4
+        if len(data) < expected:
+            continue
+
+        hit_triangles = []
+        for triangle in range(vertex_count // 3):
+            points = []
+            valid = True
+            for corner in range(3):
+                vertex = triangle * 3 + corner
+                offset = vertex * stride * 4
+                clip_x, clip_y, _clip_z, clip_w = struct.unpack_from(
+                    "<4f", data, offset)
+                if (not all(map(
+                        lambda value: value == value and
+                        value not in (float("inf"), float("-inf")),
+                        (clip_x, clip_y, clip_w))) or clip_w == 0.0):
+                    valid = False
+                    break
+                ndc_x = clip_x / clip_w
+                ndc_y = clip_y / clip_w
+                sx = (viewport["x"] +
+                      (ndc_x * 0.5 + 0.5) * viewport["width"])
+                sy = (viewport["y"] +
+                      (0.5 - ndc_y * 0.5) * viewport["height"])
+                points.append((sx, sy))
+            if valid and _point_in_triangle(x, y, *points):
+                hit_triangles.append({
+                    "chunk": payload["chunk"],
+                    "triangle": triangle,
+                    "screen": points,
+                })
+
+        if not hit_triangles:
+            continue
+        record = records.get(draw_id, {})
         entry = candidates.setdefault(draw_id, {
             "draw_id": draw_id,
-            "triangle_hits": 0,
-            "smallest_bbox_area": None,
-            "pass_graph": records.get(draw_id, {}).get("pass_graph"),
-            "shader": records.get(draw_id, {}).get("shader"),
+            "triangle_hits": [],
+            "pass_graph": record.get("pass_graph"),
+            "shader": record.get("shader"),
+            "start_sequence": record.get("start_sequence"),
+            "end_sequence": record.get("end_sequence"),
             "textures": state.get("textures"),
             "scissor": scissor,
             "sampler0": state.get("sampler0"),
             "sampler1": state.get("sampler1"),
         })
-        entry["triangle_hits"] += 1
-        area = max(0.0, bbox["max_x"] - bbox["min_x"]) * max(
-            0.0, bbox["max_y"] - bbox["min_y"])
-        if (entry["smallest_bbox_area"] is None or
-                area < entry["smallest_bbox_area"]):
-            entry["smallest_bbox_area"] = area
+        entry["triangle_hits"].extend(hit_triangles)
+
     return sorted(
         candidates.values(),
         key=lambda item: (
-            item["smallest_bbox_area"]
-            if item["smallest_bbox_area"] is not None else float("inf"),
+            item["start_sequence"]
+            if item["start_sequence"] is not None else -1,
             item["draw_id"],
         ),
     )
@@ -1223,7 +1280,7 @@ def probe_pixel(trace: dict, x: float, y: float) -> list[dict]:
 
 def print_pixel_probe(trace: dict, x: float, y: float) -> None:
     candidates = probe_pixel(trace, x, y)
-    print(f"pixel probe ({x:g}, {y:g}): {len(candidates)} candidate draws")
+    print(f"pixel probe ({x:g}, {y:g}): {len(candidates)} exact triangle candidates")
     for item in candidates:
         shader = item.get("shader") or {}
         shader_text = (
@@ -1231,11 +1288,12 @@ def print_pixel_probe(trace: dict, x: float, y: float) -> None:
             if shader else "unknown"
         )
         textures = item.get("textures")
+        triangles = ",".join(
+            f"{hit['chunk']}:{hit['triangle']}"
+            for hit in item["triangle_hits"])
         print(
             f"  draw {item['draw_id']}: pass={item.get('pass_graph')} "
-            f"tri_hits={item['triangle_hits']} "
-            f"bbox_area={item['smallest_bbox_area']:.1f} "
-            f"textures={textures} shader={shader_text}"
+            f"triangles={triangles} textures={textures} shader={shader_text}"
         )
         for slot in (0, 1):
             sampler = item.get(f"sampler{slot}") or {}
