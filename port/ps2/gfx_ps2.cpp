@@ -3395,6 +3395,9 @@ static bool ps2_draw_alpha_trilerp(uint32_t vertex_count)
     return success;
 }
 
+static uint64_t ps2_trace_pack_float_pair(float a, float b);
+static uint64_t ps2_trace_pack_u32_pair(uint32_t a, uint32_t b);
+
 static void ps2_draw_triangles_unclipped(float buf_vbo[],
     size_t buf_vbo_len, size_t buf_vbo_num_tris)
 {
