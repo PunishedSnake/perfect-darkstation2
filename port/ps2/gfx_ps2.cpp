@@ -4100,7 +4100,8 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
                     (uint16_t)PS2_TRACE_FLAG_TEXTURED |
                     (s_sampler_linear[t] ? 0x0100u : 0u) |
                     (s_draw_region_clamp[t].region_s ? 0x0200u : 0u) |
-                    (s_draw_region_clamp[t].region_t ? 0x0400u : 0u);
+                    (s_draw_region_clamp[t].region_t ? 0x0400u : 0u) |
+                    (uint16_t)(((uint32_t)s_filter_mode & 0x3u) << 12u);
                 ps2RendererTraceRecord(PS2_TRACE_TEXTURE_COORD_RANGE,
                     trace_flags,
                     ps2_trace_pack_u32_pair(t, (uint32_t)handle),

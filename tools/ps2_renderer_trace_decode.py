@@ -228,6 +228,7 @@ def _analyze(events: list[dict]) -> dict:
                 "linear": bool(event["flags"] & 0x0100),
                 "region_s": bool(event["flags"] & 0x0200),
                 "region_t": bool(event["flags"] & 0x0400),
+                "filter_mode": (event["flags"] >> 12) & 0x3,
             })
         elif event_type == "clipped_triangle_bounds":
             def signed_fixed_16_4(value):
@@ -523,6 +524,7 @@ def print_summary(trace: dict) -> None:
                     f"{item['min_v']:.2f}..{item['max_v']:.2f}) "
                     f"extent={item['width']}x{item['height']} "
                     f"linear={item['linear']} "
+                    f"mode={item.get('filter_mode', 0)} "
                     f"region={item['region_s']}/{item['region_t']}")
     print("GS shadow:")
     for event in trace["event_stream"]:
