@@ -23,6 +23,7 @@ EVENT_NAMES = {
     17: "texture_resource", 18: "texture_clut",
     19: "render_target", 20: "vram", 21: "renderer_stats",
     22: "frontend_state", 23: "warning", 24: "pass_graph_draw",
+    25: "independent_alpha_draw", 26: "clipped_triangle_bounds",
 }
 
 GS_STATE_NAMES = [
@@ -93,6 +94,8 @@ def _analyze(events: list[dict]) -> dict:
     active_draw = None
     pass_graph_draws = []
     pending_pass_graph_draw = None
+    independent_alpha_draws = []
+    clipped_triangle_bounds = []
     gaps = []
 
     for previous, current in zip(events, events[1:]):
@@ -188,6 +191,36 @@ def _analyze(events: list[dict]) -> dict:
                         "max_y": signed_fixed_16_4(bbox_max >> 32),
                     },
                 }
+        elif event_type == "independent_alpha_draw":
+            independent_alpha_draws.append({
+                "sequence": event["sequence"],
+                "vertices": _event_value(event, "a"),
+                "triangles": _event_value(event, "b"),
+                "direct": bool(_event_value(event, "c")),
+            })
+        elif event_type == "clipped_triangle_bounds":
+            def signed_fixed_16_4(value):
+                value &= 0xffffffff
+                if value & 0x80000000:
+                    value -= 0x100000000
+                return value / 16.0
+            bbox_min = _event_value(event, "c")
+            bbox_max = _event_value(event, "d")
+            clipped_triangle_bounds.append({
+                "sequence": event["sequence"],
+                "source_triangle": _event_value(event, "a"),
+                "output_triangle": _event_value(event, "b"),
+                "bbox": {
+                    "min_x": signed_fixed_16_4(bbox_min),
+                    "min_y": signed_fixed_16_4(bbox_min >> 32),
+                    "max_x": signed_fixed_16_4(bbox_max),
+                    "max_y": signed_fixed_16_4(bbox_max >> 32),
+                },
+                "screen_wide": bool(event["flags"] & 0x0100),
+                "screen_tall": bool(event["flags"] & 0x0200),
+                "thin": bool(event["flags"] & 0x0400),
+                "near_zero_w": bool(event["flags"] & 0x0800),
+            })
         elif event_type == "draw_clipped" and active_draw is not None:
             clipped = _event_value(event, "c")
             draw_totals["clipped_vertices"] += clipped
@@ -227,6 +260,8 @@ def _analyze(events: list[dict]) -> dict:
             key=lambda item: item[1]["duration_microseconds"],
             reverse=True)),
         "pass_graph_draws": pass_graph_draws,
+        "independent_alpha_draws": independent_alpha_draws,
+        "clipped_triangle_bounds": clipped_triangle_bounds,
         "largest_event_gaps": sorted(
             gaps, key=lambda gap: gap["microseconds"], reverse=True)[:10],
     }
@@ -414,6 +449,26 @@ def print_summary(trace: dict) -> None:
                 f"fast_vertex_alpha={draw.get('vertex_alpha_triangles', 0)} "
                 f"fast_same_sample={draw.get('same_sample_triangles', 0)} "
                 f"success={draw.get('success', False)}")
+    if analysis["independent_alpha_draws"]:
+        direct_triangles = sum(
+            item["triangles"] for item in analysis["independent_alpha_draws"]
+            if item["direct"])
+        print(f"independent alpha direct triangles: {direct_triangles}")
+    suspicious = [
+        item for item in analysis["clipped_triangle_bounds"]
+        if item["thin"] or item["near_zero_w"] or
+           (item["screen_wide"] and item["screen_tall"])
+    ]
+    if suspicious:
+        print("suspicious clipped triangles:")
+        for item in suspicious[:32]:
+            bbox = item["bbox"]
+            print(
+                f"  src={item['source_triangle']} out={item['output_triangle']} "
+                f"bbox=({bbox['min_x']:.1f},{bbox['min_y']:.1f})-"
+                f"({bbox['max_x']:.1f},{bbox['max_y']:.1f}) "
+                f"wide={item['screen_wide']} tall={item['screen_tall']} "
+                f"thin={item['thin']} near_w0={item['near_zero_w']}")
     print("GS shadow:")
     for event in trace["event_stream"]:
         if event["type"] == "gs_register":

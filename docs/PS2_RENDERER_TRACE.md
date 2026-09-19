@@ -283,3 +283,39 @@ texture alpha enabled instead of any render-target/shuffle graph. The old path
 remains available with `-DPD_PS2_ALPHA_SAME_SAMPLE_FASTPATH=OFF`. Select
 captures report `fast_same_sample` so the hardware test will reveal whether
 Carrington's remaining 27 expensive triangles satisfy the exact condition.
+
+
+## Eighth retail capture: alpha-trilerp eliminated from the hot path
+
+Frame 914 (`pdps2-gs-trace(8).bin`) was captured from `69834d08`.
+The user reports another visible speed increase. This capture is closely matched
+to frame 297: 32 draws / 242 input triangles versus 32 / 248.
+
+The measured frame interval falls from 121,744 us to 78,653 us. Requested PATH3
+traffic falls from 104,362 qwords to 18,710 qwords, with no trace-qword drops.
+All 152 clipped alpha-trilerp triangles report `fast_same_sample`; their tiled
+workspace count is exactly zero. The alpha-trilerp graph therefore falls from
+58,830 us in frame 297 to 7,755 us in frame 914.
+
+The bottleneck has moved. One `independent_tex0_alpha` draw
+(shader `0x0000000001081000/0x00000001`, 16 input triangles) consumes
+17,428 us and triggers a 16,373-qword PATH3 arena submission. Its equation is
+independent INPUT1 RGB with `TEXEL0.a * INPUT1.a` alpha, with ordinary alpha
+blending and no texture-edge/alpha-threshold option.
+
+For that exact class the scratch render target is unnecessary. The new default
+`PD_PS2_INDEPENDENT_ALPHA_DIRECT=ON` path first writes the primitive's source
+alpha directly to framebuffer alpha with RGB masked, preserving depth testing
+but not updating Z. It then renders INPUT1 RGB using the GS
+`DESTINATION_ALPHA_LERP` equation, so destination alpha is the just-computed
+source alpha. The RGB pass owns the normal depth update and leaves alpha
+untouched. This preserves primitive order by executing the pair per triangle.
+Threshold/texture-edge materials retain the tiled correctness fallback.
+
+The same test also reports two correctness issues that are not explained by
+the now-eliminated alpha-trilerp workspace: angle-dependent missing furniture,
+and occasional black screen-crossing strips / texture corruption outside the
+first room. Select captures now record post-clip screen bounds for every output
+triangle. The decoder flags near-zero-W, extremely thin, and screen-spanning
+triangles so a capture taken while a black strip is visible can distinguish a
+clip/geometry failure from a material/texture failure.

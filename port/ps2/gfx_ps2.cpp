@@ -1586,6 +1586,103 @@ static bool ps2_draw_independent_tex0_alpha_tile(
         s_alpha_trilerp_color_target, composite_vertices, 3u, false);
 }
 
+static void ps2_make_independent_tex0_alpha_direct_texture_triangle(
+    const struct Ps2IndependentTex0AlphaVertex *source,
+    struct Ps2GsTexturedVertex output[3])
+{
+    for (uint32_t i = 0u; i < 3u; ++i) {
+        const struct Ps2IndependentTex0AlphaVertex *vertex = &source[i];
+        output[i].rgbaq = ps2_pack_rgbaq(
+            0x80u, 0x80u, 0x80u, vertex->input[3], vertex->inv_w);
+        output[i].st = ps2_pack_st(
+            vertex->tex_u * vertex->inv_w,
+            vertex->tex_v * vertex->inv_w);
+        output[i].xyz2 = ps2_pack_xyz2(
+            vertex->x, vertex->y, vertex->z);
+    }
+}
+
+static void ps2_make_independent_tex0_alpha_direct_color_triangle(
+    const struct Ps2IndependentTex0AlphaVertex *source,
+    struct Ps2GsColorVertex output[3])
+{
+    for (uint32_t i = 0u; i < 3u; ++i) {
+        const struct Ps2IndependentTex0AlphaVertex *vertex = &source[i];
+        output[i].rgbaq = ps2_pack_rgbaq(
+            vertex->input[0], vertex->input[1], vertex->input[2],
+            0x80u, 0.0f);
+        output[i].xyz2 = s_shader->features.opt_fog
+            ? ps2_pack_xyzf2(
+                vertex->x, vertex->y, vertex->z, vertex->fog)
+            : ps2_pack_xyz2(vertex->x, vertex->y, vertex->z);
+    }
+}
+
+static bool ps2_draw_independent_tex0_alpha_direct(uint32_t vertex_count)
+{
+    if (s_shader->features.opt_texture_edge ||
+        s_shader->features.opt_alpha_threshold) {
+        return false;
+    }
+
+    for (uint32_t vertex = 0u; vertex < vertex_count; vertex += 3u) {
+        struct Ps2GsTexturedVertex alpha_vertices[3];
+        struct Ps2GsColorVertex color_vertices[3];
+        ps2_make_independent_tex0_alpha_direct_texture_triangle(
+            &s_independent_tex0_alpha_vertices[vertex], alpha_vertices);
+        ps2_make_independent_tex0_alpha_direct_color_triangle(
+            &s_independent_tex0_alpha_vertices[vertex], color_vertices);
+
+        /*
+         * First materialize the source alpha in destination alpha only.
+         * It observes the final draw's depth test but deliberately cannot
+         * claim Z ownership before RGB is committed.
+         */
+        ps2GsCoreSetDepthMode(
+            s_depth_test, false, s_depth_compare, s_depth_compare_equal);
+        ps2GsCoreSetAlphaTest(false, 0u);
+        ps2GsCoreSetFog(false, 0u, 0u, 0u);
+        ps2GsCoreSetFramebufferAlphaForce(false);
+        ps2GsCoreSetColorWrite(false);
+        ps2GsCoreSetAlphaWrite(true);
+        ps2GsCoreSetAlphaBlend(false);
+        ps2GsCoreSetTextureAlpha(true);
+        ps2_apply_texture_clamp(0);
+        ps2GsCoreDrawTexturedTriangles(
+            s_selected_texture[0], alpha_vertices, 3u);
+
+        /*
+         * GS ALPHA can use Ad as C. Since Ad now equals this primitive's
+         * source alpha, (Cs-Cd)*Ad+Cd is the ordinary source-over equation
+         * without an intermediate render target.
+         */
+        ps2GsCoreSetColorWrite(true);
+        ps2GsCoreSetAlphaWrite(false);
+        ps2GsCoreSetTextureAlpha(false);
+        ps2GsCoreSetDepthMode(
+            s_depth_test, s_depth_update, s_depth_compare,
+            s_depth_compare_equal);
+        ps2GsCoreSetFog(s_shader->features.opt_fog,
+            s_draw_fog_r, s_draw_fog_g, s_draw_fog_b);
+        if (s_alpha_blend) {
+            ps2GsCoreSetAlphaBlendEquation(
+                PS2_GS_ALPHA_BLEND_DESTINATION_ALPHA_LERP);
+            ps2GsCoreSetAlphaBlend(true);
+        } else {
+            ps2GsCoreSetAlphaBlend(false);
+        }
+        ps2GsCoreDrawColorTriangles(color_vertices, 3u);
+    }
+
+    /* Restore the ordinary material equation before later draws inherit it. */
+    ps2GsCoreSetAlphaBlendEquation(PS2_GS_ALPHA_BLEND_SOURCE_OVER);
+    ps2_restore_alpha_trilerp_state();
+    ps2RendererTraceRecord(PS2_TRACE_INDEPENDENT_ALPHA_DRAW,
+        (uint16_t)PS2_TRACE_FLAG_SUPPORTED,
+        vertex_count, vertex_count / 3u, 1u, 0u);
+    return true;
+}
+
 static bool ps2_draw_independent_tex0_alpha(uint32_t vertex_count)
 {
     if (s_modulate) {
@@ -1596,6 +1693,12 @@ static bool ps2_draw_independent_tex0_alpha(uint32_t vertex_count)
         }
         return false;
     }
+#if defined(PERFECT_DARK_PS2_INDEPENDENT_ALPHA_DIRECT)
+    if (!s_shader->features.opt_texture_edge &&
+        !s_shader->features.opt_alpha_threshold) {
+        return ps2_draw_independent_tex0_alpha_direct(vertex_count);
+    }
+#endif
     if (!ps2_ensure_alpha_trilerp_color_workspace()) {
         if (!s_warned_independent_tex0_alpha_workspace) {
             sysLogPrintf(LOG_ERROR,
@@ -3950,6 +4053,72 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
     }
 }
 
+static uint64_t ps2_trace_pack_screen_pair(float x, float y)
+{
+    const int32_t fx = (int32_t)(x * 16.0f);
+    const int32_t fy = (int32_t)(y * 16.0f);
+    return (uint32_t)fx | ((uint64_t)(uint32_t)fy << 32u);
+}
+
+static void ps2_trace_clipped_triangle_bounds(
+    size_t source_triangle, size_t clipped_vertices,
+    const float *vertices, size_t stride)
+{
+    if (!ps2RendererTraceIsCapturing() || !vertices ||
+        stride < 4u || clipped_vertices < 3u) {
+        return;
+    }
+
+    for (size_t out = 0u; out + 2u < clipped_vertices; out += 3u) {
+        float sx[3];
+        float sy[3];
+        bool near_zero_w = false;
+        for (uint32_t i = 0u; i < 3u; ++i) {
+            const float *v = &vertices[(out + i) * stride];
+            const float w = v[3];
+            near_zero_w = near_zero_w ||
+                (w > -1.0e-6f && w < 1.0e-6f);
+            const float inv_w = w != 0.0f ? 1.0f / w : 0.0f;
+            const float ndc_x = v[0] * inv_w;
+            const float ndc_y = v[1] * inv_w;
+            sx[i] = (float)s_viewport.x +
+                (ndc_x * 0.5f + 0.5f) * (float)s_viewport.width;
+            sy[i] = (float)s_viewport.y +
+                (0.5f - ndc_y * 0.5f) * (float)s_viewport.height;
+        }
+
+        float min_x = sx[0], max_x = sx[0];
+        float min_y = sy[0], max_y = sy[0];
+        for (uint32_t i = 1u; i < 3u; ++i) {
+            if (sx[i] < min_x) min_x = sx[i];
+            if (sx[i] > max_x) max_x = sx[i];
+            if (sy[i] < min_y) min_y = sy[i];
+            if (sy[i] > max_y) max_y = sy[i];
+        }
+
+        const float width = max_x - min_x;
+        const float height = max_y - min_y;
+        const float area2 =
+            (sx[1] - sx[0]) * (sy[2] - sy[0]) -
+            (sy[1] - sy[0]) * (sx[2] - sx[0]);
+        const float bbox_area = width * height;
+        uint16_t flags = s_shader->plan.textured
+            ? (uint16_t)PS2_TRACE_FLAG_TEXTURED : 0u;
+        if (width >= (float)s_viewport.width * 0.8f) flags |= 0x0100u;
+        if (height >= (float)s_viewport.height * 0.8f) flags |= 0x0200u;
+        if (bbox_area > 1.0f &&
+            (area2 < 0.0f ? -area2 : area2) <= bbox_area * 0.05f) {
+            flags |= 0x0400u;
+        }
+        if (near_zero_w) flags |= 0x0800u;
+
+        ps2RendererTraceRecord(PS2_TRACE_CLIPPED_TRIANGLE_BOUNDS, flags,
+            source_triangle, out / 3u,
+            ps2_trace_pack_screen_pair(min_x, min_y),
+            ps2_trace_pack_screen_pair(max_x, max_y));
+    }
+}
+
 static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len,
     size_t buf_vbo_num_tris)
 {
@@ -3988,6 +4157,9 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len,
         if (!clipped) {
             continue;
         }
+        ps2_trace_clipped_triangle_bounds(
+            triangle, clipped_vertices,
+            &s_clipped_vbo[buffered_vertices * stride], stride);
         buffered_vertices += clipped_vertices;
         clipped_vertices_total += clipped_vertices;
     }
