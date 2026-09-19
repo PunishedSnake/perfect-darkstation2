@@ -510,3 +510,35 @@ This is deliberately a correctness baseline rather than a performance change.
 RGBA32 expansion may cost more VRAM and bandwidth. The captured native frame
 still had over 2.2 MiB free GS local memory, but the fallback's actual
 real-hardware footprint and timing must be measured rather than inferred.
+
+
+## Framebuffer image embedded in forensic trace
+
+Select captures now reserve the final framebuffer image before lower-priority
+VBO and texture payloads. At the end of the measured frame, after
+`ps2RendererTraceMarkFrameEnd()`, the PS2 backend fences the completed draw
+buffer and performs one GS local-to-host readback using the current PS2SDK
+debug screenshot path. The source is `ScreenBuffer[ActiveBuffer]`, i.e. the
+buffer that the immediately following PS2 present will expose.
+
+The readback is intentionally outside the measured frame interval. It is a
+debug-only synchronization point and must not be interpreted as renderer
+runtime. The trace stores native framebuffer pixels plus width, height, PSM,
+FBW, VRAM address, draw-buffer index, readback duration and an FNV-1a payload
+hash.
+
+The desktop decoder can recover it directly:
+
+```text
+python3 tools/ps2_renderer_trace_decode.py capture.bin \
+  --extract-screenshot framebuffer.png
+```
+
+`--extract-payloads DIR` also writes `framebuffer.raw` and
+`framebuffer.png` next to VBO/texture payloads.
+
+The CI4/CI8 native-residency diagnostic was also reverted to the normal default
+(`PD_PS2_NATIVE_INDEXED_TEXTURES=ON`). The real-hardware A/B with native
+indexed residency disabled produced no visible correctness change, so keeping
+the slower RGBA32 control as the default would only muddy subsequent
+performance measurements.

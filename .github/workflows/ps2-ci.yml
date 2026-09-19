@@ -367,15 +367,23 @@ jobs:
           /tmp/renderer_trace_test
           python3 tools/ps2_renderer_trace_decode.py \
             /tmp/pdps2-gs-trace.bin \
-            --json /tmp/pdps2-gs-trace.json
+            --json /tmp/pdps2-gs-trace.json \
+            --extract-screenshot /tmp/pdps2-frame.png
           python3 - <<'PY'
           import json
+          from pathlib import Path
 
           with open("/tmp/pdps2-gs-trace.json", encoding="utf-8") as stream:
               trace = json.load(stream)
           assert trace["analysis"]["paths"]["path1"]["submits"] == 1
           assert trace["analysis"]["paths"]["path3"]["submits"] == 1
           assert "by_pass_graph" in trace["analysis"]
+          shot = trace["analysis"]["screenshot"]
+          assert shot["success"] is True
+          assert shot["hash_ok"] is True
+          assert shot["width"] == 2 and shot["height"] == 2
+          assert Path("/tmp/pdps2-frame.png").read_bytes().startswith(
+              b"\x89PNG\r\n\x1a\n")
           PY
 
       - name: Test VU1 fog diagnostic VBO

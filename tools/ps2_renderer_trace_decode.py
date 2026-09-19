@@ -8,6 +8,7 @@ import collections
 import json
 import struct
 import sys
+import zlib
 from pathlib import Path
 
 HEADER = struct.Struct("<8s6I2Q14I")
@@ -27,7 +28,7 @@ EVENT_NAMES = {
     27: "texture_coord_range", 28: "draw_state",
     29: "draw_payload", 30: "texture_detail",
     31: "build_config", 32: "queue_wait", 33: "gs_draw",
-    34: "resource_op", 35: "capture_info",
+    34: "resource_op", 35: "capture_info", 36: "screenshot",
 }
 
 GS_STATE_NAMES = [
@@ -129,6 +130,7 @@ def _analyze(events: list[dict]) -> dict:
     queue_waits = []
     gs_draws = []
     resource_ops = []
+    screenshot = {}
     gaps = []
 
     for previous, current in zip(events, events[1:]):
@@ -573,6 +575,39 @@ def _analyze(events: list[dict]) -> dict:
                 "a": event["a"], "b": event["b"],
                 "c": event["c"], "d": event["d"],
             })
+        elif event_type == "screenshot":
+            subtype = (event["flags"] >> 8) & 0x7f
+            if subtype == 0:
+                offset, size = _u32_pair(_event_value(event, "a"))
+                width, height = _u32_pair(_event_value(event, "b"))
+                vram, fbw = _u32_pair(_event_value(event, "c"))
+                psm, buffer_index = _u32_pair(_event_value(event, "d"))
+                screenshot.update({
+                    "sequence": event["sequence"],
+                    "stored": not bool(event["flags"] & 0x8000),
+                    "offset": offset,
+                    "size": size,
+                    "width": width,
+                    "height": height,
+                    "vram": vram,
+                    "fbw": fbw,
+                    "psm": psm,
+                    "buffer_index": buffer_index,
+                })
+            elif subtype == 1:
+                current_buffer, status = _u32_pair(
+                    _event_value(event, "d"))
+                screenshot.update({
+                    "result_sequence": event["sequence"],
+                    "success": bool(event["flags"] & 0x0008),
+                    "dropped": bool(event["flags"] & 0x8000),
+                    "hash": event["a"],
+                    "readback_microseconds": _event_value(event, "b"),
+                    "captured_bytes": _event_value(event, "c"),
+                    "current_buffer": current_buffer,
+                    "fenced": bool(status & 1),
+                    "readback_ok": bool(status & 2),
+                })
         elif event_type == "draw_clipped" and active_draw is not None:
             clipped = _event_value(event, "c")
             draw_totals["clipped_vertices"] += clipped
@@ -640,6 +675,7 @@ def _analyze(events: list[dict]) -> dict:
         "queue_waits": queue_waits,
         "gs_draws": gs_draws,
         "resource_ops": resource_ops,
+        "screenshot": screenshot,
         "largest_event_gaps": sorted(
             gaps, key=lambda gap: gap["microseconds"], reverse=True)[:10],
     }
@@ -785,6 +821,19 @@ def decode(path: Path) -> dict:
             continue
         payload["hash_ok"] = (
             _fnv1a64(blob[start:end]) == int(payload["hash"], 16))
+
+    screenshot = analysis["screenshot"]
+    screenshot["hash_ok"] = None
+    if screenshot.get("stored") and screenshot.get("success"):
+        start = blob_offset + screenshot["offset"]
+        end = start + screenshot["size"]
+        if start < blob_offset or end > blob_end:
+            screenshot["stored"] = False
+            screenshot["error"] = "screenshot range exceeds blob section"
+        else:
+            screenshot["hash_ok"] = (
+                _fnv1a64(blob[start:end]) ==
+                int(screenshot.get("hash", "0"), 16))
 
     return {
         "source": str(path),
@@ -955,6 +1004,17 @@ def print_summary(trace: dict) -> None:
         print(
             f"draw payloads: total={len(analysis['draw_payloads'])} "
             f"stored={len(stored)} bad_hash={len(bad_hash)}")
+    screenshot = analysis.get("screenshot", {})
+    if screenshot:
+        print(
+            "screenshot: "
+            f"{screenshot.get('width', 0)}x{screenshot.get('height', 0)} "
+            f"psm=0x{screenshot.get('psm', 0):02x} "
+            f"buffer={screenshot.get('buffer_index')} "
+            f"bytes={screenshot.get('size', 0)} "
+            f"success={screenshot.get('success', False)} "
+            f"hash_ok={screenshot.get('hash_ok')} "
+            f"readback={screenshot.get('readback_microseconds', 0)} us")
     print("GS shadow:")
     for event in trace["event_stream"]:
         if event["type"] == "gs_register":
@@ -962,6 +1022,84 @@ def print_summary(trace: dict) -> None:
             print(f"  {event.get('slot', event['a'])}: {event['b']} ({validity})")
 
 
+
+
+
+def _png_chunk(kind: bytes, data: bytes) -> bytes:
+    body = kind + data
+    return (
+        struct.pack(">I", len(data)) +
+        body +
+        struct.pack(">I", zlib.crc32(body) & 0xffffffff)
+    )
+
+
+def _screenshot_rgba(raw: bytes, width: int, height: int, psm: int) -> bytes:
+    pixels = width * height
+    if psm == 0x00:
+        expected = pixels * 4
+        if len(raw) < expected:
+            raise ValueError("CT32 screenshot payload is truncated")
+        return raw[:expected]
+    if psm == 0x01:
+        expected = pixels * 3
+        if len(raw) < expected:
+            raise ValueError("CT24 screenshot payload is truncated")
+        out = bytearray(pixels * 4)
+        for i in range(pixels):
+            src = i * 3
+            dst = i * 4
+            out[dst:dst + 3] = raw[src:src + 3]
+            out[dst + 3] = 0xff
+        return bytes(out)
+    if psm == 0x02:
+        expected = pixels * 2
+        if len(raw) < expected:
+            raise ValueError("CT16 screenshot payload is truncated")
+        out = bytearray(pixels * 4)
+        for i in range(pixels):
+            value = raw[i * 2] | (raw[i * 2 + 1] << 8)
+            dst = i * 4
+            out[dst + 0] = (value & 0x1f) << 3
+            out[dst + 1] = ((value >> 5) & 0x1f) << 3
+            out[dst + 2] = ((value >> 10) & 0x1f) << 3
+            out[dst + 3] = 0xff
+        return bytes(out)
+    raise ValueError(f"unsupported screenshot PSM 0x{psm:x}")
+
+
+def _write_rgba_png(path: Path, width: int, height: int, rgba: bytes) -> None:
+    stride = width * 4
+    rows = bytearray()
+    for y in range(height):
+        rows.append(0)
+        start = y * stride
+        rows.extend(rgba[start:start + stride])
+    png = bytearray(b"\x89PNG\r\n\x1a\n")
+    png.extend(_png_chunk(
+        b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)))
+    png.extend(_png_chunk(b"IDAT", zlib.compress(bytes(rows), 6)))
+    png.extend(_png_chunk(b"IEND", b""))
+    path.write_bytes(png)
+
+
+def extract_screenshot(trace: dict, destination: Path) -> None:
+    screenshot = trace["analysis"].get("screenshot", {})
+    if not screenshot.get("stored") or not screenshot.get("success"):
+        raise ValueError("trace does not contain a successful screenshot")
+    source_blob = Path(trace["source"]).read_bytes()
+    start = trace["blob"]["offset"] + screenshot["offset"]
+    end = start + screenshot["size"]
+    raw = source_blob[start:end]
+    if screenshot.get("hash_ok") is False:
+        raise ValueError("screenshot payload hash mismatch")
+    if destination.suffix.lower() == ".png":
+        rgba = _screenshot_rgba(
+            raw, screenshot["width"], screenshot["height"], screenshot["psm"])
+        _write_rgba_png(
+            destination, screenshot["width"], screenshot["height"], rgba)
+    else:
+        destination.write_bytes(raw)
 
 def extract_payloads(trace: dict, destination: Path) -> None:
     destination.mkdir(parents=True, exist_ok=True)
@@ -1001,10 +1139,21 @@ def extract_payloads(trace: dict, destination: Path) -> None:
         (destination / filename).write_bytes(data)
         entry["file"] = filename
         texture_manifest.append(entry)
+    screenshot_manifest = None
+    screenshot = trace["analysis"].get("screenshot", {})
+    if screenshot.get("stored") and screenshot.get("success"):
+        raw_path = destination / "framebuffer.raw"
+        png_path = destination / "framebuffer.png"
+        extract_screenshot(trace, raw_path)
+        extract_screenshot(trace, png_path)
+        screenshot_manifest = dict(screenshot)
+        screenshot_manifest["raw_file"] = raw_path.name
+        screenshot_manifest["png_file"] = png_path.name
     (destination / "manifest.json").write_text(
         json.dumps({
             "draw_payloads": manifest,
             "texture_payloads": texture_manifest,
+            "screenshot": screenshot_manifest,
         }, indent=2) + "\n", encoding="utf-8")
 
 def main() -> int:
@@ -1013,7 +1162,10 @@ def main() -> int:
     parser.add_argument("--json", type=Path, dest="json_path")
     parser.add_argument(
         "--extract-payloads", type=Path, dest="payload_dir",
-        help="write captured VBO/clip-map payloads and a manifest")
+        help="write captured VBO/clip-map/texture payloads and framebuffer")
+    parser.add_argument(
+        "--extract-screenshot", type=Path, dest="screenshot_path",
+        help="write the captured framebuffer as PNG or native raw pixels")
     args = parser.parse_args()
     try:
         trace = decode(args.trace)
@@ -1028,6 +1180,13 @@ def main() -> int:
     if args.payload_dir:
         extract_payloads(trace, args.payload_dir)
         print(f"payloads: {args.payload_dir}")
+    if args.screenshot_path:
+        try:
+            extract_screenshot(trace, args.screenshot_path)
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        print(f"screenshot: {args.screenshot_path}")
     return 0
 
 
