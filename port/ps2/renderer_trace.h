@@ -8,16 +8,16 @@
 extern "C" {
 #endif
 
-#define PS2_RENDERER_TRACE_VERSION 2u
+#define PS2_RENDERER_TRACE_VERSION 3u
 
 /*
  * Capture buffers exist only while Select has armed a one-frame trace. The
  * implementation tries the largest profile first and falls back if the EE heap
  * cannot provide it.
  */
-#define PS2_RENDERER_TRACE_EVENT_CAPACITY_MAX 32768u
-#define PS2_RENDERER_TRACE_QWORD_CAPACITY_MAX 262144u
-#define PS2_RENDERER_TRACE_BLOB_CAPACITY_MAX (4u * 1024u * 1024u)
+#define PS2_RENDERER_TRACE_EVENT_CAPACITY_MAX 65536u
+#define PS2_RENDERER_TRACE_QWORD_CAPACITY_MAX 524288u
+#define PS2_RENDERER_TRACE_BLOB_CAPACITY_MAX (12u * 1024u * 1024u)
 
 enum Ps2RendererTraceEventType {
     PS2_TRACE_FRAME_BEGIN = 1,
@@ -56,6 +56,10 @@ enum Ps2RendererTraceEventType {
     PS2_TRACE_RESOURCE_OP,
     PS2_TRACE_CAPTURE_INFO,
     PS2_TRACE_SCREENSHOT,
+    PS2_TRACE_GS_DRAW_STATE,
+    PS2_TRACE_TMEM_SNAPSHOT,
+    PS2_TRACE_GS_UPLOAD,
+    PS2_TRACE_BUILD_INFO,
 };
 
 enum Ps2RendererTraceFlags {
@@ -63,6 +67,7 @@ enum Ps2RendererTraceFlags {
     PS2_TRACE_FLAG_PATH3 = 1u << 1,
     PS2_TRACE_FLAG_TEXTURED = 1u << 2,
     PS2_TRACE_FLAG_SUPPORTED = 1u << 3,
+    PS2_TRACE_FLAG_FORENSIC_HEAVY = 1u << 14,
     PS2_TRACE_FLAG_DROPPED = 1u << 15,
 };
 
@@ -126,6 +131,7 @@ void *ps2RendererTraceReserveBlob(
     uint32_t size, uint32_t alignment, uint32_t *offset);
 bool ps2RendererTraceAppendBlob(const void *data, uint32_t size,
     uint32_t alignment, uint32_t *offset);
+uint64_t ps2RendererTraceHash(const void *data, uint32_t size);
 /* Freeze measured frame duration before post-frame forensic snapshots. */
 void ps2RendererTraceMarkFrameEnd(void);
 bool ps2RendererTraceEndFrameAndWrite(void);
