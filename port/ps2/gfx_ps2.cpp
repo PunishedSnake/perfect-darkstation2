@@ -631,12 +631,15 @@ static void ps2_upload_texture(const uint8_t *rgba32_buf, uint32_t width, uint32
      */
     const Ps2GsTextureHandle handle =
         s_selected_texture[s_active_texture_tile];
+    const size_t upload_bytes = (size_t)width * height * 4u;
+    const uint64_t upload_hash =
+        ps2RendererTraceIsCapturing() && rgba32_buf
+        ? ps2_trace_hash(rgba32_buf, upload_bytes) : 0u;
     if (ps2RendererTraceIsCapturing()) {
-        const size_t bytes = (size_t)width * height * 4u;
         ps2RendererTraceRecord(PS2_TRACE_TEXTURE_UPLOAD,
             gen_mipmaps ? 1u : 0u, handle,
-            ((uint64_t)width << 32u) | height, bytes,
-            rgba32_buf ? ps2_trace_hash(rgba32_buf, bytes) : 0u);
+            ((uint64_t)width << 32u) | height, upload_bytes,
+            upload_hash);
     }
     bool mirror_s;
     bool mirror_t;
@@ -650,6 +653,9 @@ static void ps2_upload_texture(const uint8_t *rgba32_buf, uint32_t width, uint32
         s_texture_sampler[handle].monochrome_rgb =
             gfxPs2Rgba32IsMonochrome(
                 rgba32_buf, width * height);
+        ps2_record_texture_provenance(
+            handle, PS2_GFX_N64_FMT_RGBA, PS2_GFX_N64_SIZ_32B,
+            0u, 0u, upload_hash, 0u);
     }
 }
 
@@ -681,14 +687,26 @@ extern "C" bool gfxPs2UploadTmemTexture(
     const uint32_t height = view->size_bytes / view->line_size_bytes;
     const Ps2GsTextureHandle handle =
         s_selected_texture[s_active_texture_tile];
-    if (ps2RendererTraceIsCapturing()) {
+    const bool trace_capture = ps2RendererTraceIsCapturing();
+    const uint64_t source_hash = trace_capture
+        ? ps2_trace_hash(view->texels, view->size_bytes) : 0u;
+    const uint64_t palette_hash =
+        trace_capture && view->palette && view->palette_count != 0u
+        ? ps2_trace_hash(
+            view->palette, (size_t)view->palette_count * sizeof(uint16_t))
+        : 0u;
+    if (trace_capture) {
         const uint16_t trace_flags =
             (uint16_t)((format & 0xfu) | ((size & 0xfu) << 4u));
         ps2RendererTraceRecord(PS2_TRACE_TEXTURE_UPLOAD, trace_flags,
             handle,
             ((uint64_t)view->line_size_bytes << 32u) | height,
             ((uint64_t)view->size_bytes << 32u) | view->palette_count,
-            ps2_trace_hash(view->texels, view->size_bytes));
+            source_hash);
+        if (view->palette && view->palette_count != 0u) {
+            ps2RendererTraceRecord(PS2_TRACE_TEXTURE_DETAIL, 0x0100u,
+                handle, view->palette_count, palette_format, palette_hash);
+        }
     }
 
     if (format == PS2_GFX_N64_FMT_RGBA &&
@@ -710,6 +728,9 @@ extern "C" bool gfxPs2UploadTmemTexture(
                 gfxPs2Rgba32IsMonochrome(
                     view->texels, width * height);
         }
+        ps2_record_texture_provenance(
+            handle, format, size, palette_format, view->palette_count,
+            source_hash, palette_hash);
         if (!s_logged_native_rgba32) {
             sysLogPrintf(LOG_NOTE,
                 "GfxPS2 native texture path: exact split-TMEM N64 RGBA32 -> GS PSMCT32");
@@ -737,6 +758,9 @@ extern "C" bool gfxPs2UploadTmemTexture(
                 gfxPs2N64Rgba16IsMonochrome(
                     view->texels, width * height);
         }
+        ps2_record_texture_provenance(
+            handle, format, size, palette_format, view->palette_count,
+            source_hash, palette_hash);
         if (!s_logged_native_rgba16) {
             sysLogPrintf(LOG_NOTE,
                 "GfxPS2 native texture path: exact N64 RGBA16 -> GS PSMCT16");
@@ -762,6 +786,9 @@ extern "C" bool gfxPs2UploadTmemTexture(
         if (handle < PS2_GFX_TEXTURE_STATE_SLOTS) {
             s_texture_sampler[handle].monochrome_rgb = true;
         }
+        ps2_record_texture_provenance(
+            handle, format, size, palette_format, view->palette_count,
+            source_hash, palette_hash);
         if (!s_logged_native_ia16) {
             sysLogPrintf(LOG_NOTE,
                 "GfxPS2 native texture path: exact N64 IA16 -> GS PSMCT32");
@@ -813,6 +840,9 @@ extern "C" bool gfxPs2UploadTmemTexture(
         if (handle < PS2_GFX_TEXTURE_STATE_SLOTS) {
             s_texture_sampler[handle].monochrome_rgb = true;
         }
+        ps2_record_texture_provenance(
+            handle, format, size, palette_format, view->palette_count,
+            source_hash, palette_hash);
         if (!s_logged_native_intensity[(uint32_t)encoding]) {
             sysLogPrintf(LOG_NOTE,
                 "GfxPS2 native texture path: exact N64 %s%u -> GS PSMT%u/shared CT32 CSM1",
@@ -875,6 +905,9 @@ extern "C" bool gfxPs2UploadTmemTexture(
     bool *logged = ia16_palette
         ? &s_logged_native_ci_ia16[ci4 ? 0u : 1u]
         : (ci4 ? &s_logged_native_ci4 : &s_logged_native_ci8);
+    ps2_record_texture_provenance(
+        handle, format, size, palette_format, view->palette_count,
+        source_hash, palette_hash);
     if (!*logged) {
         sysLogPrintf(LOG_NOTE,
             "GfxPS2 native texture path: exact N64 CI%u/%s TLUT -> GS PSMT%u/%s CSM1",
@@ -4414,6 +4447,18 @@ static void ps2_trace_draw_state(uint32_t draw_id)
                     sampler->coordinate_scale_s,
                     sampler->coordinate_scale_t),
                 0u, 0u);
+            const uint64_t source_meta =
+                (uint64_t)sampler->source_format |
+                ((uint64_t)sampler->source_size << 8u) |
+                ((uint64_t)(sampler->palette_format & 0xffffu) << 16u) |
+                ((uint64_t)(sampler->palette_count & 0xffffu) << 32u);
+            ps2RendererTraceRecord(PS2_TRACE_DRAW_STATE,
+                (uint16_t)(7u + t), draw_id,
+                (uint64_t)(uint32_t)handle |
+                    ((uint64_t)sampler->upload_serial << 32u),
+                source_meta,
+                sampler->source_hash,
+                sampler->palette_hash);
         }
     }
 }
