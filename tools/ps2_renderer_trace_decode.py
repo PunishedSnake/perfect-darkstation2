@@ -407,12 +407,62 @@ def _analyze(events: list[dict]) -> dict:
                 "hash": event["d"],
             })
         elif event_type == "texture_detail":
-            texture_details.append({
+            subtype = event["flags"] & 0x7fff
+            item = {
                 "sequence": event["sequence"],
-                "subtype": event["flags"] & 0x7fff,
+                "subtype": subtype,
+                "dropped": bool(event["flags"] & 0x8000),
                 "handle": _event_value(event, "a"),
-                "b": event["b"], "c": event["c"], "d": event["d"],
-            })
+            }
+            b = _event_value(event, "b")
+            c = _event_value(event, "c")
+            if subtype == 0x0100:
+                item.update({
+                    "kind": "palette_hash",
+                    "palette_count": b,
+                    "palette_format": c,
+                    "hash": event["d"],
+                })
+            elif subtype in (0x0200, 0x0300):
+                offset, size = _u32_pair(b)
+                item.update({
+                    "kind": "source_payload" if subtype == 0x0200
+                            else "palette_payload",
+                    "stored": not bool(event["flags"] & 0x8000),
+                    "offset": offset,
+                    "size": size,
+                    "metadata": event["c"],
+                    "hash": event["d"],
+                })
+                if subtype == 0x0200:
+                    first, second = _u32_pair(c)
+                    item["source_stride_or_width"] = first
+                    item["source_height"] = second
+                else:
+                    count, palette_format = _u32_pair(c)
+                    item["palette_count"] = count
+                    item["palette_format"] = palette_format
+            elif subtype == 0x1000:
+                item.update({
+                    "kind": "texture_snapshot_extra",
+                    "alpha_mask_clut_vram": b,
+                    "resident": bool(c & 0xffffffff),
+                    "uploaded": bool(c >> 32),
+                    "alpha_opaque": bool(_event_value(event, "d")),
+                })
+            elif subtype == 0x1100:
+                item.update({
+                    "kind": "shared_clut_snapshot",
+                    "vram": b,
+                    "bytes": c,
+                    "resident": bool(_event_value(event, "d")),
+                })
+            else:
+                item.update({
+                    "kind": f"unknown_{subtype:x}",
+                    "b": event["b"], "c": event["c"], "d": event["d"],
+                })
+            texture_details.append(item)
         elif event_type == "build_config":
             flags = _event_value(event, "a")
             translate, slots = _u32_pair(_event_value(event, "b"))
@@ -721,6 +771,21 @@ def decode(path: Path) -> dict:
         payload["hash_ok"] = (
             _fnv1a64(blob[start:end]) == int(payload["hash"], 16))
 
+    for payload in analysis["texture_details"]:
+        if payload.get("kind") not in ("source_payload", "palette_payload"):
+            continue
+        payload["hash_ok"] = None
+        if not payload["stored"]:
+            continue
+        start = blob_offset + payload["offset"]
+        end = start + payload["size"]
+        if start < blob_offset or end > blob_end:
+            payload["stored"] = False
+            payload["error"] = "payload range exceeds blob section"
+            continue
+        payload["hash_ok"] = (
+            _fnv1a64(blob[start:end]) == int(payload["hash"], 16))
+
     return {
         "source": str(path),
         "version": version,
@@ -919,8 +984,28 @@ def extract_payloads(trace: dict, destination: Path) -> None:
         (destination / filename).write_bytes(data)
         entry["file"] = filename
         manifest.append(entry)
+    texture_manifest = []
+    for payload in trace["analysis"]["texture_details"]:
+        if payload.get("kind") not in ("source_payload", "palette_payload"):
+            continue
+        entry = dict(payload)
+        if not payload["stored"]:
+            texture_manifest.append(entry)
+            continue
+        start = blob_base + payload["offset"]
+        end = start + payload["size"]
+        data = source_blob[start:end]
+        filename = (
+            f"texture_{payload['handle']:03d}_"
+            f"{payload['kind']}_{payload['sequence']:05d}.bin")
+        (destination / filename).write_bytes(data)
+        entry["file"] = filename
+        texture_manifest.append(entry)
     (destination / "manifest.json").write_text(
-        json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+        json.dumps({
+            "draw_payloads": manifest,
+            "texture_payloads": texture_manifest,
+        }, indent=2) + "\n", encoding="utf-8")
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
