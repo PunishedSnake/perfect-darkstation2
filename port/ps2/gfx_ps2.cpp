@@ -4,6 +4,10 @@
 #include <stdint.h>
 #include <string.h>
 
+#ifndef PD_PS2_GIT_COMMIT
+#define PD_PS2_GIT_COMMIT "unknown"
+#endif
+
 #include "gfx_cc.h"
 #include "gfx_rendering_api.h"
 #include "gfx_ps2.h"
@@ -615,6 +619,68 @@ static uint64_t ps2_trace_hash(const void *data, size_t size)
         hash = (hash ^ bytes[i]) * UINT64_C(1099511628211);
     }
     return hash;
+}
+
+static void ps2_trace_build_info(void)
+{
+    if (!ps2RendererTraceIsCapturing()) {
+        return;
+    }
+
+    static const char commit[] = PD_PS2_GIT_COMMIT;
+    const uint32_t bytes = (uint32_t)sizeof(commit);
+    uint32_t offset = 0u;
+    const bool stored = ps2RendererTraceAppendBlob(
+        commit, bytes, 1u, &offset);
+    ps2RendererTraceRecord(PS2_TRACE_BUILD_INFO,
+        stored ? 0u : PS2_TRACE_FLAG_DROPPED,
+        (uint64_t)offset | ((uint64_t)bytes << 32u),
+        ps2RendererTraceHash(commit, bytes),
+        0u, 0u);
+}
+
+static void ps2_trace_tmem_component(
+    uint16_t subtype, const void *data, uint32_t bytes, uint64_t metadata)
+{
+    if (!ps2RendererTraceIsCapturing() || !data || bytes == 0u) {
+        return;
+    }
+    uint32_t offset = 0u;
+    const bool stored = ps2RendererTraceAppendBlob(
+        data, bytes, 16u, &offset);
+    ps2RendererTraceRecord(PS2_TRACE_TMEM_SNAPSHOT,
+        (uint16_t)(subtype |
+            (stored ? 0u : PS2_TRACE_FLAG_DROPPED)),
+        (uint64_t)offset | ((uint64_t)bytes << 32u),
+        ps2RendererTraceHash(data, bytes),
+        metadata, 0u);
+}
+
+static void ps2_trace_tmem_snapshot(void)
+{
+    if (!ps2RendererTraceIsCapturing()) {
+        return;
+    }
+
+    const struct GfxRdpTmem *tmem = gfxRdpTmemLiveState();
+    if (!tmem) {
+        return;
+    }
+    struct GfxRdpTmemLiveStats stats;
+    memset(&stats, 0, sizeof(stats));
+    gfxRdpTmemLiveGetStats(&stats);
+
+    ps2_trace_tmem_component(
+        0u, tmem->bytes, sizeof(tmem->bytes), tmem->generation);
+    ps2_trace_tmem_component(
+        1u, tmem->byte_valid, sizeof(tmem->byte_valid), tmem->generation);
+    ps2_trace_tmem_component(
+        2u, tmem->word_generation, sizeof(tmem->word_generation),
+        tmem->generation);
+    ps2_trace_tmem_component(
+        3u, tmem->word_valid, sizeof(tmem->word_valid), tmem->generation);
+    ps2_trace_tmem_component(
+        4u, &stats, sizeof(stats), tmem->generation);
 }
 
 static void ps2_trace_texture_blob(
@@ -4831,18 +4897,17 @@ static void ps2_start_frame(void)
         sizeof(s_trace_tmem_snapshot_identity));
     if (ps2RendererTraceIsCapturing()) {
         s_trace_draw_id = 0u;
+        /*
+         * Reserve both screen buffers before any lower-priority payload can
+         * consume forensic blob space. Readback itself remains post-frame.
+         */
+        ps2GsCorePrepareTraceScreenshot();
         ps2_trace_build_config();
+        ps2_trace_build_info();
     }
     ps2_trace_shader(s_shader);
     ps2RendererStatsBeginFrame();
     ps2GsCoreBeginFrame();
-    if (ps2RendererTraceIsCapturing()) {
-        /*
-         * Screenshot storage has priority over verbose VBO/texture payloads.
-         * The actual local-to-host transfer remains post-frame.
-         */
-        ps2GsCorePrepareTraceScreenshot();
-    }
 }
 
 static void ps2_log_renderer_stats(
@@ -4923,6 +4988,7 @@ static void ps2_end_frame(void)
         ps2RendererTraceRecord(PS2_TRACE_FRONTEND_STATE, state_flags,
             viewport_xy, viewport_wh, textures,
             (uint64_t)(uint32_t)s_active_texture_tile);
+        ps2_trace_tmem_snapshot();
         ps2GsCoreRecordTraceSnapshot();
 
         struct Ps2RendererStats trace_stats;
