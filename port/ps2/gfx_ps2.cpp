@@ -230,6 +230,8 @@ static struct Ps2TextureRegionClampState s_draw_region_clamp[2];
 static enum FilteringMode s_filter_mode = FILTER_LINEAR;
 static enum MipmapFilteringMode s_mipmap_filter = MIPMAP_DISABLED;
 static int s_anisotropy = 1;
+static uint32_t s_trace_draw_id;
+
 static bool s_warned_framebuffer;
 static bool s_warned_mipmap;
 static bool s_warned_mirror_extent;
@@ -4294,6 +4296,128 @@ static void ps2_trace_clipped_triangle_bounds(
     }
 }
 
+static void ps2_trace_draw_state(uint32_t draw_id)
+{
+    if (!ps2RendererTraceIsCapturing() || !s_shader || draw_id == 0u) {
+        return;
+    }
+
+    const uint64_t textures =
+        (uint32_t)s_selected_texture[0] |
+        ((uint64_t)(uint32_t)s_selected_texture[1] << 32u);
+    const uint64_t modes =
+        ((uint64_t)(uint32_t)s_filter_mode) |
+        ((uint64_t)(uint32_t)s_mipmap_filter << 8u) |
+        ((uint64_t)(uint32_t)s_anisotropy << 16u) |
+        ((uint64_t)(uint32_t)s_active_texture_tile << 32u);
+    uint64_t draw_flags = 0u;
+    draw_flags |= s_depth_test ? UINT64_C(1) << 0u : 0u;
+    draw_flags |= s_depth_update ? UINT64_C(1) << 1u : 0u;
+    draw_flags |= s_depth_compare ? UINT64_C(1) << 2u : 0u;
+    draw_flags |= s_depth_compare_equal ? UINT64_C(1) << 3u : 0u;
+    draw_flags |= s_depth_decal ? UINT64_C(1) << 4u : 0u;
+    draw_flags |= s_alpha_blend ? UINT64_C(1) << 5u : 0u;
+    draw_flags |= s_modulate ? UINT64_C(1) << 6u : 0u;
+    draw_flags |= s_shader->features.opt_alpha_threshold ?
+        UINT64_C(1) << 7u : 0u;
+    draw_flags |= s_shader->features.opt_texture_edge ?
+        UINT64_C(1) << 8u : 0u;
+    draw_flags |= s_shader->features.opt_fog ?
+        UINT64_C(1) << 9u : 0u;
+    draw_flags |= s_shader->features.opt_invisible ?
+        UINT64_C(1) << 10u : 0u;
+    draw_flags |= s_shader->features.opt_2cyc ?
+        UINT64_C(1) << 11u : 0u;
+    draw_flags |= (uint64_t)(uint8_t)s_draw_fog_r << 16u;
+    draw_flags |= (uint64_t)(uint8_t)s_draw_fog_g << 24u;
+    draw_flags |= (uint64_t)(uint8_t)s_draw_fog_b << 32u;
+
+    ps2RendererTraceRecord(PS2_TRACE_DRAW_STATE, 0u,
+        draw_id, textures, modes, draw_flags);
+
+    ps2RendererTraceRecord(PS2_TRACE_DRAW_STATE, 1u,
+        draw_id,
+        ps2_trace_pack_u32_pair(
+            (uint32_t)s_viewport.x, (uint32_t)s_viewport.y),
+        ps2_trace_pack_u32_pair(
+            (uint32_t)s_viewport.width, (uint32_t)s_viewport.height),
+        ps2_trace_pack_float_pair(s_depth_near, s_depth_far));
+    ps2RendererTraceRecord(PS2_TRACE_DRAW_STATE, 2u,
+        draw_id,
+        ps2_trace_pack_u32_pair(
+            (uint32_t)s_scissor.x, (uint32_t)s_scissor.y),
+        ps2_trace_pack_u32_pair(
+            (uint32_t)s_scissor.width, (uint32_t)s_scissor.height),
+        0u);
+
+    for (uint32_t t = 0u; t < 2u; ++t) {
+        const Ps2GsTextureHandle handle = s_selected_texture[t];
+        const struct Ps2TextureSamplerState *sampler =
+            handle < PS2_GFX_TEXTURE_STATE_SLOTS
+            ? &s_texture_sampler[handle] : NULL;
+        const struct Ps2TextureRegionClampState *region =
+            &s_draw_region_clamp[t];
+        const uint64_t sampler_flags =
+            (uint64_t)(s_sampler_cms[t] & 0xffu) |
+            ((uint64_t)(s_sampler_cmt[t] & 0xffu) << 8u) |
+            ((uint64_t)(s_sampler_linear[t] ? 1u : 0u) << 16u) |
+            ((uint64_t)(region->region_s ? 1u : 0u) << 17u) |
+            ((uint64_t)(region->region_t ? 1u : 0u) << 18u) |
+            ((uint64_t)region->max_u << 24u) |
+            ((uint64_t)region->max_v << 40u) |
+            ((uint64_t)(sampler && sampler->expanded_mirror_s ? 1u : 0u)
+                << 56u) |
+            ((uint64_t)(sampler && sampler->expanded_mirror_t ? 1u : 0u)
+                << 57u) |
+            ((uint64_t)(sampler && sampler->monochrome_rgb ? 1u : 0u)
+                << 58u);
+        ps2RendererTraceRecord(PS2_TRACE_DRAW_STATE,
+            (uint16_t)(3u + t), draw_id,
+            ps2_trace_pack_u32_pair(
+                (uint32_t)handle,
+                sampler ? sampler->logical_width : 0u),
+            ps2_trace_pack_u32_pair(
+                sampler ? sampler->logical_height : 0u,
+                (uint32_t)t),
+            sampler_flags);
+        if (sampler) {
+            ps2RendererTraceRecord(PS2_TRACE_DRAW_STATE,
+                (uint16_t)(5u + t), draw_id,
+                ps2_trace_pack_float_pair(
+                    sampler->coordinate_scale_s,
+                    sampler->coordinate_scale_t),
+                0u, 0u);
+        }
+    }
+}
+
+static void ps2_trace_draw_payload(uint32_t draw_id, uint32_t chunk,
+    uint16_t kind, const float *vertices, uint32_t vertex_count,
+    uint32_t stride)
+{
+    if (!ps2RendererTraceIsCapturing() || !vertices ||
+        vertex_count == 0u || stride == 0u || draw_id == 0u) {
+        return;
+    }
+
+    const uint64_t bytes64 =
+        (uint64_t)vertex_count * (uint64_t)stride * sizeof(float);
+    if (bytes64 == 0u || bytes64 > UINT32_MAX) {
+        return;
+    }
+    const uint32_t bytes = (uint32_t)bytes64;
+    uint32_t offset = 0u;
+    const bool stored = ps2RendererTraceAppendBlob(
+        vertices, bytes, 16u, &offset);
+    const uint16_t flags = kind |
+        (stored ? 0u : (uint16_t)PS2_TRACE_FLAG_DROPPED);
+    ps2RendererTraceRecord(PS2_TRACE_DRAW_PAYLOAD, flags,
+        (uint64_t)draw_id | ((uint64_t)chunk << 32u),
+        (uint64_t)offset | ((uint64_t)bytes << 32u),
+        (uint64_t)vertex_count | ((uint64_t)stride << 32u),
+        ps2_trace_hash(vertices, bytes));
+}
+
 static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len,
     size_t buf_vbo_num_tris)
 {
@@ -4304,6 +4428,8 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len,
 
     const size_t stride = ps2_vbo_stride(s_shader);
     const size_t source_vertices = buf_vbo_num_tris * 3u;
+    const uint32_t trace_draw_id = ps2RendererTraceIsCapturing()
+        ? ++s_trace_draw_id : 0u;
     ps2RendererTraceRecord(PS2_TRACE_DRAW_INPUT,
         s_shader->plan.textured ?
             (uint16_t)PS2_TRACE_FLAG_TEXTURED : 0u,
@@ -4313,11 +4439,20 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len,
         return;
     }
 
+    ps2_trace_draw_state(trace_draw_id);
+    ps2_trace_draw_payload(trace_draw_id, 0u, 1u,
+        buf_vbo, (uint32_t)source_vertices, (uint32_t)stride);
+
     size_t buffered_vertices = 0u;
     size_t clipped_vertices_total = 0u;
+    uint32_t trace_clip_chunk = 0u;
     for (size_t triangle = 0u; triangle < buf_vbo_num_tris; ++triangle) {
         if (PS2_GFX_TRANSLATE_VERTS - buffered_vertices <
             PS2_GS_CLIP_MAX_OUTPUT_VERTICES) {
+            ps2_trace_draw_payload(
+                trace_draw_id, ++trace_clip_chunk, 2u,
+                s_clipped_vbo, (uint32_t)buffered_vertices,
+                (uint32_t)stride);
             ps2_draw_triangles_unclipped(s_clipped_vbo,
                 buffered_vertices * stride, buffered_vertices / 3u);
             buffered_vertices = 0u;
@@ -4340,6 +4475,10 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len,
     }
 
     if (buffered_vertices != 0u) {
+        ps2_trace_draw_payload(
+            trace_draw_id, ++trace_clip_chunk, 2u,
+            s_clipped_vbo, (uint32_t)buffered_vertices,
+            (uint32_t)stride);
         ps2_draw_triangles_unclipped(s_clipped_vbo,
             buffered_vertices * stride, buffered_vertices / 3u);
     }
@@ -4435,6 +4574,9 @@ static void ps2_on_resize(void)
 static void ps2_start_frame(void)
 {
     ps2RendererTraceBeginFrame();
+    if (ps2RendererTraceIsCapturing()) {
+        s_trace_draw_id = 0u;
+    }
     ps2_trace_shader(s_shader);
     ps2RendererStatsBeginFrame();
     ps2GsCoreBeginFrame();

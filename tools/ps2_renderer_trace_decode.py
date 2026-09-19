@@ -24,7 +24,9 @@ EVENT_NAMES = {
     19: "render_target", 20: "vram", 21: "renderer_stats",
     22: "frontend_state", 23: "warning", 24: "pass_graph_draw",
     25: "independent_alpha_draw", 26: "clipped_triangle_bounds",
-    27: "texture_coord_range",
+    27: "texture_coord_range", 28: "draw_state",
+    29: "draw_payload", 30: "texture_detail",
+    31: "build_config", 32: "queue_wait", 33: "gs_draw",
 }
 
 GS_STATE_NAMES = [
@@ -98,6 +100,8 @@ def _analyze(events: list[dict]) -> dict:
     independent_alpha_draws = []
     clipped_triangle_bounds = []
     texture_coord_ranges = []
+    draw_states = collections.defaultdict(dict)
+    draw_payloads = []
     gaps = []
 
     for previous, current in zip(events, events[1:]):
@@ -253,6 +257,29 @@ def _analyze(events: list[dict]) -> dict:
                 "thin": bool(event["flags"] & 0x0400),
                 "near_zero_w": bool(event["flags"] & 0x0800),
             })
+        elif event_type == "draw_state":
+            subtype = event["flags"] & 0xff
+            draw_id = _event_value(event, "a") & 0xffffffff
+            state = draw_states[draw_id]
+            state["draw_id"] = draw_id
+            state[f"subtype_{subtype}"] = {
+                "b": event["b"], "c": event["c"], "d": event["d"],
+            }
+        elif event_type == "draw_payload":
+            packed_id = _event_value(event, "a")
+            packed_storage = _event_value(event, "b")
+            packed_shape = _event_value(event, "c")
+            draw_payloads.append({
+                "draw_id": packed_id & 0xffffffff,
+                "chunk": packed_id >> 32,
+                "kind": "input" if (event["flags"] & 0xff) == 1 else "clipped",
+                "stored": not bool(event["flags"] & 0x8000),
+                "offset": packed_storage & 0xffffffff,
+                "size": packed_storage >> 32,
+                "vertex_count": packed_shape & 0xffffffff,
+                "stride_floats": packed_shape >> 32,
+                "hash": event["d"],
+            })
         elif event_type == "draw_clipped" and active_draw is not None:
             clipped = _event_value(event, "c")
             draw_totals["clipped_vertices"] += clipped
@@ -295,6 +322,8 @@ def _analyze(events: list[dict]) -> dict:
         "independent_alpha_draws": independent_alpha_draws,
         "clipped_triangle_bounds": clipped_triangle_bounds,
         "texture_coord_ranges": texture_coord_ranges,
+        "draw_states": dict(sorted(draw_states.items())),
+        "draw_payloads": draw_payloads,
         "largest_event_gaps": sorted(
             gaps, key=lambda gap: gap["microseconds"], reverse=True)[:10],
     }
