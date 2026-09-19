@@ -141,6 +141,14 @@ struct Ps2TextureSamplerState {
     bool expanded_mirror_s;
     bool expanded_mirror_t;
     bool monochrome_rgb;
+    uint8_t source_format;
+    uint8_t source_size;
+    uint16_t source_reserved;
+    uint32_t palette_format;
+    uint32_t palette_count;
+    uint32_t upload_serial;
+    uint64_t source_hash;
+    uint64_t palette_hash;
 };
 
 struct Ps2TextureRegionClampState {
@@ -231,6 +239,7 @@ static enum FilteringMode s_filter_mode = FILTER_LINEAR;
 static enum MipmapFilteringMode s_mipmap_filter = MIPMAP_DISABLED;
 static int s_anisotropy = 1;
 static uint32_t s_trace_draw_id;
+static uint32_t s_texture_upload_serial;
 
 static bool s_warned_framebuffer;
 static bool s_warned_mipmap;
@@ -514,6 +523,24 @@ static void ps2_record_texture_mirror(
             mirror_s ? "S" : "", mirror_t ? "T" : "");
         s_logged_native_mirror = true;
     }
+}
+
+static void ps2_record_texture_provenance(
+    Ps2GsTextureHandle handle, uint8_t format, uint8_t size,
+    uint32_t palette_format, uint32_t palette_count,
+    uint64_t source_hash, uint64_t palette_hash)
+{
+    if (handle >= PS2_GFX_TEXTURE_STATE_SLOTS) {
+        return;
+    }
+    struct Ps2TextureSamplerState *sampler = &s_texture_sampler[handle];
+    sampler->source_format = format;
+    sampler->source_size = size;
+    sampler->palette_format = palette_format;
+    sampler->palette_count = palette_count;
+    sampler->upload_serial = ++s_texture_upload_serial;
+    sampler->source_hash = source_hash;
+    sampler->palette_hash = palette_hash;
 }
 
 static void ps2_apply_texture_clamp(int tile)
