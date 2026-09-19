@@ -115,7 +115,7 @@ static uint32_t s_scissor_x1;
 static uint32_t s_scissor_y0;
 static uint32_t s_scissor_y1;
 static struct Ps2GsStateShadow s_state_shadow;
-static struct Ps2GsTraceScreenshot s_trace_screenshot;
+static struct Ps2GsTraceScreenshot s_trace_screenshot[2];
 
 static_assert(sizeof(Ps2GsColorVertex) == sizeof(GSPRIMPOINT),
     "packet-ready color vertex must match current gsKit A+D source layout");
@@ -864,7 +864,7 @@ static uint64_t ps2GsCoreTracePair(uint32_t low, uint32_t high)
 
 extern "C" void ps2GsCorePrepareTraceScreenshot(void)
 {
-    memset(&s_trace_screenshot, 0, sizeof(s_trace_screenshot));
+    memset(s_trace_screenshot, 0, sizeof(s_trace_screenshot));
     if (!s_gs || !ps2RendererTraceIsCapturing() ||
         s_gs->Width <= 0 || s_gs->Height <= 0) {
         return;
@@ -877,96 +877,132 @@ extern "C" void ps2GsCorePrepareTraceScreenshot(void)
         ps2GsCoreScreenshotBytesPerPixel(psm);
     const uint64_t byte_count64 =
         (uint64_t)width * height * bytes_per_pixel;
-    const uint32_t buffer_index = (uint32_t)s_gs->ActiveBuffer & 1u;
-    const uint32_t vram = s_gs->ScreenBuffer[buffer_index];
+    const uint32_t draw_buffer = (uint32_t)s_gs->ActiveBuffer & 1u;
     const uint32_t fbw = width / 64u;
 
     if (bytes_per_pixel == 0u || byte_count64 == 0u ||
         byte_count64 > UINT32_MAX ||
         (byte_count64 & 15u) != 0u ||
         fbw == 0u) {
-        ps2RendererTraceRecord(PS2_TRACE_SCREENSHOT,
-            PS2_TRACE_FLAG_DROPPED,
-            0u,
-            ps2GsCoreTracePair(width, height),
-            ps2GsCoreTracePair(vram, fbw),
-            ps2GsCoreTracePair(psm, buffer_index));
+        for (uint32_t capture = 0u; capture < 2u; ++capture) {
+            const uint32_t buffer_index =
+                capture == 0u ? draw_buffer : (draw_buffer ^ 1u);
+            ps2RendererTraceRecord(PS2_TRACE_SCREENSHOT,
+                (uint16_t)((capture * 2u) << 8u) |
+                    PS2_TRACE_FLAG_DROPPED,
+                0u,
+                ps2GsCoreTracePair(width, height),
+                ps2GsCoreTracePair(
+                    s_gs->ScreenBuffer[buffer_index], fbw),
+                ps2GsCoreTracePair(psm, buffer_index));
+        }
         return;
     }
 
     const uint32_t byte_count = (uint32_t)byte_count64;
-    uint32_t blob_offset = 0u;
-    void *data = ps2RendererTraceReserveBlob(
-        byte_count, 64u, &blob_offset);
-    if (!data) {
+    for (uint32_t capture = 0u; capture < 2u; ++capture) {
+        struct Ps2GsTraceScreenshot *shot =
+            &s_trace_screenshot[capture];
+        const uint32_t buffer_index =
+            capture == 0u ? draw_buffer : (draw_buffer ^ 1u);
+        const uint32_t vram = s_gs->ScreenBuffer[buffer_index];
+        uint32_t blob_offset = 0u;
+        void *data = ps2RendererTraceReserveBlob(
+            byte_count, 64u, &blob_offset);
+        const uint16_t request_subtype =
+            (uint16_t)((capture * 2u) << 8u);
+        if (!data) {
+            ps2RendererTraceRecord(PS2_TRACE_SCREENSHOT,
+                (uint16_t)(request_subtype |
+                    PS2_TRACE_FLAG_DROPPED),
+                ps2GsCoreTracePair(0u, byte_count),
+                ps2GsCoreTracePair(width, height),
+                ps2GsCoreTracePair(vram, fbw),
+                ps2GsCoreTracePair(psm, buffer_index));
+            continue;
+        }
+
+        shot->reserved = true;
+        shot->data = data;
+        shot->blob_offset = blob_offset;
+        shot->byte_count = byte_count;
+        shot->width = width;
+        shot->height = height;
+        shot->vram = vram;
+        shot->fbw = fbw;
+        shot->psm = psm;
+        shot->buffer_index = buffer_index;
+
         ps2RendererTraceRecord(PS2_TRACE_SCREENSHOT,
-            PS2_TRACE_FLAG_DROPPED,
-            ps2GsCoreTracePair(0u, byte_count),
+            request_subtype,
+            ps2GsCoreTracePair(blob_offset, byte_count),
             ps2GsCoreTracePair(width, height),
             ps2GsCoreTracePair(vram, fbw),
             ps2GsCoreTracePair(psm, buffer_index));
-        return;
     }
-
-    s_trace_screenshot.reserved = true;
-    s_trace_screenshot.data = data;
-    s_trace_screenshot.blob_offset = blob_offset;
-    s_trace_screenshot.byte_count = byte_count;
-    s_trace_screenshot.width = width;
-    s_trace_screenshot.height = height;
-    s_trace_screenshot.vram = vram;
-    s_trace_screenshot.fbw = fbw;
-    s_trace_screenshot.psm = psm;
-    s_trace_screenshot.buffer_index = buffer_index;
-
-    ps2RendererTraceRecord(PS2_TRACE_SCREENSHOT, 0u,
-        ps2GsCoreTracePair(blob_offset, byte_count),
-        ps2GsCoreTracePair(width, height),
-        ps2GsCoreTracePair(vram, fbw),
-        ps2GsCoreTracePair(psm, buffer_index));
 }
 
 extern "C" bool ps2GsCoreCaptureTraceScreenshot(void)
 {
     if (!s_gs || !ps2RendererTraceIsCapturing() ||
-        !s_trace_screenshot.reserved || !s_trace_screenshot.data) {
+        !s_trace_screenshot[0].reserved ||
+        !s_trace_screenshot[0].data) {
         return false;
     }
 
     const uint32_t current_buffer =
         (uint32_t)s_gs->ActiveBuffer & 1u;
-    const bool same_buffer =
-        current_buffer == s_trace_screenshot.buffer_index &&
-        s_gs->ScreenBuffer[current_buffer] == s_trace_screenshot.vram;
-    const uint64_t start = sysGetMicroseconds();
-    const bool fenced = same_buffer && ps2GsNativeQueueWaitGs();
-    const int readback = fenced
-        ? ps2_screenshot(
-            s_trace_screenshot.data,
-            s_trace_screenshot.vram / 256u,
-            0u, 0u,
-            s_trace_screenshot.width,
-            s_trace_screenshot.height,
-            s_trace_screenshot.psm)
-        : 0;
-    const uint64_t elapsed = sysGetMicroseconds() - start;
-    const bool success = fenced && readback != 0;
-    const uint64_t hash = success
-        ? ps2GsCoreTraceHash(
-            s_trace_screenshot.data, s_trace_screenshot.byte_count)
-        : 0u;
+    const bool same_primary =
+        current_buffer == s_trace_screenshot[0].buffer_index &&
+        s_gs->ScreenBuffer[current_buffer] ==
+            s_trace_screenshot[0].vram;
+    const bool fenced = same_primary && ps2GsNativeQueueWaitGs();
+    bool primary_success = false;
 
-    ps2RendererTraceRecord(PS2_TRACE_SCREENSHOT,
-        (uint16_t)(0x0100u |
-            (success ? PS2_TRACE_FLAG_SUPPORTED
-                     : PS2_TRACE_FLAG_DROPPED)),
-        hash,
-        elapsed,
-        s_trace_screenshot.byte_count,
-        ps2GsCoreTracePair(
-            current_buffer,
-            (fenced ? 1u : 0u) | ((readback != 0 ? 1u : 0u) << 1u)));
-    return success;
+    for (uint32_t capture = 0u; capture < 2u; ++capture) {
+        struct Ps2GsTraceScreenshot *shot =
+            &s_trace_screenshot[capture];
+        if (!shot->reserved || !shot->data) {
+            continue;
+        }
+
+        const uint64_t start = sysGetMicroseconds();
+        const int readback = fenced
+            ? ps2_screenshot(
+                shot->data,
+                shot->vram / 256u,
+                0u, 0u,
+                shot->width,
+                shot->height,
+                shot->psm)
+            : 0;
+        const uint64_t elapsed = sysGetMicroseconds() - start;
+        const bool success = fenced && readback != 0;
+        const uint64_t hash = success
+            ? ps2GsCoreTraceHash(
+                shot->data, shot->byte_count)
+            : 0u;
+        const uint16_t result_subtype =
+            (uint16_t)(((capture * 2u) + 1u) << 8u);
+
+        ps2RendererTraceRecord(PS2_TRACE_SCREENSHOT,
+            (uint16_t)(result_subtype |
+                (success ? PS2_TRACE_FLAG_SUPPORTED
+                         : PS2_TRACE_FLAG_DROPPED)),
+            hash,
+            elapsed,
+            shot->byte_count,
+            ps2GsCoreTracePair(
+                current_buffer,
+                (fenced ? 1u : 0u) |
+                ((readback != 0 ? 1u : 0u) << 1u) |
+                ((shot->buffer_index & 1u) << 8u)));
+
+        if (capture == 0u) {
+            primary_success = success;
+        }
+    }
+    return primary_success;
 }
 
 extern "C" void ps2GsCoreRecordTraceSnapshot(void)
