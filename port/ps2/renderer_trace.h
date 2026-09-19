@@ -8,9 +8,16 @@
 extern "C" {
 #endif
 
-#define PS2_RENDERER_TRACE_VERSION 1u
-#define PS2_RENDERER_TRACE_EVENT_CAPACITY 8192u
-#define PS2_RENDERER_TRACE_QWORD_CAPACITY 65536u
+#define PS2_RENDERER_TRACE_VERSION 2u
+
+/*
+ * Capture buffers exist only while Select has armed a one-frame trace. The
+ * implementation tries the largest profile first and falls back if the EE heap
+ * cannot provide it.
+ */
+#define PS2_RENDERER_TRACE_EVENT_CAPACITY_MAX 32768u
+#define PS2_RENDERER_TRACE_QWORD_CAPACITY_MAX 262144u
+#define PS2_RENDERER_TRACE_BLOB_CAPACITY_MAX (4u * 1024u * 1024u)
 
 enum Ps2RendererTraceEventType {
     PS2_TRACE_FRAME_BEGIN = 1,
@@ -100,6 +107,14 @@ void ps2RendererTraceRecordPath3Qwords(const void *qwords, uint32_t count);
 void ps2RendererTraceRecordPath1Qwords(const void *qwords,
     uint32_t chain_qwords,
     uint32_t register_count, uint32_t vertex_count, bool textured);
+
+/*
+ * Variable-size v2 payload storage. Offset is relative to the blob section.
+ * Metadata events keep recording if this storage fills; dropped bytes are
+ * reported in the header instead of corrupting the rest of the capture.
+ */
+bool ps2RendererTraceAppendBlob(const void *data, uint32_t size,
+    uint32_t alignment, uint32_t *offset);
 bool ps2RendererTraceEndFrameAndWrite(void);
 
 #ifdef __cplusplus

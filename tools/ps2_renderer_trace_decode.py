@@ -314,13 +314,21 @@ def decode(path: Path) -> dict:
     (event_count, event_capacity, dropped_events, qword_count,
      qword_capacity, dropped_qwords, event_offset, qword_offset, flags,
      *reserved) = ints
-    if version != 1 or header_size != HEADER.size or event_size != EVENT.size:
+    if version not in (1, 2) or header_size != HEADER.size or event_size != EVENT.size:
         raise ValueError("unsupported trace layout")
     if qword_size != QWORD.size:
         raise ValueError("unsupported qword layout")
     event_end = event_offset + event_count * event_size
     qword_end = qword_offset + qword_count * qword_size
-    if event_offset < header_size or event_end > len(blob) or qword_end > len(blob):
+    blob_size = reserved[0] if version >= 2 else 0
+    blob_capacity = reserved[1] if version >= 2 else 0
+    dropped_blob = reserved[2] if version >= 2 else 0
+    blob_offset = reserved[3] if version >= 2 else qword_end
+    capture_profile = reserved[4] if version >= 2 else 0
+    blob_end = blob_offset + blob_size
+    if (event_offset < header_size or event_end > len(blob) or
+        qword_end > len(blob) or blob_offset < qword_end or
+        blob_end > len(blob)):
         raise ValueError("section offsets exceed the file")
 
     events = []
@@ -417,6 +425,9 @@ def decode(path: Path) -> dict:
                    "dropped": dropped_events},
         "qwords": {"count": qword_count, "capacity": qword_capacity,
                    "dropped": dropped_qwords},
+        "blob": {"size": blob_size, "capacity": blob_capacity,
+                 "dropped": dropped_blob, "offset": blob_offset,
+                 "capture_profile": capture_profile},
         "event_stream": events,
         "path3_submissions": submissions,
         "path1_submissions": path1_submissions,
