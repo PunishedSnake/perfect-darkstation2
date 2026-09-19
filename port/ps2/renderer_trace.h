@@ -60,6 +60,8 @@ enum Ps2RendererTraceEventType {
     PS2_TRACE_TMEM_SNAPSHOT,
     PS2_TRACE_GS_UPLOAD,
     PS2_TRACE_BUILD_INFO,
+    PS2_TRACE_GFX_COMMAND,
+    PS2_TRACE_GFX_SOURCE,
 };
 
 enum Ps2RendererTraceFlags {
