@@ -29,6 +29,9 @@ EVENT_NAMES = {
     29: "draw_payload", 30: "texture_detail",
     31: "build_config", 32: "queue_wait", 33: "gs_draw",
     34: "resource_op", 35: "capture_info", 36: "screenshot",
+    37: "gs_draw_state", 38: "tmem_snapshot", 39: "gs_upload",
+    40: "build_info", 41: "gfx_command", 42: "gfx_source",
+    43: "gs_vram_dump",
 }
 
 GS_STATE_NAMES = [
@@ -129,8 +132,15 @@ def _analyze(events: list[dict]) -> dict:
     build_config = {}
     queue_waits = []
     gs_draws = []
+    gs_draw_states = []
     resource_ops = []
-    screenshot = {}
+    tmem_snapshots = []
+    gs_uploads = []
+    build_info = {}
+    gfx_commands = []
+    gfx_sources = []
+    gs_vram_dump = {}
+    screenshots = {"draw": {}, "other": {}}
     gaps = []
 
     for previous, current in zip(events, events[1:]):
@@ -469,6 +479,13 @@ def _analyze(events: list[dict]) -> dict:
                     "bytes": c,
                     "resident": bool(_event_value(event, "d")),
                 })
+            elif subtype == 0x1200:
+                item.update({
+                    "kind": "resident_tmem_view",
+                    "content_identity": event["b"],
+                    "source_hash": event["c"],
+                    "palette_hash": event["d"],
+                })
             else:
                 item.update({
                     "kind": f"unknown_{subtype:x}",
@@ -585,9 +602,141 @@ def _analyze(events: list[dict]) -> dict:
                 "a": event["a"], "b": event["b"],
                 "c": event["c"], "d": event["d"],
             })
+        elif event_type == "gs_draw_state":
+            slot = _event_value(event, "a")
+            gs_draw_states.append({
+                "sequence": event["sequence"],
+                "draw_id": active_draw.get("draw_id") if active_draw else None,
+                "slot": slot,
+                "name": GS_STATE_NAMES[slot]
+                        if slot < len(GS_STATE_NAMES)
+                        else f"slot_{slot}",
+                "valid": bool(event["flags"] & 0x0008),
+                "value": event["b"],
+                "emitted_writes": _event_value(event, "c"),
+                "suppressed_writes": _event_value(event, "d"),
+            })
+        elif event_type == "tmem_snapshot":
+            packed = _event_value(event, "a")
+            offset, size = _u32_pair(packed)
+            subtype = event["flags"] & 0xff
+            tmem_snapshots.append({
+                "sequence": event["sequence"],
+                "subtype": subtype,
+                "kind": {
+                    0: "bytes",
+                    1: "byte_valid",
+                    2: "word_generation",
+                    3: "word_valid",
+                    4: "live_stats",
+                }.get(subtype, f"unknown_{subtype}"),
+                "stored": not bool(event["flags"] & 0x8000),
+                "offset": offset,
+                "size": size,
+                "hash": event["b"],
+                "generation": _event_value(event, "c"),
+            })
+        elif event_type == "gs_upload":
+            subtype = event["flags"] & 0xff
+            item = {
+                "sequence": event["sequence"],
+                "subtype": subtype,
+                "dropped": bool(event["flags"] & 0x8000),
+            }
+            if subtype == 0:
+                width, height = _u32_pair(_event_value(event, "a"))
+                vram, tbw = _u32_pair(_event_value(event, "b"))
+                psm, encoding = _u32_pair(_event_value(event, "c"))
+                source_bytes, output_bytes = _u32_pair(
+                    _event_value(event, "d"))
+                item.update({
+                    "kind": "metadata",
+                    "width": width, "height": height,
+                    "vram": vram, "tbw": tbw,
+                    "psm": psm, "encoding": encoding,
+                    "source_bytes": source_bytes,
+                    "output_bytes": output_bytes,
+                })
+            elif subtype in (1, 2):
+                offset, size = _u32_pair(_event_value(event, "a"))
+                item.update({
+                    "kind": "payload" if subtype == 1 else "dma_chain",
+                    "stored": not bool(event["flags"] & 0x8000),
+                    "offset": offset,
+                    "size": size,
+                    "hash": event["b"],
+                    "qwords": _event_value(event, "c"),
+                    "metadata": event["d"],
+                })
+                if subtype == 1:
+                    sw, sh = _u32_pair(_event_value(event, "d"))
+                    item["source_width"] = sw
+                    item["source_height"] = sh
+                else:
+                    flags = _event_value(event, "d")
+                    item["mirror_s"] = bool(flags & 1)
+                    item["mirror_t"] = bool(flags & 2)
+            gs_uploads.append(item)
+        elif event_type == "build_info":
+            offset, size = _u32_pair(_event_value(event, "a"))
+            build_info = {
+                "sequence": event["sequence"],
+                "stored": not bool(event["flags"] & 0x8000),
+                "offset": offset,
+                "size": size,
+                "hash": event["b"],
+            }
+        elif event_type == "gfx_command":
+            depth, continuation = _u32_pair(_event_value(event, "b"))
+            gfx_commands.append({
+                "sequence": event["sequence"],
+                "address": event["a"],
+                "depth": depth,
+                "entry": continuation,
+                "continuation": bool(event["flags"] & 0x0100),
+                "opcode": (_event_value(event, "c") >> 24) & 0xff,
+                "w0": event["c"],
+                "w1": event["d"],
+            })
+        elif event_type == "gfx_source":
+            offset, size = _u32_pair(_event_value(event, "a"))
+            subtype = event["flags"] & 0xff
+            gfx_sources.append({
+                "sequence": event["sequence"],
+                "subtype": subtype,
+                "kind": {
+                    1: "matrix",
+                    2: "vertices",
+                    3: "vertex_colors",
+                }.get(subtype, f"unknown_{subtype}"),
+                "stored": not bool(event["flags"] & 0x8000),
+                "offset": offset,
+                "size": size,
+                "hash": event["b"],
+                "metadata": event["c"],
+                "source_address": event["d"],
+            })
+        elif event_type == "gs_vram_dump":
+            packed = _event_value(event, "d")
+            gs_vram_dump = {
+                "sequence": event["sequence"],
+                "success": bool(event["flags"] & 0x0008),
+                "dropped": bool(event["flags"] & 0x8000),
+                "written_bytes": _event_value(event, "a"),
+                "hash": event["b"],
+                "readback_microseconds": _event_value(event, "c"),
+                "width": packed & 0xffff,
+                "height": (packed >> 16) & 0xffff,
+                "strip_height": (packed >> 32) & 0xffff,
+                "strips": (packed >> 48) & 0xffff,
+                "file": "pdps2-gs-trace.vram-ct32.bin",
+            }
         elif event_type == "screenshot":
             subtype = (event["flags"] >> 8) & 0x7f
-            if subtype == 0:
+            capture_index = subtype // 2
+            screenshot = screenshots[
+                "draw" if capture_index == 0 else "other"]
+            if subtype in (0, 2):
                 offset, size = _u32_pair(_event_value(event, "a"))
                 width, height = _u32_pair(_event_value(event, "b"))
                 vram, fbw = _u32_pair(_event_value(event, "c"))
@@ -604,7 +753,7 @@ def _analyze(events: list[dict]) -> dict:
                     "psm": psm,
                     "buffer_index": buffer_index,
                 })
-            elif subtype == 1:
+            elif subtype in (1, 3):
                 current_buffer, status = _u32_pair(
                     _event_value(event, "d"))
                 screenshot.update({
@@ -617,6 +766,7 @@ def _analyze(events: list[dict]) -> dict:
                     "current_buffer": current_buffer,
                     "fenced": bool(status & 1),
                     "readback_ok": bool(status & 2),
+                    "captured_buffer": (status >> 8) & 1,
                 })
         elif event_type == "draw_clipped" and active_draw is not None:
             clipped = _event_value(event, "c")
@@ -684,8 +834,16 @@ def _analyze(events: list[dict]) -> dict:
         "build_config": build_config,
         "queue_waits": queue_waits,
         "gs_draws": gs_draws,
+        "gs_draw_states": gs_draw_states,
         "resource_ops": resource_ops,
-        "screenshot": screenshot,
+        "tmem_snapshots": tmem_snapshots,
+        "gs_uploads": gs_uploads,
+        "build_info": build_info,
+        "gfx_commands": gfx_commands,
+        "gfx_sources": gfx_sources,
+        "gs_vram_dump": gs_vram_dump,
+        "screenshot": screenshots["draw"],
+        "screenshots": screenshots,
         "largest_event_gaps": sorted(
             gaps, key=lambda gap: gap["microseconds"], reverse=True)[:10],
     }
@@ -705,7 +863,7 @@ def decode(path: Path) -> dict:
     (event_count, event_capacity, dropped_events, qword_count,
      qword_capacity, dropped_qwords, event_offset, qword_offset, flags,
      *reserved) = ints
-    if version not in (1, 2) or header_size != HEADER.size or event_size != EVENT.size:
+    if version not in (1, 2, 3) or header_size != HEADER.size or event_size != EVENT.size:
         raise ValueError("unsupported trace layout")
     if qword_size != QWORD.size:
         raise ValueError("unsupported qword layout")
