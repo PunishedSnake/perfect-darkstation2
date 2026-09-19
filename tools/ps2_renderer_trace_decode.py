@@ -116,6 +116,7 @@ def _analyze(events: list[dict]) -> dict:
         "draws": 0, "input_triangles": 0, "clipped_vertices": 0,
     })
     active_draw = None
+    draw_records = []
     pass_graph_draws = []
     pending_pass_graph_draw = None
     independent_alpha_draws = []
@@ -153,6 +154,7 @@ def _analyze(events: list[dict]) -> dict:
                 "pass_graph": current_pass,
                 "shader": current_shader,
                 "start": event["microseconds"],
+                "start_sequence": event["sequence"],
                 "triangles": _event_value(event, "a"),
                 "path1_submits": 0,
                 "path1_requested_qwords": 0,
@@ -247,6 +249,7 @@ def _analyze(events: list[dict]) -> dict:
             height = _event_value(event, "d") >> 32
             texture_coord_ranges.append({
                 "sequence": event["sequence"],
+                "draw_id": active_draw.get("draw_id") if active_draw else None,
                 "slot": slot,
                 "handle": handle,
                 "min_u": min_u,
@@ -270,6 +273,7 @@ def _analyze(events: list[dict]) -> dict:
             bbox_max = _event_value(event, "d")
             clipped_triangle_bounds.append({
                 "sequence": event["sequence"],
+                "draw_id": active_draw.get("draw_id") if active_draw else None,
                 "source_triangle": _event_value(event, "a"),
                 "output_triangle": _event_value(event, "b"),
                 "bbox": {
@@ -288,6 +292,8 @@ def _analyze(events: list[dict]) -> dict:
             draw_id = _event_value(event, "a") & 0xffffffff
             state = draw_states[draw_id]
             state["draw_id"] = draw_id
+            if active_draw is not None and "draw_id" not in active_draw:
+                active_draw["draw_id"] = draw_id
             b = _event_value(event, "b")
             c = _event_value(event, "c")
             value_d = _event_value(event, "d")
@@ -434,6 +440,7 @@ def _analyze(events: list[dict]) -> dict:
             subtype = event["flags"] & 0xff
             item = {
                 "sequence": event["sequence"],
+                "draw_id": active_draw.get("draw_id") if active_draw else None,
                 "subtype": subtype,
                 "failed": bool(event["flags"] & 0x8000),
                 "a": _event_value(event, "a"),
@@ -484,6 +491,7 @@ def _analyze(events: list[dict]) -> dict:
             texture_vram, clut_vram = _u32_pair(_event_value(event, "d"))
             gs_draws.append({
                 "sequence": event["sequence"],
+                "draw_id": active_draw.get("draw_id") if active_draw else None,
                 "vertices": packed & 0xffffffff,
                 "register_count": packed >> 32,
                 "path": "path1" if event["flags"] & 1 else "path3",
@@ -543,11 +551,29 @@ def _analyze(events: list[dict]) -> dict:
                     f"{path_name}_submits"]
                 aggregate[f"{path_name}_requested_qwords"] += active_draw[
                     f"{path_name}_requested_qwords"]
+            draw_records.append({
+                "draw_id": active_draw.get("draw_id"),
+                "pass_graph": pass_name,
+                "shader": shader,
+                "input_triangles": active_draw["triangles"],
+                "clipped_vertices": clipped,
+                "duration_microseconds": max(
+                    0, event["microseconds"] - active_draw["start"]),
+                "path1_submits": active_draw["path1_submits"],
+                "path1_requested_qwords": active_draw[
+                    "path1_requested_qwords"],
+                "path3_submits": active_draw["path3_submits"],
+                "path3_requested_qwords": active_draw[
+                    "path3_requested_qwords"],
+                "start_sequence": active_draw.get("start_sequence"),
+                "end_sequence": event["sequence"],
+            })
             active_draw = None
 
     return {
         "paths": paths,
         "draws": draw_totals,
+        "draw_records": draw_records,
         "unsupported_shaders": dict(sorted(unsupported_shaders.items())),
         "by_pass_graph": dict(sorted(
             by_pass.items(),
