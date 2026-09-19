@@ -2368,6 +2368,23 @@ static void ps2GsCoreTraceDraw(
         (uint64_t)vertex_count | ((uint64_t)register_count << 32u),
         primary_state, secondary_state,
         (uint64_t)texture_vram | ((uint64_t)clut_vram << 32u));
+
+    /*
+     * Full forensic mode snapshots the complete software GS shadow at every
+     * physical draw. This is intentionally redundant with the raw GIF/VIF
+     * stream: the redundancy makes state-replay bugs diagnosable without
+     * guessing which deduplicated register write established a value.
+     */
+    for (uint32_t slot = 0u; slot < PS2_GS_STATE_COUNT; ++slot) {
+        const bool valid =
+            (s_state_shadow.valid_mask & (1u << slot)) != 0u;
+        ps2RendererTraceRecord(PS2_TRACE_GS_DRAW_STATE,
+            valid ? PS2_TRACE_FLAG_SUPPORTED : 0u,
+            slot,
+            s_state_shadow.value[slot],
+            s_state_shadow.emitted_writes,
+            s_state_shadow.suppressed_writes);
+    }
 }
 
 extern "C" void ps2GsCoreDrawColorTriangles(const struct Ps2GsColorVertex *vertices,
