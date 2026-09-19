@@ -24,6 +24,7 @@ static uint32_t s_qword_capacity;
 static uint32_t s_blob_capacity;
 static uint32_t s_blob_size;
 static uint32_t s_dropped_blob_bytes;
+static bool s_frame_end_marked;
 
 static_assert(sizeof(struct Ps2RendererTraceHeader) == 104u,
     "renderer trace header is a versioned disk format");
@@ -136,6 +137,7 @@ extern "C" void ps2RendererTraceBeginFrame(void)
     s_header.qword_offset = sizeof(s_header);
     s_blob_size = 0u;
     s_dropped_blob_bytes = 0u;
+    s_frame_end_marked = false;
     s_state = PS2_TRACE_CAPTURING;
     ps2RendererTraceRecord(PS2_TRACE_FRAME_BEGIN, 0u,
         s_stage, s_frame_number, 0u, 0u);
@@ -270,16 +272,27 @@ extern "C" bool ps2RendererTraceAppendBlob(
     return true;
 }
 
+extern "C" void ps2RendererTraceMarkFrameEnd(void)
+{
+    if (s_state != PS2_TRACE_CAPTURING || s_frame_end_marked) {
+        return;
+    }
+    ps2RendererTraceRecord(PS2_TRACE_FRAME_END, 0u,
+        s_header.event_count, s_header.qword_count,
+        s_header.dropped_events, s_header.dropped_qwords);
+    s_header.end_microseconds = sysGetMicroseconds();
+    s_frame_end_marked = true;
+}
+
 extern "C" bool ps2RendererTraceEndFrameAndWrite(void)
 {
     if (s_state != PS2_TRACE_CAPTURING) {
         return false;
     }
-
-    ps2RendererTraceRecord(PS2_TRACE_FRAME_END, 0u,
-        s_header.event_count, s_header.qword_count,
-        s_header.dropped_events, s_header.dropped_qwords);
-    s_header.end_microseconds = sysGetMicroseconds();
+    if (!s_frame_end_marked) {
+        ps2RendererTraceMarkFrameEnd();
+    }
+    const uint64_t forensic_end = sysGetMicroseconds();
     s_header.qword_offset = s_header.event_offset +
         s_header.event_count * sizeof(*s_events);
     const uint32_t blob_offset = s_header.qword_offset +
@@ -289,6 +302,8 @@ extern "C" bool ps2RendererTraceEndFrameAndWrite(void)
     s_header.reserved[2] = s_dropped_blob_bytes;
     s_header.reserved[3] = blob_offset;
     s_header.reserved[4] = 1u;
+    s_header.reserved[5] = forensic_end >= s_header.end_microseconds
+        ? forensic_end - s_header.end_microseconds : 0u;
     if (s_header.dropped_events != 0u ||
         s_header.dropped_qwords != 0u ||
         s_dropped_blob_bytes != 0u) {

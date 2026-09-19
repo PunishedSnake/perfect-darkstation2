@@ -4827,6 +4827,7 @@ extern "C" void gfxPs2LogRendererStats(int checkpoint)
 static void ps2_end_frame(void)
 {
     ps2GsCoreSubmit();
+    ps2RendererTraceMarkFrameEnd();
 
     if (ps2RendererTraceIsCapturing()) {
         const uint64_t viewport_xy =

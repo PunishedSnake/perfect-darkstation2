@@ -124,6 +124,8 @@ void *ps2RendererTraceReserveBlob(
     uint32_t size, uint32_t alignment, uint32_t *offset);
 bool ps2RendererTraceAppendBlob(const void *data, uint32_t size,
     uint32_t alignment, uint32_t *offset);
+/* Freeze measured frame duration before post-frame forensic snapshots. */
+void ps2RendererTraceMarkFrameEnd(void);
 bool ps2RendererTraceEndFrameAndWrite(void);
 
 #ifdef __cplusplus
