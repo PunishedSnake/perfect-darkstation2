@@ -23,7 +23,7 @@ option(PD_PS2_GAME_VU1
 )
 option(PD_PS2_NATIVE_INDEXED_TEXTURES
   "Keep exact CI/IA/I textures in native GS PSMT4/PSMT8 residency"
-  ON
+  OFF
 )
 option(PD_PS2_GEOMETRY_BASELINE_DIAGNOSTIC
   "Render game triangles as untextured diagnostic colors"

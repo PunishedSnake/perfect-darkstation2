@@ -453,3 +453,60 @@ coordinates may legitimately leave the normalized 0..1 interval, so such ranges
 must not be treated as an error by themselves. The remaining texture suspects
 are sampler/clamp semantics, palette/cache state, or earlier visibility/
 geometry rather than a simple failed upload.
+
+
+## Full forensic capture: frame 814 and indexed-texture correctness baseline
+
+Frame 814 (`pdps2-gs-trace(20260919-155815).bin`) is the first complete
+v2 forensic capture from `1c6b45a7`. It contains 3,291 events, 16,396 raw
+GIF/VIF qwords and 433,776 bytes of VBO/clip-map payload, with zero dropped
+events, qwords or blob bytes. All stored draw payload hashes validate.
+
+The capture rules out several earlier suspects for the observed Carrington
+corruption:
+
+- PATH1 requests 12,203 qwords and PATH3 4,193 qwords. The 107 recorded PATH3
+  ownership waits total only 880 us, max 11 us.
+- The GS VRAM allocator reports 2,211,584 bytes free and a 2,199,552-byte
+  largest free range. All 64 texture resources in the snapshot are resident
+  and uploaded. No texture/CLUT/shared-CLUT VRAM range overlaps were found.
+- The captured frame performs no texture upload or texture retirement/reclaim
+  operation. The corruption therefore is not explained by upload churn in this
+  frame.
+- Every captured clipped VBO is finite and remains inside the configured
+  `x/y = [-w,+w], z = [0,w]` clip volume. No suspicious output has near-zero
+  W. The two full-screen triangles are the first draw and cover exactly
+  640x448. This capture does not support a near-plane geometry explosion as the
+  source of the texture corruption.
+- The frontend explicitly requests `FILTER_LINEAR` (mode 1), not
+  `FILTER_THREE_POINT`. Wrong-looking filtering in this frame therefore
+  cannot be attributed simply to a missing three-point-filter implementation.
+- The previous alpha-trilerp scratch graph remains absent: all captured
+  alpha-trilerp pass-graph records report zero workspace tiles.
+
+The strongest remaining common boundary is native indexed residency. Slot 0 is
+CI4 + RGBA16 TLUT in 75 of 108 frontend draws and CI8 + RGBA16 TLUT in another
+six. IA8/I4/IA4 account for another 24 draws. In other words, PSMT4/PSMT8 plus
+CLUT state dominates the failing scene.
+
+This is correlation, not proof. To isolate it cleanly, the branch now defaults
+`PD_PS2_NATIVE_INDEXED_TEXTURES=OFF`. The existing current-source fallback is
+the control: exact TMEM materialization stays authoritative, but CI/IA/I 4/8-bit
+views are expanded through the portable RGBA32 importer instead of being kept
+as native GS PSMT4/PSMT8 resources. RGBA16/RGBA32 direct paths remain unchanged.
+
+**Hardware A/B interpretation:**
+
+- if the shifted texture blocks, dotted black rows, turquoise surfaces and
+  disappearing textured details substantially disappear, the fault is below
+  the logical TMEM view and inside the native indexed GS translation/residency
+  boundary (index packing, CLUT layout/load state, TBW/sampling, or related
+  state);
+- if the artifacts remain materially identical, native indexed residency is
+  exonerated and the next investigation moves to sampler coordinate semantics,
+  scissor/visibility and the remaining multipass material graphs.
+
+This is deliberately a correctness baseline rather than a performance change.
+RGBA32 expansion may cost more VRAM and bandwidth. The captured native frame
+still had over 2.2 MiB free GS local memory, but the fallback's actual
+real-hardware footprint and timing must be measured rather than inferred.
