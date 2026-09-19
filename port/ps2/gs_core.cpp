@@ -26,8 +26,10 @@
 #define PS2_GS_MAX_RENDER_TARGETS 4
 #define PS2_GS_MAX_RETIRED_BLOCKS (PS2_GS_MAX_TEXTURES * 2)
 #define PS2_GS_NATIVE_QUEUE_QW 16384u
-#define PS2_GS_SHARED_CLUT_COUNT 5u
-#define PS2_GS_ALPHA_IDENTITY_CLUT_INDEX 4u
+#define PS2_GS_INTENSITY_CLUT_COUNT 4u
+#define PS2_GS_INTENSITY_ALPHA_MASK_CLUT_BASE PS2_GS_INTENSITY_CLUT_COUNT
+#define PS2_GS_ALPHA_IDENTITY_CLUT_INDEX 8u
+#define PS2_GS_SHARED_CLUT_COUNT 9u
 
 /* GS TEST.ATST encodings, cross-checked against current PS2SDK libgs. */
 #define PS2_GS_ATST_ALWAYS  1u
@@ -40,6 +42,7 @@ struct Ps2GsTextureSlot {
     bool resident;
     bool uploaded;
     bool alpha_opaque;
+    uint32_t alpha_mask_clut_vram;
     uint32_t vram_bytes;
     uint32_t clut_vram_bytes;
     GSTEXTURE texture;
@@ -865,7 +868,8 @@ extern "C" void ps2GsCoreRecordTraceSnapshot(void)
         const uint16_t flags =
             (texture->resident ? 1u : 0u) |
             (texture->uploaded ? 2u : 0u) |
-            (texture->alpha_opaque ? 4u : 0u);
+            (texture->alpha_opaque ? 4u : 0u) |
+            (texture->alpha_mask_clut_vram != 0u ? 8u : 0u);
         ps2RendererTraceRecord(PS2_TRACE_TEXTURE_RESOURCE, flags,
             i + 1u,
             ps2GsCoreTracePair((uint32_t)texture->texture.Width,
@@ -1447,6 +1451,13 @@ extern "C" bool ps2GsCoreTextureAlphaIsOpaque(Ps2GsTextureHandle handle)
     return slot && slot->uploaded && slot->alpha_opaque;
 }
 
+extern "C" bool ps2GsCoreTextureHasAlphaMask(Ps2GsTextureHandle handle)
+{
+    struct Ps2GsTextureSlot *slot = ps2GsCoreTextureSlot(handle);
+    return slot && slot->uploaded &&
+        slot->alpha_mask_clut_vram != 0u;
+}
+
 static bool ps2GsRgba32AlphaOpaque(
     const uint8_t *source, uint32_t texel_count)
 {
@@ -1635,6 +1646,7 @@ static bool ps2GsCoreUploadTexture(Ps2GsTextureHandle handle,
     slot->resident = true;
     slot->uploaded = true;
     slot->alpha_opaque = alpha_opaque;
+    slot->alpha_mask_clut_vram = 0u;
     slot->vram_bytes = bytes;
     slot->clut_vram_bytes = 0u;
     return true;
@@ -1751,7 +1763,7 @@ static bool ps2GsCoreEnsureSharedIntensityClut(
     struct Ps2GsSharedClut **result)
 {
     const uint32_t index = (uint32_t)encoding;
-    if (!result || index >= PS2_GS_ALPHA_IDENTITY_CLUT_INDEX) {
+    if (!result || index >= PS2_GS_INTENSITY_CLUT_COUNT) {
         return false;
     }
 
@@ -1770,6 +1782,35 @@ static bool ps2GsCoreEnsureSharedIntensityClut(
     }
     return ps2GsCoreUploadSharedCt32Clut(
         shared, entry_count, "intensity", index, result);
+}
+
+static bool ps2GsCoreEnsureSharedIntensityAlphaMaskClut(
+    enum Ps2GsN64IntensityEncoding encoding,
+    struct Ps2GsSharedClut **result)
+{
+    const uint32_t encoding_index = (uint32_t)encoding;
+    if (!result || encoding_index >= PS2_GS_INTENSITY_CLUT_COUNT) {
+        return false;
+    }
+
+    const uint32_t index =
+        PS2_GS_INTENSITY_ALPHA_MASK_CLUT_BASE + encoding_index;
+    struct Ps2GsSharedClut *shared = &s_shared_cluts[index];
+    if (shared->resident) {
+        *result = shared;
+        return true;
+    }
+
+    const bool four_bit = encoding == PS2_GS_N64_IA4 ||
+        encoding == PS2_GS_N64_I4;
+    const uint32_t entry_count = four_bit ? 16u : 256u;
+    if (!ps2GsBuildN64IntensityAlphaMaskClut(
+            encoding, s_shared_clut_staging, entry_count)) {
+        return false;
+    }
+    return ps2GsCoreUploadSharedCt32Clut(
+        shared, entry_count, "intensity alpha-mask",
+        index, result);
 }
 
 static bool ps2GsCoreEnsureSharedAlphaIdentityClut(
@@ -1925,6 +1966,7 @@ extern "C" bool ps2GsCoreUploadTextureN64Ci(Ps2GsTextureHandle handle,
     slot->resident = true;
     slot->uploaded = true;
     slot->alpha_opaque = alpha_opaque;
+    slot->alpha_mask_clut_vram = 0u;
     slot->vram_bytes = texture_bytes;
     slot->clut_vram_bytes = clut_bytes;
     return true;
@@ -1955,8 +1997,12 @@ extern "C" bool ps2GsCoreUploadTextureN64Intensity(
 
     struct Ps2GsTextureSlot *slot = ps2GsCoreTextureSlot(handle);
     struct Ps2GsSharedClut *shared = NULL;
-    if (!slot || !ps2GsCoreEnsureSharedIntensityClut(
-            encoding, &shared)) {
+    struct Ps2GsSharedClut *alpha_mask = NULL;
+    if (!slot ||
+        !ps2GsCoreEnsureSharedIntensityClut(
+            encoding, &shared) ||
+        !ps2GsCoreEnsureSharedIntensityAlphaMaskClut(
+            encoding, &alpha_mask)) {
         return false;
     }
 
@@ -2044,6 +2090,7 @@ extern "C" bool ps2GsCoreUploadTextureN64Intensity(
     slot->resident = true;
     slot->uploaded = true;
     slot->alpha_opaque = alpha_opaque;
+    slot->alpha_mask_clut_vram = alpha_mask->vram;
     slot->vram_bytes = texture_bytes;
     slot->clut_vram_bytes = 0u;
     return true;
@@ -2381,6 +2428,32 @@ extern "C" void ps2GsCoreDrawTexturedTriangles(Ps2GsTextureHandle handle,
 
     ps2GsCoreDrawTexturedTrianglesInternal(
         &slot->texture, vertices, vertex_count, false, NULL,
+        NULL, NULL, NULL);
+}
+
+extern "C" bool ps2GsCoreDrawTextureAlphaMaskTriangles(
+    Ps2GsTextureHandle handle,
+    const struct Ps2GsTexturedVertex *vertices, uint32_t vertex_count)
+{
+    if (!s_gs || !s_frame_building || !vertices ||
+        vertex_count == 0u) {
+        return false;
+    }
+
+    struct Ps2GsTextureSlot *slot = ps2GsCoreTextureSlot(handle);
+    if (!slot || !slot->uploaded ||
+        slot->alpha_mask_clut_vram == 0u ||
+        (slot->texture.PSM != GS_PSM_T4 &&
+         slot->texture.PSM != GS_PSM_T8)) {
+        return false;
+    }
+
+    GSTEXTURE view = slot->texture;
+    view.VramClut = slot->alpha_mask_clut_vram;
+    view.ClutPSM = GS_PSM_CT32;
+    view.ClutStorageMode = 0;
+    return ps2GsCoreDrawTexturedTrianglesInternal(
+        &view, vertices, vertex_count, false, NULL,
         NULL, NULL, NULL);
 }
 

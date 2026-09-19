@@ -194,6 +194,8 @@ bool ps2GsCoreTextureExists(Ps2GsTextureHandle handle);
 bool ps2GsCoreTextureReady(Ps2GsTextureHandle handle);
 /* True only when every logically addressable source texel is fully opaque. */
 bool ps2GsCoreTextureAlphaIsOpaque(Ps2GsTextureHandle handle);
+/* Exact indexed alpha-only view with RGB fixed to MODULATE unity. */
+bool ps2GsCoreTextureHasAlphaMask(Ps2GsTextureHandle handle);
 bool ps2GsCoreUploadTextureRgba32(Ps2GsTextureHandle handle,
     const uint8_t *rgba32, uint32_t width, uint32_t height,
     bool mirror_s, bool mirror_t);
@@ -222,6 +224,8 @@ void ps2GsCoreReleaseTexture(Ps2GsTextureHandle handle);
 void ps2GsCoreDrawColorTriangles(const struct Ps2GsColorVertex *vertices,
     uint32_t vertex_count);
 void ps2GsCoreDrawTexturedTriangles(Ps2GsTextureHandle texture,
+    const struct Ps2GsTexturedVertex *vertices, uint32_t vertex_count);
+bool ps2GsCoreDrawTextureAlphaMaskTriangles(Ps2GsTextureHandle texture,
     const struct Ps2GsTexturedVertex *vertices, uint32_t vertex_count);
 void ps2GsCoreDrawTexturedTrianglesTransform(Ps2GsTextureHandle texture,
     const struct Ps2GsTexturedVertex *fallback_vertices,
