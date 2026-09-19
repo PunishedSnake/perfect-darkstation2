@@ -39,6 +39,7 @@ struct Ps2GsTextureSlot {
     bool used;
     bool resident;
     bool uploaded;
+    bool alpha_opaque;
     uint32_t vram_bytes;
     uint32_t clut_vram_bytes;
     GSTEXTURE texture;
@@ -863,7 +864,8 @@ extern "C" void ps2GsCoreRecordTraceSnapshot(void)
         }
         const uint16_t flags =
             (texture->resident ? 1u : 0u) |
-            (texture->uploaded ? 2u : 0u);
+            (texture->uploaded ? 2u : 0u) |
+            (texture->alpha_opaque ? 4u : 0u);
         ps2RendererTraceRecord(PS2_TRACE_TEXTURE_RESOURCE, flags,
             i + 1u,
             ps2GsCoreTracePair((uint32_t)texture->texture.Width,
@@ -1439,10 +1441,96 @@ extern "C" bool ps2GsCoreTextureReady(Ps2GsTextureHandle handle)
     return slot && slot->uploaded;
 }
 
+extern "C" bool ps2GsCoreTextureAlphaIsOpaque(Ps2GsTextureHandle handle)
+{
+    struct Ps2GsTextureSlot *slot = ps2GsCoreTextureSlot(handle);
+    return slot && slot->uploaded && slot->alpha_opaque;
+}
+
+static bool ps2GsRgba32AlphaOpaque(
+    const uint8_t *source, uint32_t texel_count)
+{
+    for (uint32_t i = 0u; i < texel_count; ++i) {
+        if (source[i * 4u + 3u] != 0xffu) return false;
+    }
+    return true;
+}
+
+static bool ps2GsN64Rgba16AlphaOpaque(
+    const uint8_t *source, uint32_t texel_count)
+{
+    for (uint32_t i = 0u; i < texel_count; ++i) {
+        if ((source[i * 2u + 1u] & 1u) == 0u) return false;
+    }
+    return true;
+}
+
+static bool ps2GsN64Ia16AlphaOpaque(
+    const uint8_t *source, uint32_t texel_count)
+{
+    for (uint32_t i = 0u; i < texel_count; ++i) {
+        if (source[i * 2u + 1u] != 0xffu) return false;
+    }
+    return true;
+}
+
+static bool ps2GsN64PaletteEntryOpaque(
+    uint16_t entry, enum Ps2GsN64PaletteEncoding encoding)
+{
+    return encoding == PS2_GS_N64_PALETTE_RGBA16
+        ? (entry & 1u) != 0u
+        : (entry >> 8u) == 0xffu;
+}
+
+static bool ps2GsN64CiAlphaOpaque(
+    const uint8_t *indices, uint32_t texel_count, uint8_t index_bits,
+    const uint16_t *palette, enum Ps2GsN64PaletteEncoding encoding)
+{
+    for (uint32_t i = 0u; i < texel_count; ++i) {
+        const uint8_t index = index_bits == 4u
+            ? ((i & 1u) == 0u
+                ? (uint8_t)(indices[i >> 1u] >> 4u)
+                : (uint8_t)(indices[i >> 1u] & 0x0fu))
+            : indices[i];
+        if (!ps2GsN64PaletteEntryOpaque(palette[index], encoding)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool ps2GsN64IntensityAlphaOpaque(
+    const uint8_t *texels, uint32_t texel_count,
+    enum Ps2GsN64IntensityEncoding encoding)
+{
+    for (uint32_t i = 0u; i < texel_count; ++i) {
+        if (encoding == PS2_GS_N64_IA4 ||
+            encoding == PS2_GS_N64_I4) {
+            const uint8_t packed = texels[i >> 1u];
+            const uint8_t value = (i & 1u) == 0u
+                ? (uint8_t)(packed >> 4u)
+                : (uint8_t)(packed & 0x0fu);
+            if (encoding == PS2_GS_N64_IA4) {
+                if ((value & 1u) == 0u) return false;
+            } else if (value != 0x0fu) {
+                return false;
+            }
+        } else {
+            const uint8_t value = texels[i];
+            if (encoding == PS2_GS_N64_IA8) {
+                if ((value & 0x0fu) != 0x0fu) return false;
+            } else if (value != 0xffu) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 static bool ps2GsCoreUploadTexture(Ps2GsTextureHandle handle,
     const uint8_t *source, uint32_t width, uint32_t height, int psm,
     enum Ps2GsNativeUploadEncoding encoding,
-    bool mirror_s, bool mirror_t)
+    bool mirror_s, bool mirror_t, bool alpha_opaque)
 {
     if (!s_gs || !source || width == 0 || height == 0 ||
         width > 1024 || height > 1024 ||
@@ -1546,6 +1634,7 @@ static bool ps2GsCoreUploadTexture(Ps2GsTextureHandle handle,
     slot->texture = candidate;
     slot->resident = true;
     slot->uploaded = true;
+    slot->alpha_opaque = alpha_opaque;
     slot->vram_bytes = bytes;
     slot->clut_vram_bytes = 0u;
     return true;
@@ -1555,29 +1644,36 @@ extern "C" bool ps2GsCoreUploadTextureRgba32(Ps2GsTextureHandle handle,
     const uint8_t *rgba32, uint32_t width, uint32_t height,
     bool mirror_s, bool mirror_t)
 {
+    const bool alpha_opaque =
+        ps2GsRgba32AlphaOpaque(rgba32, width * height);
     return ps2GsCoreUploadTexture(
         handle, rgba32, width, height, GS_PSM_CT32,
-        PS2_GS_NATIVE_UPLOAD_RGBA32, mirror_s, mirror_t);
+        PS2_GS_NATIVE_UPLOAD_RGBA32, mirror_s, mirror_t,
+        alpha_opaque);
 }
 
 extern "C" bool ps2GsCoreUploadTextureN64Rgba16(Ps2GsTextureHandle handle,
     const uint8_t *rgba5551_be, uint32_t width, uint32_t height,
     bool mirror_s, bool mirror_t)
 {
+    const bool alpha_opaque =
+        ps2GsN64Rgba16AlphaOpaque(rgba5551_be, width * height);
     return ps2GsCoreUploadTexture(
         handle, rgba5551_be, width, height, GS_PSM_CT16,
         PS2_GS_NATIVE_UPLOAD_N64_RGBA16,
-        mirror_s, mirror_t);
+        mirror_s, mirror_t, alpha_opaque);
 }
 
 extern "C" bool ps2GsCoreUploadTextureN64Ia16(Ps2GsTextureHandle handle,
     const uint8_t *ia16, uint32_t width, uint32_t height,
     bool mirror_s, bool mirror_t)
 {
+    const bool alpha_opaque =
+        ps2GsN64Ia16AlphaOpaque(ia16, width * height);
     return ps2GsCoreUploadTexture(
         handle, ia16, width, height, GS_PSM_CT32,
         PS2_GS_NATIVE_UPLOAD_N64_IA16,
-        mirror_s, mirror_t);
+        mirror_s, mirror_t, alpha_opaque);
 }
 
 static bool ps2GsCoreAllocIndexedBlocks(uint32_t texture_bytes,
@@ -1717,6 +1813,8 @@ extern "C" bool ps2GsCoreUploadTextureN64Ci(Ps2GsTextureHandle handle,
 
     const uint32_t physical_width = width << (mirror_s ? 1u : 0u);
     const uint32_t physical_height = height << (mirror_t ? 1u : 0u);
+    const bool alpha_opaque = ps2GsN64CiAlphaOpaque(
+        indices, width * height, index_bits, palette, palette_encoding);
 
     struct Ps2GsTextureSlot *slot = ps2GsCoreTextureSlot(handle);
     if (!slot) {
@@ -1826,6 +1924,7 @@ extern "C" bool ps2GsCoreUploadTextureN64Ci(Ps2GsTextureHandle handle,
     slot->texture = candidate;
     slot->resident = true;
     slot->uploaded = true;
+    slot->alpha_opaque = alpha_opaque;
     slot->vram_bytes = texture_bytes;
     slot->clut_vram_bytes = clut_bytes;
     return true;
@@ -1851,6 +1950,8 @@ extern "C" bool ps2GsCoreUploadTextureN64Intensity(
 
     const uint32_t physical_width = width << (mirror_s ? 1u : 0u);
     const uint32_t physical_height = height << (mirror_t ? 1u : 0u);
+    const bool alpha_opaque = ps2GsN64IntensityAlphaOpaque(
+        texels, width * height, encoding);
 
     struct Ps2GsTextureSlot *slot = ps2GsCoreTextureSlot(handle);
     struct Ps2GsSharedClut *shared = NULL;
@@ -1942,6 +2043,7 @@ extern "C" bool ps2GsCoreUploadTextureN64Intensity(
     slot->texture = candidate;
     slot->resident = true;
     slot->uploaded = true;
+    slot->alpha_opaque = alpha_opaque;
     slot->vram_bytes = texture_bytes;
     slot->clut_vram_bytes = 0u;
     return true;

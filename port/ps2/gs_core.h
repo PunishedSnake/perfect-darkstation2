@@ -192,6 +192,8 @@ bool ps2GsCoreBlitRenderTargetRedToActiveAlpha(
 Ps2GsTextureHandle ps2GsCoreCreateTexture(void);
 bool ps2GsCoreTextureExists(Ps2GsTextureHandle handle);
 bool ps2GsCoreTextureReady(Ps2GsTextureHandle handle);
+/* True only when every logically addressable source texel is fully opaque. */
+bool ps2GsCoreTextureAlphaIsOpaque(Ps2GsTextureHandle handle);
 bool ps2GsCoreUploadTextureRgba32(Ps2GsTextureHandle handle,
     const uint8_t *rgba32, uint32_t width, uint32_t height,
     bool mirror_s, bool mirror_t);

@@ -161,6 +161,10 @@ def _analyze(events: list[dict]) -> dict:
                         (ranges >> 48) & 1)
                     pending_pass_graph_draw["additive_alpha"] = bool(
                         (ranges >> 49) & 1)
+                    pending_pass_graph_draw["direct_opaque_triangles"] = (
+                        ranges >> 50) & 0x7f
+                    pending_pass_graph_draw["vertex_alpha_triangles"] = (
+                        ranges >> 57) & 0x7f
                     pass_graph_draws.append(pending_pass_graph_draw)
                     pending_pass_graph_draw = None
             else:
@@ -404,6 +408,8 @@ def print_summary(trace: dict) -> None:
                 f"{draw.get('shade_alpha_max', 0)} "
                 f"add_a={draw.get('add_alpha_min', 0)}.."
                 f"{draw.get('add_alpha_max', 0)} "
+                f"fast_opaque={draw.get('direct_opaque_triangles', 0)} "
+                f"fast_vertex_alpha={draw.get('vertex_alpha_triangles', 0)} "
                 f"success={draw.get('success', False)}")
     print("GS shadow:")
     for event in trace["event_stream"]:

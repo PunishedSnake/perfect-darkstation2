@@ -215,3 +215,38 @@ diagonal alpha-trilerp triangles without changing the pass equation. The next
 real-hardware capture must compare requested PATH3 qwords, alpha-trilerp time,
 visible edges and the existing missing-couch/computer symptoms. A lower qword
 count is not accepted as a win if coverage changes.
+
+
+## Sixth retail capture: sparse shuffle result and opaque-texture fast paths
+
+Frame 292 (`pdps2-gs-trace(6).bin`) was captured from commit `45e24f77`.
+The picture remained visually unchanged on the real console. The frame is not
+the same workload as frame 187, so absolute frame times are not an A/B benchmark:
+it contains 126 draws / 1,128 input triangles, versus 32 / 226 in trace (5).
+
+The transport result is nevertheless strong. Despite the much larger workload,
+the complete frame requested 397,081 PATH3 qwords instead of 804,516. The
+alpha-trilerp graph covered 859 recorded workspace tiles; its spill-attributed
+PATH3 traffic is 358,426 qwords. The previous capture recorded 635 tiles and
+773,975 qwords in that pass. Normalized by recorded tile invocation, the
+observed transport falls from roughly 1,219 to 417 qwords/tile. Because PATH3
+submit events are arena-level rather than per-command accounting, treat this as
+a strong hardware observation rather than an exact instruction-level cost
+model.
+
+The remaining alpha graph still consumes 252,168 us of the 428,621 us captured
+frame. Current texture inventory shows that most heavy draws use native PSMT4
+plus CT16 CLUT resources. The renderer now classifies texture alpha exactly
+once at upload, including only palette entries actually referenced by CI texels.
+
+When both trilerp textures are proven fully opaque, the N64 alpha equation
+`lerp(TEXEL0.a,TEXEL1.a,LOD) * INPUT2.a` collapses exactly to `INPUT2.a`.
+The renderer therefore bypasses the scalar target and channel shuffle. Fully
+opaque INPUT2 triangles go straight through the existing two-pass opaque
+trilerp path; other triangles reconstruct only RGB in the color workspace and
+composite once using exact per-vertex INPUT2 alpha. Additive variants use these
+paths only when INPUT3 alpha is exactly zero at all three vertices.
+
+The original scalar/shuffle graph remains the correctness fallback whenever
+texture alpha is not proven opaque. Select traces report both fast-path triangle
+counts so hardware captures can quantify the removed work.
