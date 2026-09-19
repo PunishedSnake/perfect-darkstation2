@@ -167,6 +167,11 @@ def patch(source: str) -> str:
         "    }\n\n"
         "    if (fmt == G_IM_FMT_RGBA) {\n",
         "    if (gfx_texture_cache_lookup(i, key)) {\n"
+        "        if (tmem_view_exact && rendering_state.textures[i] != nullptr) {\n"
+        "            gfxPs2TraceTmemTextureView(\n"
+        "                rendering_state.textures[i]->second.texture_id,\n"
+        "                &tmem_view, fmt, siz, rdp.palette_fmt);\n"
+        "        }\n"
         "        return;\n"
         "    }\n\n"
         "    LoadedTexture tmem_loaded_texture = loaded_texture;\n"
