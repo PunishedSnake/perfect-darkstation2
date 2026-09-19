@@ -5050,6 +5050,7 @@ static void ps2_end_frame(void)
          * cannot masquerade as renderer time.
          */
         ps2GsCoreCaptureTraceScreenshot();
+        ps2GsCoreCaptureTraceVram();
         ps2RendererTraceEndFrameAndWrite();
     }
 
