@@ -1,6 +1,9 @@
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <malloc.h>
 
 #include <dmaKit.h>
 #include <gsKit.h>
@@ -1003,6 +1006,97 @@ extern "C" bool ps2GsCoreCaptureTraceScreenshot(void)
         }
     }
     return primary_success;
+}
+
+extern "C" bool ps2GsCoreCaptureTraceVram(void)
+{
+    if (!s_gs || !ps2RendererTraceIsCapturing()) {
+        return false;
+    }
+
+    /*
+     * PSMCT32 1024x1024 spans exactly 4 MiB. Read in 64-row strips so the
+     * current PS2SDK screenshot helper never receives a DMAC QWC larger than
+     * 16384. This is a raw CT32-address-space view, not a claim that every
+     * resident resource was originally allocated as CT32.
+     */
+    const uint32_t width = 1024u;
+    const uint32_t height = 1024u;
+    const uint32_t strip_height = 64u;
+    const uint32_t strip_bytes = width * strip_height * 4u;
+    const uint32_t total_bytes = width * height * 4u;
+
+    uint8_t *scratch = (uint8_t *)memalign(64u, strip_bytes);
+    if (!scratch) {
+        ps2RendererTraceRecord(PS2_TRACE_GS_VRAM_DUMP,
+            PS2_TRACE_FLAG_DROPPED,
+            0u, 0u, total_bytes, 0u);
+        return false;
+    }
+
+    char directory[256];
+    char path[320];
+    sysGetExecutablePath(directory, sizeof(directory));
+    const int path_length = snprintf(path, sizeof(path),
+        "%s/%s", directory, "pdps2-gs-trace.vram-ct32.bin");
+    FILE *file =
+        path_length > 0 && (size_t)path_length < sizeof(path)
+        ? fopen(path, "wb") : NULL;
+    if (!file) {
+        free(scratch);
+        ps2RendererTraceRecord(PS2_TRACE_GS_VRAM_DUMP,
+            PS2_TRACE_FLAG_DROPPED,
+            0u, 0u, total_bytes, 0u);
+        return false;
+    }
+
+    const uint64_t start = sysGetMicroseconds();
+    bool ok = ps2GsNativeQueueWaitGs();
+    uint64_t hash = UINT64_C(1469598103934665603);
+    uint32_t written = 0u;
+    uint32_t strips = 0u;
+
+    for (uint32_t y = 0u; ok && y < height; y += strip_height) {
+        const int readback = ps2_screenshot(
+            scratch,
+            0u,
+            0u, y,
+            width, strip_height,
+            PS2_GS_PSM_CT32);
+        if (readback == 0) {
+            ok = false;
+            break;
+        }
+
+        for (uint32_t i = 0u; i < strip_bytes; ++i) {
+            hash = (hash ^ scratch[i]) * UINT64_C(1099511628211);
+        }
+        if (fwrite(scratch, 1u, strip_bytes, file) != strip_bytes) {
+            ok = false;
+            break;
+        }
+        written += strip_bytes;
+        ++strips;
+    }
+
+    if (fflush(file) != 0) {
+        ok = false;
+    }
+    if (fclose(file) != 0) {
+        ok = false;
+    }
+    free(scratch);
+
+    const uint64_t elapsed = sysGetMicroseconds() - start;
+    const bool complete = ok && written == total_bytes;
+    ps2RendererTraceRecord(PS2_TRACE_GS_VRAM_DUMP,
+        complete ? PS2_TRACE_FLAG_SUPPORTED : PS2_TRACE_FLAG_DROPPED,
+        written, hash, elapsed,
+        (uint64_t)width |
+            ((uint64_t)height << 16u) |
+            ((uint64_t)strip_height << 32u) |
+            ((uint64_t)strips << 48u));
+    return complete;
 }
 
 extern "C" void ps2GsCoreRecordTraceSnapshot(void)
