@@ -172,6 +172,9 @@ static bool ps2GsCoreReclaimRetiredVram(void)
         if (!ps2GsVramAllocatorFree(
                 &s_vram_allocator, block.offset, block.size)) {
             s_retired_vram[failed++] = block;
+        } else {
+            ps2RendererTraceRecord(PS2_TRACE_RESOURCE_OP, 21u,
+                block.offset, block.size, i, 0u);
         }
     }
     s_retired_vram_count = failed;
@@ -219,6 +222,8 @@ static void ps2GsCoreRetireVram(uint32_t offset, uint32_t size)
     s_retired_vram[s_retired_vram_count].offset = offset;
     s_retired_vram[s_retired_vram_count].size = size;
     ++s_retired_vram_count;
+    ps2RendererTraceRecord(PS2_TRACE_RESOURCE_OP, 20u,
+        offset, size, s_retired_vram_count, 0u);
 }
 
 static uint32_t ps2GsCoreResidentBlockCount(
@@ -885,6 +890,19 @@ extern "C" void ps2GsCoreRecordTraceSnapshot(void)
             ps2GsCoreTracePair((uint32_t)texture->texture.ClutPSM,
                 (uint32_t)texture->texture.ClutStorageMode),
             (uint32_t)texture->texture.Filter);
+        ps2RendererTraceRecord(PS2_TRACE_TEXTURE_DETAIL, 0x1000u,
+            i + 1u, texture->alpha_mask_clut_vram,
+            ps2GsCoreTracePair(
+                texture->resident ? 1u : 0u,
+                texture->uploaded ? 1u : 0u),
+            texture->alpha_opaque ? 1u : 0u);
+    }
+
+    for (uint32_t i = 0u; i < PS2_GS_SHARED_CLUT_COUNT; ++i) {
+        const struct Ps2GsSharedClut *shared = &s_shared_cluts[i];
+        ps2RendererTraceRecord(PS2_TRACE_TEXTURE_DETAIL, 0x1100u,
+            i, shared->vram, shared->bytes,
+            shared->resident ? 1u : 0u);
     }
 
     for (uint32_t i = 0u; i < PS2_GS_MAX_RENDER_TARGETS; ++i) {
@@ -1002,6 +1020,11 @@ extern "C" void ps2GsCoreClear(bool clear_color, bool clear_depth)
         s_active_render_target == PS2_GS_RENDER_TARGET_DEFAULT;
     const uint32_t register_count =
         8u + (has_depth_buffer ? 2u : 0u) + slices * 2u;
+    ps2RendererTraceRecord(PS2_TRACE_RESOURCE_OP, 13u,
+        s_active_render_target,
+        (clear_color ? 1u : 0u) | ((clear_depth ? 1u : 0u) << 1u),
+        ps2GsCoreTracePair(target_width, target_height),
+        register_count);
     struct Ps2GsPackedReg *p = ps2GsCoreReserve(register_count);
     if (!p) {
         return;
@@ -1350,6 +1373,11 @@ extern "C" Ps2GsRenderTargetHandle ps2GsCoreCreateRenderTarget(
     slot->used = true;
     slot->vram = vram;
     slot->layout = layout;
+    ps2RendererTraceRecord(PS2_TRACE_RESOURCE_OP, 10u,
+        slot_index + 1u,
+        ps2GsCoreTracePair(vram, layout.bytes),
+        ps2GsCoreTracePair(width, height),
+        layout.fbw);
     sysLogPrintf(LOG_NOTE,
         "GS core: CT32 render target id=%u vram=%08x size=%u (%ux%u FBW=%u)",
         (unsigned int)(slot_index + 1u), vram, layout.bytes,
@@ -1366,6 +1394,11 @@ extern "C" bool ps2GsCoreBindRenderTarget(
     }
 
     s_active_render_target = handle;
+    ps2RendererTraceRecord(PS2_TRACE_RESOURCE_OP, 11u,
+        handle, ps2GsCoreTargetVram(),
+        ps2GsCoreTracePair(
+            ps2GsCoreTargetWidth(), ps2GsCoreTargetHeight()),
+        ps2GsCoreTargetPsm());
     ps2GsCoreEmitRenderTargetState();
     return true;
 }
@@ -1377,6 +1410,11 @@ extern "C" void ps2GsCoreBindDefaultRenderTarget(void)
     }
 
     s_active_render_target = PS2_GS_RENDER_TARGET_DEFAULT;
+    ps2RendererTraceRecord(PS2_TRACE_RESOURCE_OP, 11u,
+        PS2_GS_RENDER_TARGET_DEFAULT, ps2GsCoreTargetVram(),
+        ps2GsCoreTracePair(
+            ps2GsCoreTargetWidth(), ps2GsCoreTargetHeight()),
+        ps2GsCoreTargetPsm());
     ps2GsCoreEmitRenderTargetState();
 }
 
@@ -1395,6 +1433,10 @@ extern "C" bool ps2GsCoreReleaseRenderTarget(
         return false;
     }
 
+    ps2RendererTraceRecord(PS2_TRACE_RESOURCE_OP, 12u,
+        handle, ps2GsCoreTracePair(slot->vram, slot->layout.bytes),
+        ps2GsCoreTracePair(slot->layout.width, slot->layout.height),
+        slot->layout.fbw);
     ps2GsCoreRetireVram(slot->vram, slot->layout.bytes);
     memset(slot, 0, sizeof(*slot));
     return true;
@@ -1426,6 +1468,8 @@ extern "C" Ps2GsTextureHandle ps2GsCoreCreateTexture(void)
         if (!s_textures[i].used) {
             memset(&s_textures[i], 0, sizeof(s_textures[i]));
             s_textures[i].used = true;
+            ps2RendererTraceRecord(PS2_TRACE_RESOURCE_OP, 1u,
+                i + 1u, 0u, 0u, 0u);
             return (Ps2GsTextureHandle)(i + 1);
         }
     }
@@ -1649,6 +1693,15 @@ static bool ps2GsCoreUploadTexture(Ps2GsTextureHandle handle,
     slot->alpha_mask_clut_vram = 0u;
     slot->vram_bytes = bytes;
     slot->clut_vram_bytes = 0u;
+    ps2RendererTraceRecord(PS2_TRACE_RESOURCE_OP, 3u,
+        handle,
+        ps2GsCoreTracePair(slot->texture.Vram, slot->vram_bytes),
+        ps2GsCoreTracePair(
+            (uint32_t)slot->texture.Width,
+            (uint32_t)slot->texture.Height),
+        ps2GsCoreTracePair(
+            (uint32_t)slot->texture.PSM,
+            (uint32_t)slot->texture.TBW));
     return true;
 }
 
@@ -1969,6 +2022,13 @@ extern "C" bool ps2GsCoreUploadTextureN64Ci(Ps2GsTextureHandle handle,
     slot->alpha_mask_clut_vram = 0u;
     slot->vram_bytes = texture_bytes;
     slot->clut_vram_bytes = clut_bytes;
+    ps2RendererTraceRecord(PS2_TRACE_RESOURCE_OP, 4u,
+        handle,
+        ps2GsCoreTracePair(texture_vram, texture_bytes),
+        ps2GsCoreTracePair(clut_vram, clut_bytes),
+        ps2GsCoreTracePair(
+            (uint32_t)candidate.PSM,
+            (uint32_t)candidate.ClutPSM));
     return true;
 }
 
@@ -2093,6 +2153,13 @@ extern "C" bool ps2GsCoreUploadTextureN64Intensity(
     slot->alpha_mask_clut_vram = alpha_mask->vram;
     slot->vram_bytes = texture_bytes;
     slot->clut_vram_bytes = 0u;
+    ps2RendererTraceRecord(PS2_TRACE_RESOURCE_OP, 5u,
+        handle,
+        ps2GsCoreTracePair(texture_vram, texture_bytes),
+        ps2GsCoreTracePair(shared->vram, alpha_mask->vram),
+        ps2GsCoreTracePair(
+            (uint32_t)candidate.PSM,
+            (uint32_t)encoding));
     return true;
 }
 
@@ -2114,6 +2181,13 @@ extern "C" void ps2GsCoreReleaseTexture(Ps2GsTextureHandle handle)
             ps2GsCoreInvalidateClutCache();
         }
         if (slot->resident) {
+            ps2RendererTraceRecord(PS2_TRACE_RESOURCE_OP, 2u,
+                handle,
+                ps2GsCoreTracePair(
+                    slot->texture.Vram, slot->vram_bytes),
+                ps2GsCoreTracePair(
+                    slot->texture.VramClut, slot->clut_vram_bytes),
+                slot->alpha_mask_clut_vram);
             const uint32_t block_count = ps2GsCoreResidentBlockCount(slot);
             if (!ps2GsCoreEnsureRetireCapacity(block_count)) {
                 sysLogPrintf(LOG_ERROR,
