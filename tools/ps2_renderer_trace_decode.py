@@ -24,6 +24,7 @@ EVENT_NAMES = {
     19: "render_target", 20: "vram", 21: "renderer_stats",
     22: "frontend_state", 23: "warning", 24: "pass_graph_draw",
     25: "independent_alpha_draw", 26: "clipped_triangle_bounds",
+    27: "texture_coord_range",
 }
 
 GS_STATE_NAMES = [
@@ -96,6 +97,7 @@ def _analyze(events: list[dict]) -> dict:
     pending_pass_graph_draw = None
     independent_alpha_draws = []
     clipped_triangle_bounds = []
+    texture_coord_ranges = []
     gaps = []
 
     for previous, current in zip(events, events[1:]):
@@ -198,6 +200,32 @@ def _analyze(events: list[dict]) -> dict:
                 "triangles": _event_value(event, "b"),
                 "direct": bool(_event_value(event, "c")),
             })
+        elif event_type == "texture_coord_range":
+            def float_pair(value):
+                raw = value.to_bytes(8, "little")
+                return struct.unpack("<ff", raw)
+            slot, handle = (
+                _event_value(event, "a") & 0xffffffff,
+                _event_value(event, "a") >> 32,
+            )
+            min_u, max_u = float_pair(_event_value(event, "b"))
+            min_v, max_v = float_pair(_event_value(event, "c"))
+            width = _event_value(event, "d") & 0xffffffff
+            height = _event_value(event, "d") >> 32
+            texture_coord_ranges.append({
+                "sequence": event["sequence"],
+                "slot": slot,
+                "handle": handle,
+                "min_u": min_u,
+                "max_u": max_u,
+                "min_v": min_v,
+                "max_v": max_v,
+                "width": width,
+                "height": height,
+                "linear": bool(event["flags"] & 0x0100),
+                "region_s": bool(event["flags"] & 0x0200),
+                "region_t": bool(event["flags"] & 0x0400),
+            })
         elif event_type == "clipped_triangle_bounds":
             def signed_fixed_16_4(value):
                 value &= 0xffffffff
@@ -262,6 +290,7 @@ def _analyze(events: list[dict]) -> dict:
         "pass_graph_draws": pass_graph_draws,
         "independent_alpha_draws": independent_alpha_draws,
         "clipped_triangle_bounds": clipped_triangle_bounds,
+        "texture_coord_ranges": texture_coord_ranges,
         "largest_event_gaps": sorted(
             gaps, key=lambda gap: gap["microseconds"], reverse=True)[:10],
     }
@@ -469,6 +498,25 @@ def print_summary(trace: dict) -> None:
                 f"({bbox['max_x']:.1f},{bbox['max_y']:.1f}) "
                 f"wide={item['screen_wide']} tall={item['screen_tall']} "
                 f"thin={item['thin']} near_w0={item['near_zero_w']}")
+    if analysis["texture_coord_ranges"]:
+        outliers = []
+        for item in analysis["texture_coord_ranges"]:
+            if item["width"] and item["height"]:
+                if (item["min_u"] < -1.0 or
+                    item["max_u"] > item["width"] + 1.0 or
+                    item["min_v"] < -1.0 or
+                    item["max_v"] > item["height"] + 1.0):
+                    outliers.append(item)
+        if outliers:
+            print("texture coordinate ranges outside logical extent:")
+            for item in outliers[:32]:
+                print(
+                    f"  tex{item['slot']} handle={item['handle']} "
+                    f"uv=({item['min_u']:.2f}..{item['max_u']:.2f},"
+                    f"{item['min_v']:.2f}..{item['max_v']:.2f}) "
+                    f"extent={item['width']}x{item['height']} "
+                    f"linear={item['linear']} "
+                    f"region={item['region_s']}/{item['region_t']}")
     print("GS shadow:")
     for event in trace["event_stream"]:
         if event["type"] == "gs_register":

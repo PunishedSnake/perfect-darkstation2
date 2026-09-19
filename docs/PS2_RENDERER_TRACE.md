@@ -343,3 +343,44 @@ The fix is intentionally minimal: enable blending first, then install
 `DESTINATION_ALPHA_LERP`. The direct path and its performance benefit remain
 otherwise unchanged. Hardware validation must confirm restored sprite
 transparency before this path is treated as correctness-proven.
+
+
+## Tenth retail capture: bottleneck moved to draw/state overhead
+
+Frame 910 (`pdps2-gs-trace(10).bin`) was captured from `d7ef02fe`
+outside the first Carrington room while a texture-rendering problem was being
+sought. It contains 135 draws / 1,182 input triangles and spans 235,344 us.
+Trace storage is complete: PATH1 requests 8,182 qwords and PATH3 requests
+11,673 qwords with zero dropped qwords.
+
+The important performance result is that transport is no longer the dominant
+problem in this workload. `alpha_trilerp_modulate` accounts for 81 draws /
+638 input triangles and 40,058 us. All 2,211 clipped vertices, i.e. 737 output
+triangles, take `fast_same_sample`, and the tiled workspace count is zero.
+The current implementation still submits that exact fast path triangle by
+triangle, repeatedly paying state/draw setup. The renderer now batches a fully
+compatible same-sample draw into one triangle-list submission; mixed draws keep
+the existing ordered per-triangle fallback.
+
+The direct destination-alpha optimization is no longer enabled by default.
+Although `d7ef02fe` corrected its ALPHA-register ordering and light sprites,
+the user subsequently observed a menu regression where only the highlighted
+text remained visible. Trace (10) does not capture the menu, so the exact
+failure is not yet proven. Correctness takes precedence: the older tiled
+`independent_tex0_alpha` path is restored as the default while the direct path
+remains available for controlled A/B builds.
+
+Texture filtering is also now an explicit correctness item. In trace (10), all
+229 texture selections use GS linear filtering. **CURRENT IMPLEMENTATION:** the
+Fast3D frontend reduces the N64 texture-filter state to a boolean
+`linear_filter`, and the PS2 backend maps that boolean directly to GS nearest
+or bilinear filtering. This is not evidence that GS bilinear reproduces the
+N64's filtering footprint. Subsequent Select traces record per-draw UV ranges,
+logical texture extents, region-clamp state and the active nearest/linear choice
+so the reported texture corruption can be separated from a filtering-model
+difference, bad UV range, or clamp/residency problem.
+
+The post-clip geometry diagnostics in frame 910 report no near-zero-W output.
+There are several thin or screen-spanning triangles, but the user reports that
+the intermittent black lines were absent in this run, so those triangles are
+not treated as causal evidence.

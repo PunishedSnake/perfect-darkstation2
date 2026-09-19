@@ -51,7 +51,7 @@ option(PD_PS2_ALPHA_SAME_SAMPLE_FASTPATH
 )
 option(PD_PS2_INDEPENDENT_ALPHA_DIRECT
   "Use destination alpha to avoid tiled INPUT1 RGB / TEXEL0 alpha composites"
-  ON
+  OFF
 )
 option(PD_PS2_DISABLE_CULLING_DIAGNOSTIC
   "Disable Fast3D triangle culling in the PS2 generated frontend"
