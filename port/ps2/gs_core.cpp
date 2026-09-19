@@ -2128,6 +2128,26 @@ extern "C" void ps2GsCoreReleaseTexture(Ps2GsTextureHandle handle)
     }
 }
 
+static void ps2GsCoreTraceDraw(
+    bool textured, bool path1, uint16_t extra_flags,
+    uint32_t vertex_count, uint32_t register_count,
+    uint64_t primary_state, uint64_t secondary_state,
+    uint32_t texture_vram, uint32_t clut_vram)
+{
+    if (!ps2RendererTraceIsCapturing()) {
+        return;
+    }
+
+    uint16_t flags = extra_flags |
+        (textured ? (uint16_t)PS2_TRACE_FLAG_TEXTURED : 0u) |
+        (path1 ? (uint16_t)PS2_TRACE_FLAG_PATH1
+               : (uint16_t)PS2_TRACE_FLAG_PATH3);
+    ps2RendererTraceRecord(PS2_TRACE_GS_DRAW, flags,
+        (uint64_t)vertex_count | ((uint64_t)register_count << 32u),
+        primary_state, secondary_state,
+        (uint64_t)texture_vram | ((uint64_t)clut_vram << 32u));
+}
+
 extern "C" void ps2GsCoreDrawColorTriangles(const struct Ps2GsColorVertex *vertices,
     uint32_t vertex_count)
 {
@@ -2157,8 +2177,13 @@ extern "C" void ps2GsCoreDrawColorTriangles(const struct Ps2GsColorVertex *verti
                 ps2GsStateShadowCommit(
                     &s_state_shadow, PS2_GS_STATE_PRIM, prim);
             }
-            ps2RendererStatsRecordPath1(false, vertex_count,
-                vertex_count * 2u + (emit_prim ? 1u : 0u));
+            const uint32_t trace_register_count =
+                vertex_count * 2u + (emit_prim ? 1u : 0u);
+            ps2RendererStatsRecordPath1(
+                false, vertex_count, trace_register_count);
+            ps2GsCoreTraceDraw(false, true, 0u,
+                vertex_count, trace_register_count,
+                prim, 0u, 0u, 0u);
             ps2GsCoreMarkActiveRenderTargetWritten();
             return;
         }
@@ -2187,6 +2212,8 @@ extern "C" void ps2GsCoreDrawColorTriangles(const struct Ps2GsColorVertex *verti
     memcpy(&p[out], vertices, (size_t)vertex_count * sizeof(*vertices));
     ps2RendererStatsRecordPath3(
         false, vertex_count, register_count);
+    ps2GsCoreTraceDraw(false, false, 0u,
+        vertex_count, register_count, prim, 0u, 0u, 0u);
     ps2GsCoreMarkActiveRenderTargetWritten();
 }
 
@@ -2244,6 +2271,13 @@ static bool ps2GsCoreDrawTexturedTrianglesInternal(GSTEXTURE *tex,
         (emit_tex1 ? 1u : 0u) +
         (emit_tex0 ? 1u : 0u) +
         (emit_prim ? 1u : 0u);
+    const uint16_t trace_draw_flags =
+        (indexed ? 0x0100u : 0u) |
+        (load_clut ? 0x0200u : 0u) |
+        (texture_flush ? 0x0400u : 0u) |
+        (target_view ? 0x0800u : 0u) |
+        (s_texture_alpha ? 0x1000u : 0u) |
+        (s_gs->PrimAlphaEnable ? 0x2000u : 0u);
 
     if (ps2GsVu1QueueEnabled() &&
         ps2GsVu1BatchWorthwhile(vertex_count)) {
@@ -2333,6 +2367,10 @@ static bool ps2GsCoreDrawTexturedTrianglesInternal(GSTEXTURE *tex,
             }
             ps2RendererStatsRecordPath1(true, vertex_count,
                 final_register_count);
+            ps2GsCoreTraceDraw(true, true, trace_draw_flags,
+                vertex_count, final_register_count,
+                tex0, tex1, tex->Vram,
+                indexed ? tex->VramClut : 0u);
             if (transform_vertices) {
                 ps2RendererStatsRecordVu1Transform(vertex_count);
             }
@@ -2410,6 +2448,10 @@ static bool ps2GsCoreDrawTexturedTrianglesInternal(GSTEXTURE *tex,
     }
     ps2RendererStatsRecordPath3(
         true, vertex_count, register_count);
+    ps2GsCoreTraceDraw(true, false, trace_draw_flags,
+        vertex_count, register_count,
+        tex0, tex1, tex->Vram,
+        indexed ? tex->VramClut : 0u);
     ps2GsCoreMarkActiveRenderTargetWritten();
     return true;
 }
