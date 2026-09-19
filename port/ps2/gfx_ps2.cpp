@@ -4452,13 +4452,17 @@ static void ps2_trace_draw_state(uint32_t draw_id)
                 ((uint64_t)sampler->source_size << 8u) |
                 ((uint64_t)(sampler->palette_format & 0xffffu) << 16u) |
                 ((uint64_t)(sampler->palette_count & 0xffffu) << 32u);
+            const uint64_t handle_serial =
+                (uint64_t)(uint32_t)handle |
+                ((uint64_t)sampler->upload_serial << 32u);
             ps2RendererTraceRecord(PS2_TRACE_DRAW_STATE,
                 (uint16_t)(7u + t), draw_id,
-                (uint64_t)(uint32_t)handle |
-                    ((uint64_t)sampler->upload_serial << 32u),
-                source_meta,
-                sampler->source_hash,
-                sampler->palette_hash);
+                handle_serial, source_meta,
+                sampler->source_hash);
+            ps2RendererTraceRecord(PS2_TRACE_DRAW_STATE,
+                (uint16_t)(9u + t), draw_id,
+                handle_serial, sampler->palette_hash,
+                0u);
         }
     }
 }
