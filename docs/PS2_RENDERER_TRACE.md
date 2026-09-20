@@ -27,11 +27,13 @@ The capture contains:
 - depth, alpha, viewport, scissor and sampler changes;
 - PATH1 submission metadata and the exact raw PATH3 GIF qwords;
 - the final GS register shadow, resident texture/CLUT/render-target inventory;
-- VRAM allocator and cumulative renderer statistics.
+- per-residency local->host texture and CLUT readback in the resource's actual
+  PSM/TBW, captured after the measured frame;
+- VRAM allocator and cumulative renderer statistics;
+- a separate four-megabyte CT32-address-space VRAM dump.
 
-It does not read the four-megabyte GS VRAM back to the EE. The exact submitted
-command stream, resource layout and authoritative software register shadow are
-captured without introducing a risky local-to-host transfer into gameplay.
+These local->host transfers are deliberately trace-only and post-frame. Indexed
+readback does not use the framebuffer-oriented PS2SDK screenshot helper.
 
 ## Decode
 

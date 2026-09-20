@@ -1008,6 +1008,129 @@ extern "C" bool ps2GsCoreCaptureTraceScreenshot(void)
     return primary_success;
 }
 
+static bool ps2GsCoreTraceImageBytes(
+    uint32_t width, uint32_t height, uint32_t psm, uint32_t *bytes)
+{
+    if (!bytes || width == 0u || height == 0u) {
+        return false;
+    }
+    const uint64_t texels = (uint64_t)width * (uint64_t)height;
+    uint64_t result;
+    switch (psm) {
+        case GS_PSM_CT32: result = texels * 4u; break;
+        case GS_PSM_CT24: result = texels * 3u; break;
+        case GS_PSM_CT16:
+        case GS_PSM_CT16S: result = texels * 2u; break;
+        case GS_PSM_T8: result = texels; break;
+        case GS_PSM_T4: result = (texels + 1u) / 2u; break;
+        default: return false;
+    }
+    if (result == 0u || result > UINT32_MAX) {
+        return false;
+    }
+    *bytes = (uint32_t)result;
+    return true;
+}
+
+static bool ps2GsCoreCaptureTraceTextureBlock(
+    Ps2GsTextureHandle handle, uint16_t subtype,
+    uint32_t vram, uint32_t tbw, uint32_t psm,
+    uint32_t width, uint32_t height)
+{
+    uint32_t logical_bytes = 0u;
+    if (!ps2GsCoreTraceImageBytes(width, height, psm, &logical_bytes)) {
+        ps2RendererTraceRecord(PS2_TRACE_GS_TEXTURE_READBACK,
+            (uint16_t)(subtype | PS2_TRACE_FLAG_DROPPED),
+            (uint64_t)handle |
+                ((uint64_t)width << 16u) |
+                ((uint64_t)height << 32u),
+            0u, 0u,
+            (uint64_t)vram |
+                ((uint64_t)(tbw & 0xffu) << 32u) |
+                ((uint64_t)(psm & 0xffu) << 40u));
+        return false;
+    }
+
+    const uint32_t dma_bytes = (logical_bytes + 15u) & ~15u;
+    uint8_t *scratch = (uint8_t *)memalign(64u, dma_bytes);
+    if (!scratch) {
+        ps2RendererTraceRecord(PS2_TRACE_GS_TEXTURE_READBACK,
+            (uint16_t)(subtype | PS2_TRACE_FLAG_DROPPED),
+            (uint64_t)handle |
+                ((uint64_t)width << 16u) |
+                ((uint64_t)height << 32u),
+            (uint64_t)logical_bytes << 32u, 0u,
+            (uint64_t)vram |
+                ((uint64_t)(tbw & 0xffu) << 32u) |
+                ((uint64_t)(psm & 0xffu) << 40u));
+        return false;
+    }
+
+    uint32_t read_bytes = 0u;
+    const bool readback = ps2GsNativeQueueReadbackTexture(
+        scratch, dma_bytes, vram, tbw, psm,
+        width, height, &read_bytes);
+    const uint64_t hash = readback
+        ? ps2RendererTraceHash(scratch, read_bytes) : 0u;
+    uint32_t blob_offset = 0u;
+    const bool stored = readback && ps2RendererTraceAppendBlob(
+        scratch, read_bytes, 16u, &blob_offset);
+    free(scratch);
+
+    const uint16_t flags = subtype |
+        (readback ? (uint16_t)PS2_TRACE_FLAG_SUPPORTED : 0u) |
+        (stored ? 0u : (uint16_t)PS2_TRACE_FLAG_DROPPED);
+    ps2RendererTraceRecord(PS2_TRACE_GS_TEXTURE_READBACK, flags,
+        (uint64_t)handle |
+            ((uint64_t)width << 16u) |
+            ((uint64_t)height << 32u),
+        (uint64_t)blob_offset | ((uint64_t)read_bytes << 32u),
+        hash,
+        (uint64_t)vram |
+            ((uint64_t)(tbw & 0xffu) << 32u) |
+            ((uint64_t)(psm & 0xffu) << 40u));
+    return readback;
+}
+
+extern "C" bool ps2GsCoreCaptureTraceTextureResidencies(void)
+{
+    if (!s_gs || !ps2RendererTraceIsCapturing()) {
+        return false;
+    }
+
+    bool complete = true;
+    for (uint32_t i = 0u; i < PS2_GS_MAX_TEXTURES; ++i) {
+        const struct Ps2GsTextureSlot *slot = &s_textures[i];
+        if (!slot->used || !slot->resident || !slot->uploaded) {
+            continue;
+        }
+
+        const Ps2GsTextureHandle handle = (Ps2GsTextureHandle)(i + 1u);
+        complete = ps2GsCoreCaptureTraceTextureBlock(
+            handle, 0x0000u,
+            slot->texture.Vram, (uint32_t)slot->texture.TBW,
+            (uint32_t)slot->texture.PSM,
+            (uint32_t)slot->texture.Width,
+            (uint32_t)slot->texture.Height) && complete;
+
+        if (slot->texture.PSM == GS_PSM_T4 ||
+            slot->texture.PSM == GS_PSM_T8) {
+            const uint32_t clut_width =
+                slot->texture.PSM == GS_PSM_T8 ? 16u : 8u;
+            const uint32_t clut_height =
+                slot->texture.PSM == GS_PSM_T8 ? 16u : 2u;
+            const uint32_t clut_tbw =
+                ps2GsTextureBufferWidth(clut_width, false);
+            complete = ps2GsCoreCaptureTraceTextureBlock(
+                handle, 0x0100u,
+                slot->texture.VramClut, clut_tbw,
+                (uint32_t)slot->texture.ClutPSM,
+                clut_width, clut_height) && complete;
+        }
+    }
+    return complete;
+}
+
 extern "C" bool ps2GsCoreCaptureTraceVram(void)
 {
     if (!s_gs || !ps2RendererTraceIsCapturing()) {

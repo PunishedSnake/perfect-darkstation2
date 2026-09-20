@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-#define PS2_RENDERER_TRACE_VERSION 3u
+#define PS2_RENDERER_TRACE_VERSION 4u
 
 /*
  * Capture buffers exist only while Select has armed a one-frame trace. The
@@ -63,6 +63,7 @@ enum Ps2RendererTraceEventType {
     PS2_TRACE_GFX_COMMAND,
     PS2_TRACE_GFX_SOURCE,
     PS2_TRACE_GS_VRAM_DUMP,
+    PS2_TRACE_GS_TEXTURE_READBACK,
 };
 
 enum Ps2RendererTraceFlags {

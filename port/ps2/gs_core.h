@@ -114,6 +114,7 @@ bool ps2GsCoreCaptureTraceScreenshot(void);
  * space, viewed as a 1024x1024 PSMCT32 surface and streamed in safe strips.
  */
 bool ps2GsCoreCaptureTraceVram(void);
+bool ps2GsCoreCaptureTraceTextureResidencies(void);
 /* Append the authoritative software GS shadow and resident VRAM inventory. */
 void ps2GsCoreRecordTraceSnapshot(void);
 

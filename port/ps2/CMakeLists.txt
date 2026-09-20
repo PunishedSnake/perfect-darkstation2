@@ -776,6 +776,24 @@ set_target_properties(pd_ps2_game PROPERTIES
   SUFFIX ".elf"
 )
 
+# Preserve the symbol-rich ELF for post-mortem work and emit a launcher-facing
+# copy stripped only of non-loadable debug/symbol baggage.  CI verifies that
+# entry point, PT_LOAD layout and PT_LOAD bytes remain identical.
+find_program(PD_PS2_STRIP_TOOL
+  NAMES mips64r5900el-ps2-elf-strip
+  REQUIRED
+)
+set(PD_PS2_FMCB_ELF
+  "${CMAKE_CURRENT_BINARY_DIR}/pd-ps2-game-fmcb.elf"
+)
+add_custom_command(TARGET pd_ps2_game POST_BUILD
+  COMMAND "${CMAKE_COMMAND}" -E copy
+    "$<TARGET_FILE:pd_ps2_game>" "${PD_PS2_FMCB_ELF}"
+  COMMAND "${PD_PS2_STRIP_TOOL}" --strip-all "${PD_PS2_FMCB_ELF}"
+  COMMENT "Creating FMCB compatibility ELF with identical PT_LOAD image"
+  VERBATIM
+)
+
 # The real Fast3D translator remains linked as the compatibility frontend.
 # gfx_api_scene.c is the current lower-level correctness baseline while GS
 # ownership is moved below gfx_ps2 into gs_core. DualShock 2 input is a separate

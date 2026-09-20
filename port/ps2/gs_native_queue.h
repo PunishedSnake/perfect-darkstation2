@@ -91,6 +91,11 @@ bool ps2GsNativeQueueUploadTextureMirrored(GSGLOBAL *gs,
     uint32_t source_width, uint32_t source_height,
     bool mirror_s, bool mirror_t);
 
+bool ps2GsNativeQueueReadbackTexture(
+    void *destination, uint32_t destination_bytes,
+    uint32_t vram, uint32_t tbw, uint32_t psm,
+    uint32_t width, uint32_t height, uint32_t *image_bytes);
+
 uint32_t ps2GsNativeQueueUsedQwords(void);
 uint32_t ps2GsNativeQueueCapacityQwords(void);
 bool ps2GsNativeQueueOverflowed(void);

@@ -4804,6 +4804,12 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len,
         return;
     }
 
+    /*
+     * Clamp bounds are decoded during translation below.  Clearing the prior
+     * batch here prevents draw_state from presenting stale region-clamp data;
+     * texture_coord_range carries the authoritative decoded bounds.
+     */
+    memset(s_draw_region_clamp, 0, sizeof(s_draw_region_clamp));
     ps2_trace_draw_state(trace_draw_id);
     ps2_trace_draw_payload(trace_draw_id, 0u, 1u,
         buf_vbo, (uint32_t)source_vertices, (uint32_t)stride);
@@ -5167,6 +5173,7 @@ static void ps2_end_frame(void)
          * synchronous GS local-to-host readback is forensic-only and therefore
          * cannot masquerade as renderer time.
          */
+        ps2GsCoreCaptureTraceTextureResidencies();
         ps2GsCoreCaptureTraceScreenshot();
         ps2GsCoreCaptureTraceVram();
         ps2RendererTraceEndFrameAndWrite();

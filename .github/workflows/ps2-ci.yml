@@ -451,6 +451,18 @@ jobs:
           mips64r5900el-ps2-elf-size -A build-ps2/pd-ps2-game.elf > \
             build-ps2/pd-ps2-game.sections.txt
 
+      - name: Audit FMCB compatibility ELF
+        run: |
+          test -f build-ps2/pd-ps2-game-fmcb.elf
+          python3 tools/ps2_elf_load_audit.py \
+            build-ps2/pd-ps2-game.elf \
+            --compare build-ps2/pd-ps2-game-fmcb.elf | \
+            tee build-ps2/pd-ps2-game.elf-audit.txt
+          mips64r5900el-ps2-elf-readelf -lW \
+            build-ps2/pd-ps2-game-fmcb.elf
+          test "$(stat -c %s build-ps2/pd-ps2-game-fmcb.elf)" \
+            -lt "$(stat -c %s build-ps2/pd-ps2-game.elf)"
+
       - name: Reject dynamic STL containers in PS2 runtime
         run: |
           if grep -Eq 'libstdc\+\+\.a\((list|tree|hashtable|functexcept|eh_|bad_alloc)' \
@@ -481,8 +493,10 @@ jobs:
           name: pd-ps2-game
           path: |
             build-ps2/pd-ps2-game.elf
+            build-ps2/pd-ps2-game-fmcb.elf
             build-ps2/pd-ps2-game.map
             build-ps2/pd-ps2-game.sections.txt
+            build-ps2/pd-ps2-game.elf-audit.txt
             ps2-build-metadata.txt
           if-no-files-found: error
           retention-days: 3

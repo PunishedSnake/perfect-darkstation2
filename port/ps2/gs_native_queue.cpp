@@ -25,6 +25,33 @@
 /* Initial CNT packet: 6 QW, each IMAGE chunk: 3 QW, END+TEXFLUSH: 3 QW. */
 #define PS2_GS_UPLOAD_CHAIN_QW (9u + PS2_GS_UPLOAD_MAX_CHUNKS * 3u)
 
+#define PS2_GS_READBACK_D1_CHCR ((volatile uint32_t *)(0x10009000))
+#define PS2_GS_READBACK_D1_MADR ((volatile uint32_t *)(0x10009010))
+#define PS2_GS_READBACK_D1_QWC  ((volatile uint32_t *)(0x10009020))
+#define PS2_GS_READBACK_CSR_FINISH (1u << 1)
+#define PS2_GS_READBACK_GS_CSR ((volatile uint64_t *)(0x12001000))
+#define PS2_GS_READBACK_GS_BUSDIR ((volatile uint64_t *)(0x12001040))
+#define PS2_GS_READBACK_VIF1_STAT ((volatile uint32_t *)(0x10003c00))
+#define PS2_GS_READBACK_VIF1_STAT_FDR (1u << 23)
+#define PS2_GS_READBACK_VIF1_FIFO ((volatile u128 *)(0x10005000))
+#define PS2_GS_READBACK_VIF1_NOP 0u
+#define PS2_GS_READBACK_VIF1_MSKPATH3(mask) \
+    ((uint32_t)(mask) | (0x06u << 24u))
+#define PS2_GS_READBACK_VIF1_FLUSHA (0x13u << 24u)
+#define PS2_GS_READBACK_VIF1_DIRECT(count) \
+    ((uint32_t)(count) | (0x50u << 24u))
+#define PS2_GS_READBACK_MAX_QW 0xffffu
+
+static union {
+    uint32_t words[4];
+    u128 value;
+} s_readback_enable_path3 __attribute__((aligned(16))) = {
+    { PS2_GS_READBACK_VIF1_MSKPATH3(0u),
+      PS2_GS_READBACK_VIF1_NOP,
+      PS2_GS_READBACK_VIF1_NOP,
+      PS2_GS_READBACK_VIF1_NOP }
+};
+
 struct Ps2GsNativeArena {
     void *canonical;
     uint64_t *ucab;
@@ -525,6 +552,126 @@ static bool ps2GsNativeQueueUploadTextureInternal(GSGLOBAL *gs,
     dmaKit_send_chain(DMA_CHANNEL_GIF, slot->chain, chain_qw);
 
     s_upload_slot ^= 1u;
+    return true;
+}
+
+static bool ps2GsNativeReadbackImageBytes(
+    uint32_t width, uint32_t height, uint32_t psm, uint32_t *bytes)
+{
+    if (!bytes || width == 0u || height == 0u) {
+        return false;
+    }
+    const uint64_t texels = (uint64_t)width * (uint64_t)height;
+    uint64_t result;
+    switch (psm) {
+        case GS_PSM_CT32: result = texels * 4u; break;
+        case GS_PSM_CT24: result = texels * 3u; break;
+        case GS_PSM_CT16:
+        case GS_PSM_CT16S: result = texels * 2u; break;
+        case GS_PSM_T8: result = texels; break;
+        case GS_PSM_T4: result = (texels + 1u) / 2u; break;
+        default: return false;
+    }
+    if (result == 0u || result > UINT32_MAX) {
+        return false;
+    }
+    *bytes = (uint32_t)result;
+    return true;
+}
+
+extern "C" bool ps2GsNativeQueueReadbackTexture(
+    void *destination, uint32_t destination_bytes,
+    uint32_t vram, uint32_t tbw, uint32_t psm,
+    uint32_t width, uint32_t height, uint32_t *image_bytes)
+{
+    uint32_t logical_bytes = 0u;
+    if (!s_initialized || !destination || tbw == 0u ||
+        (vram & 0xffu) != 0u ||
+        !ps2GsNativeReadbackImageBytes(width, height, psm, &logical_bytes)) {
+        return false;
+    }
+
+    const uint32_t dma_bytes = (logical_bytes + 15u) & ~15u;
+    const uint32_t dma_qw = dma_bytes / 16u;
+    if (dma_qw == 0u || dma_qw > PS2_GS_READBACK_MAX_QW ||
+        destination_bytes < dma_bytes) {
+        return false;
+    }
+    if (image_bytes) {
+        *image_bytes = logical_bytes;
+    }
+
+    if (!ps2GsNativeQueueWaitGs() ||
+        dmaKit_wait(DMA_CHANNEL_VIF1, 0) < 0) {
+        return false;
+    }
+
+    uint32_t setup[28] __attribute__((aligned(16))) = {};
+    uint64_t *packet = (uint64_t *)(void *)&setup[4];
+    setup[0] = PS2_GS_READBACK_VIF1_NOP;
+    setup[1] = PS2_GS_READBACK_VIF1_MSKPATH3(0x8000u);
+    setup[2] = PS2_GS_READBACK_VIF1_FLUSHA;
+    setup[3] = PS2_GS_READBACK_VIF1_DIRECT(6u);
+
+    packet[0] = GIF_TAG(5, 1, 0, 0, GSKIT_GIF_FLG_PACKED, 1);
+    packet[1] = GIF_AD;
+    packet[2] = GS_SETREG_BITBLTBUF(
+        vram / 256u, tbw, psm, 0u, 0u, psm);
+    packet[3] = GS_BITBLTBUF;
+    packet[4] = GS_SETREG_TRXPOS(0u, 0u, 0u, 0u, 0u);
+    packet[5] = GS_TRXPOS;
+    packet[6] = GS_SETREG_TRXREG(width, height);
+    packet[7] = GS_TRXREG;
+    packet[8] = 0u;
+    packet[9] = GS_FINISH;
+    packet[10] = GS_SETREG_TRXDIR(1u);
+    packet[11] = GS_TRXDIR;
+
+    memset(destination, 0, dma_bytes);
+    FlushCache(0);
+
+    const uint32_t previous_imr = GsPutIMR(GsGetIMR() | 0x0200u);
+    const uint32_t previous_chcr = *PS2_GS_READBACK_D1_CHCR;
+    if ((previous_chcr & 0x0100u) != 0u) {
+        GsPutIMR(previous_imr);
+        return false;
+    }
+
+    *PS2_GS_READBACK_GS_CSR = PS2_GS_READBACK_CSR_FINISH;
+    FlushCache(0);
+    *PS2_GS_READBACK_D1_QWC = 7u;
+    *PS2_GS_READBACK_D1_MADR = (uint32_t)(uintptr_t)setup;
+    *PS2_GS_READBACK_D1_CHCR = 0x101u;
+    EE_SYNCL();
+
+    while ((*PS2_GS_READBACK_D1_CHCR & 0x0100u) != 0u) {
+    }
+    while ((*PS2_GS_READBACK_GS_CSR &
+            PS2_GS_READBACK_CSR_FINISH) == 0u) {
+    }
+    while ((*PS2_GS_READBACK_VIF1_STAT & 0x1f000000u) != 0u) {
+    }
+
+    *PS2_GS_READBACK_VIF1_STAT = PS2_GS_READBACK_VIF1_STAT_FDR;
+    *PS2_GS_READBACK_GS_BUSDIR = 1u;
+    FlushCache(0);
+
+    *PS2_GS_READBACK_D1_QWC = dma_qw;
+    *PS2_GS_READBACK_D1_MADR = (uint32_t)(uintptr_t)destination;
+    *PS2_GS_READBACK_D1_CHCR = 0x100u;
+    EE_SYNCL();
+
+    while ((*PS2_GS_READBACK_D1_CHCR & 0x0100u) != 0u) {
+    }
+    *PS2_GS_READBACK_D1_CHCR = previous_chcr;
+    EE_SYNCL();
+    *PS2_GS_READBACK_VIF1_STAT = 0u;
+    *PS2_GS_READBACK_GS_BUSDIR = 0u;
+    GsPutIMR(previous_imr);
+    *PS2_GS_READBACK_GS_CSR = PS2_GS_READBACK_CSR_FINISH;
+    *PS2_GS_READBACK_VIF1_FIFO = s_readback_enable_path3.value;
+
+    FlushCache(0);
     return true;
 }
 

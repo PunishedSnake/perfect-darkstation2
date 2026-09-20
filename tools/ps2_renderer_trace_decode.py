@@ -32,7 +32,7 @@ EVENT_NAMES = {
     34: "resource_op", 35: "capture_info", 36: "screenshot",
     37: "gs_draw_state", 38: "tmem_snapshot", 39: "gs_upload",
     40: "build_info", 41: "gfx_command", 42: "gfx_source",
-    43: "gs_vram_dump",
+    43: "gs_vram_dump", 44: "gs_texture_readback",
 }
 
 GS_STATE_NAMES = [
@@ -141,6 +141,7 @@ def _analyze(events: list[dict]) -> dict:
     gfx_commands = []
     gfx_sources = []
     gs_vram_dump = {}
+    gs_texture_readbacks = []
     screenshots = {"draw": {}, "other": {}}
     gaps = []
 
@@ -717,6 +718,26 @@ def _analyze(events: list[dict]) -> dict:
                 "metadata": event["c"],
                 "source_address": event["d"],
             })
+        elif event_type == "gs_texture_readback":
+            meta = _event_value(event, "a")
+            offset, size = _u32_pair(_event_value(event, "b"))
+            residency = _event_value(event, "d")
+            kind_id = (event["flags"] >> 8) & 0x7f
+            gs_texture_readbacks.append({
+                "sequence": event["sequence"],
+                "kind": "clut" if kind_id == 1 else "texture",
+                "handle": meta & 0xffff,
+                "width": (meta >> 16) & 0xffff,
+                "height": (meta >> 32) & 0xffff,
+                "stored": not bool(event["flags"] & 0x8000),
+                "success": bool(event["flags"] & 0x0008),
+                "offset": offset,
+                "size": size,
+                "hash": event["c"],
+                "vram": residency & 0xffffffff,
+                "tbw": (residency >> 32) & 0xff,
+                "psm": (residency >> 40) & 0xff,
+            })
         elif event_type == "gs_vram_dump":
             packed = _event_value(event, "d")
             gs_vram_dump = {
@@ -843,6 +864,7 @@ def _analyze(events: list[dict]) -> dict:
         "gfx_commands": gfx_commands,
         "gfx_sources": gfx_sources,
         "gs_vram_dump": gs_vram_dump,
+        "gs_texture_readbacks": gs_texture_readbacks,
         "screenshot": screenshots["draw"],
         "screenshots": screenshots,
         "largest_event_gaps": sorted(
@@ -864,7 +886,7 @@ def decode(path: Path) -> dict:
     (event_count, event_capacity, dropped_events, qword_count,
      qword_capacity, dropped_qwords, event_offset, qword_offset, flags,
      *reserved) = ints
-    if version not in (1, 2, 3) or header_size != HEADER.size or event_size != EVENT.size:
+    if version not in (1, 2, 3, 4) or header_size != HEADER.size or event_size != EVENT.size:
         raise ValueError("unsupported trace layout")
     if qword_size != QWORD.size:
         raise ValueError("unsupported qword layout")
