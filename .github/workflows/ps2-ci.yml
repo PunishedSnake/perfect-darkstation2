@@ -440,6 +440,18 @@ jobs:
       - name: Build full Perfect Dark PS2 runtime
         run: cmake --build build-ps2 --target pd_ps2_game -j2 --verbose
 
+      - name: Build FMCB full-game startup diagnostic
+        run: |
+          cmake -S port/ps2 -B build-ps2-fmcb-startup -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/port/ps2/ps2dev-toolchain.cmake" \
+            -DPD_PS2_FMCB_STARTUP_DIAGNOSTIC=ON
+          cmake --build build-ps2-fmcb-startup --target pd_ps2_game -j2 --verbose
+          test -s build-ps2-fmcb-startup/pd-ps2-game-fmcb-startup.elf
+          mips64r5900el-ps2-elf-size \
+            build-ps2-fmcb-startup/pd-ps2-game-fmcb-startup.elf
+          mips64r5900el-ps2-elf-readelf -h -lW \
+            build-ps2-fmcb-startup/pd-ps2-game-fmcb-startup.elf
+
       - name: Inspect EE ELF
         run: |
           test -f build-ps2/pd-ps2-bootstrap.elf
@@ -508,6 +520,17 @@ jobs:
             build-ps2/pd-ps2-loader-probe-crt.elf
             build-ps2/pd-ps2-loader-probe-large.elf
             docs/PS2_FMCB_LOADER_PROBE.md
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Upload FMCB full-game startup diagnostic
+        uses: actions/upload-artifact@v7
+        with:
+          name: pd-ps2-fmcb-startup-diagnostic
+          path: |
+            build-ps2-fmcb-startup/pd-ps2-game-fmcb-startup.elf
+            docs/PS2_FMCB_STARTUP_DIAGNOSTIC.md
+            ps2-build-metadata.txt
           if-no-files-found: error
           retention-days: 3
 

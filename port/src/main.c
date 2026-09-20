@@ -22,8 +22,53 @@
 #include "log_ps2.h"
 #include "storage_ps2.h"
 #define GAME_STARTUP_CHECKPOINT() ps2LogCheckpointForce()
+
+#ifdef PD_PS2_FMCB_STARTUP_DIAGNOSTIC
+/*
+ * Real-hardware launcher diagnostic.
+ *
+ * BGCOLOR is intentionally written without gsKit/SIF/filesystem dependencies,
+ * matching the standalone loader probes. The inherited launcher scanout makes
+ * the pre-video markers visible. Each marker is held by a pure EE busy-loop so
+ * the diagnostic does not depend on ThreadMan, timers or IOP state.
+ */
+static void ps2FmcbStartupMarker(u64 color)
+{
+	*(volatile u64 *)0x120000e0 = color;
+
+	u32 spins = 40000000u;
+	__asm__ __volatile__(
+		".set noreorder\n\t"
+		"1:\n\t"
+		"addiu %0, %0, -1\n\t"
+		"bnez %0, 1b\n\t"
+		"nop\n\t"
+		".set reorder\n\t"
+		: "+r"(spins)
+		:
+		: "memory");
+}
+
+#define PS2_FMCB_STARTUP_MARKER(color) ps2FmcbStartupMarker((u64)(color))
+
+#define PS2_FMCB_COLOR_MAIN_ENTRY        0x000000ffULL /* red */
+#define PS2_FMCB_COLOR_ARGS_STORED       0x000080ffULL /* orange */
+#define PS2_FMCB_COLOR_ARG_SCAN_OK       0x0000ffffULL /* yellow */
+#define PS2_FMCB_COLOR_CRASH_READY       0x0000ff80ULL /* lime */
+#define PS2_FMCB_COLOR_SYSTEM_READY      0x0000ff00ULL /* green */
+#define PS2_FMCB_COLOR_STORAGE_READY     0x00ffff00ULL /* cyan */
+#define PS2_FMCB_COLOR_FILES_READY       0x00ff8000ULL /* light blue */
+#define PS2_FMCB_COLOR_INPUT_READY       0x00ff0000ULL /* blue */
+#define PS2_FMCB_COLOR_AUDIO_READY       0x00ff0080ULL /* violet */
+#define PS2_FMCB_COLOR_ROM_READY         0x00ff00ffULL /* magenta */
+#define PS2_FMCB_COLOR_VIDEO_READY       0x00ffffffULL /* white */
+#define PS2_FMCB_COLOR_MAIN_LOOP_READY   0x00808080ULL /* grey */
+#else
+#define PS2_FMCB_STARTUP_MARKER(color) ((void)0)
+#endif
 #else
 #define GAME_STARTUP_CHECKPOINT() ((void)0)
+#define PS2_FMCB_STARTUP_MARKER(color) ((void)0)
 #endif
 
 u32 g_OsMemSize = 0;
@@ -103,13 +148,21 @@ static void cleanup(void)
 
 int main(int argc, const char **argv)
 {
-	sysInitArgs(argc, argv);
+	PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_MAIN_ENTRY);
 
-	if (!sysArgCheck("--no-crash-handler")) {
+	sysInitArgs(argc, argv);
+	PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_ARGS_STORED);
+
+	const s32 disable_crash_handler = sysArgCheck("--no-crash-handler");
+	PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_ARG_SCAN_OK);
+
+	if (!disable_crash_handler) {
 		crashInit();
 	}
+	PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_CRASH_READY);
 
 	sysInit();
+	PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_SYSTEM_READY);
 	sysLogPrintf(LOG_NOTE, "runtime: system ready");
 	GAME_STARTUP_CHECKPOINT();
 
@@ -125,6 +178,7 @@ int main(int argc, const char **argv)
 	sysLogPrintf(mass_result >= 0 ? LOG_NOTE : LOG_WARNING,
 		"runtime: mass storage bootstrap result=%d", mass_result);
 	GAME_STARTUP_CHECKPOINT();
+	PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_STORAGE_READY);
 #endif
 
 	if (fsInit() < 0) {
@@ -157,6 +211,7 @@ int main(int argc, const char **argv)
 
 	sysLogPrintf(LOG_NOTE, "runtime: filesystem and configuration ready");
 	GAME_STARTUP_CHECKPOINT();
+	PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_FILES_READY);
 
 #if PLATFORM_PS2
 	/*
@@ -172,6 +227,7 @@ int main(int argc, const char **argv)
 	sysLogPrintf(input_result >= 0 ? LOG_NOTE : LOG_WARNING,
 		"runtime: input initialisation end result=%d", input_result);
 	GAME_STARTUP_CHECKPOINT();
+	PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_INPUT_READY);
 
 	sysLogPrintf(LOG_NOTE, "runtime: audio initialisation begin");
 	GAME_STARTUP_CHECKPOINT();
@@ -179,6 +235,7 @@ int main(int argc, const char **argv)
 	sysLogPrintf(audio_result >= 0 ? LOG_NOTE : LOG_WARNING,
 		"runtime: audio initialisation end result=%d", audio_result);
 	GAME_STARTUP_CHECKPOINT();
+	PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_AUDIO_READY);
 	sysLogPrintf(LOG_NOTE, "runtime: input and audio ready");
 	GAME_STARTUP_CHECKPOINT();
 
@@ -195,6 +252,7 @@ int main(int argc, const char **argv)
 	sysLogPrintf(LOG_NOTE, "runtime: ROM data ready");
 	GAME_STARTUP_CHECKPOINT();
 	g_ValidGbcRomFound = romdataCheckGbcRom();
+	PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_ROM_READY);
 #endif
 
 	if (videoInit() < 0) {
@@ -202,6 +260,7 @@ int main(int argc, const char **argv)
 	}
 	sysLogPrintf(LOG_NOTE, "runtime: video ready");
 	GAME_STARTUP_CHECKPOINT();
+	PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_VIDEO_READY);
 
 #if !PLATFORM_PS2
 	inputInit();
@@ -278,6 +337,7 @@ int main(int argc, const char **argv)
 
 	sysLogPrintf(LOG_NOTE, "runtime: entering Perfect Dark main loop stage=0x%02x", g_StageNum);
 	GAME_STARTUP_CHECKPOINT();
+	PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_MAIN_LOOP_READY);
 	mainProc();
 
 	return 0;

@@ -65,6 +65,10 @@ option(PD_PS2_DISABLE_DEPTH_DIAGNOSTIC
   "Disable GS depth testing and writes in the full game"
   OFF
 )
+option(PD_PS2_FMCB_STARTUP_DIAGNOSTIC
+  "Show direct GS BGCOLOR markers through full-game startup"
+  OFF
+)
 if(PD_PS2_ALPHA_TRILERP_DIAGNOSTIC AND PD_PS2_VU1_COLOR_DIAGNOSTIC)
   message(FATAL_ERROR "Select one hardware diagnostic per build directory")
 endif()
@@ -881,6 +885,11 @@ if(PD_PS2_DISABLE_DEPTH_DIAGNOSTIC)
     PERFECT_DARK_PS2_DISABLE_DEPTH=1
   )
 endif()
+if(PD_PS2_FMCB_STARTUP_DIAGNOSTIC)
+  target_compile_definitions(pd_ps2_game PRIVATE
+    PD_PS2_FMCB_STARTUP_DIAGNOSTIC=1
+  )
+endif()
 target_link_directories(pd_ps2_game PRIVATE "${GSKIT}/lib")
 set(PD_PS2_GAME_LINK_MAP "${CMAKE_CURRENT_BINARY_DIR}/pd-ps2-game.map")
 target_link_options(pd_ps2_game PRIVATE
@@ -889,10 +898,17 @@ target_link_options(pd_ps2_game PRIVATE
 )
 target_link_libraries(pd_ps2_game PRIVATE
   gskit dmakit padx z audsrv -ldebug patches kernel m)
-set_target_properties(pd_ps2_game PROPERTIES
-  OUTPUT_NAME "pd-ps2-game"
-  SUFFIX ".elf"
-)
+if(PD_PS2_FMCB_STARTUP_DIAGNOSTIC)
+  set_target_properties(pd_ps2_game PROPERTIES
+    OUTPUT_NAME "pd-ps2-game-fmcb-startup"
+    SUFFIX ".elf"
+  )
+else()
+  set_target_properties(pd_ps2_game PROPERTIES
+    OUTPUT_NAME "pd-ps2-game"
+    SUFFIX ".elf"
+  )
+endif()
 
 # Preserve the symbol-rich ELF for post-mortem work and emit a launcher-facing
 # copy stripped only of non-loadable debug/symbol baggage.  CI verifies that
