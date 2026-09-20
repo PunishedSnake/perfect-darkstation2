@@ -5,7 +5,7 @@
 #include <string.h>
 
 #include <delaythread.h>
-#include <fileio.h>
+#include <dirent.h>
 #include <loadfile.h>
 #include <sbv_patches.h>
 #include <sifrpc.h>
@@ -33,11 +33,16 @@ static bool ps2StoragePathUsesMass(const char *path)
 
 static bool ps2StorageMassRootReady(void)
 {
-    const int fd = fioDopen("mass:/");
-    if (fd < 0) {
+    /*
+     * The runtime uses PS2SDK's newlib glue, which explicitly rejects direct
+     * fio/fileXio calls. Probe the inherited IOMAN device through POSIX instead
+     * so storage bootstrap follows the same API contract as the game itself.
+     */
+    DIR *dir = opendir("mass:/");
+    if (!dir) {
         return false;
     }
-    fioDclose(fd);
+    closedir(dir);
     return true;
 }
 
@@ -103,7 +108,6 @@ s32 ps2StorageEnsureMass(const char *boot_path)
 {
     sceSifInitRpc(0);
     SifLoadFileInit();
-    fioInit();
 
     if (ps2StorageMassRootReady()) {
         sysLogPrintf(LOG_NOTE,
