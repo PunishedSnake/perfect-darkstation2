@@ -119,26 +119,24 @@ with embedded current-PS2SDK `sio2man.irx` and `padman.irx`. This tests a
 matched current server/client stack instead of the ROM XSIO2MAN/XPADMAN pair.
 
 
-## SIF/IOP reset handshake refinement
+## ROM startup refinement
 
-A Purple stop with the controller ANALOG LED still lit occurs before the clean
-IOP helper reaches its previous Teal completion marker. Current PS2SDK
-`sceSifInitRpc(0)` itself contains an unbounded wait for
-`SIF_SREG_RPCINIT`, so the pre-reset RPC handshake is now instrumented
-separately.
+The current-PAD A/B reaches the later main-level Violet marker. In this
+sequence that Violet is emitted only after `audioInit()` returns. Input/PAD
+and audio startup have therefore both completed; the next boundary is
+`romdataInit()`.
 
-Immediately after the main Purple marker:
+| Colour | ROM boundary reached | Next operation |
+| --- | --- | --- |
+| Red | entered `romdataInit()` | resolve/open ROM source |
+| Orange | ROM file opened and sized | read/validate the 64-byte ROM header |
+| Yellow | NTSC-final ROM header validated | read the RZIP 1173 header |
+| Lime | RZIP output size validated | allocate decompressed data segment |
+| Green | data-segment allocation succeeded | streamed RZIP inflate |
+| Cyan | data-segment inflate completed | initialise ROM segments |
+| Blue | all ROM segments initialised | build ROM file/name table |
+| Magenta | ROM file/name table initialised | release transient data segment |
+| White | `romdataInit()` is about to return | GBC ROM probe follows |
 
-| Colour | Reset boundary reached |
-| --- | --- |
-| Orange | pre-reset `sceSifInitRpc(0)` returned |
-| White | `SifIopReset()` request was accepted by SIF DMA |
-| Blue | `SifIopSync()` observed IOP BOOTEND |
-| Azure | post-reset `sceSifInitRpc(0)` returned |
-| Teal | `SifLoadFileInit()` returned; clean IOP bootstrap is ready |
-
-A separate `pd-ps2-game-fmcb-direct-reset.elf` skips the pre-reset
-`sceSifInitRpc(0)` entirely and issues `SifIopReset("", 0)` directly.
-Current PS2SDK's `SifIopReset` implementation uses the SIF DMA/register reset
-path rather than RPC, so this A/B tests whether the inherited launch state is
-specifically wedging RPC initialization before the reset can even be sent.
+A stop on Green specifically isolates the streamed RZIP inflate and its repeated
+file-backed reads/decompression.

@@ -20,34 +20,6 @@
 #define PS2_STORAGE_IOP_RESET_SYNC_TIMEOUT_USEC 3000000u
 #define PS2_STORAGE_IOP_RESET_RETRY_USEC 1000u
 
-#ifdef PD_PS2_FMCB_STARTUP_DIAGNOSTIC
-static void ps2StorageStartupMarker(uint64_t color)
-{
-    *(volatile uint64_t *)0x120000e0 = color;
-
-    uint32_t spins = 40000000u;
-    __asm__ __volatile__(
-        ".set noreorder\n\t"
-        "1:\n\t"
-        "addiu %0, %0, -1\n\t"
-        "bnez %0, 1b\n\t"
-        "nop\n\t"
-        ".set reorder\n\t"
-        : "+r"(spins)
-        :
-        : "memory");
-}
-#define PS2_STORAGE_MARKER(color) ps2StorageStartupMarker((uint64_t)(color))
-#else
-#define PS2_STORAGE_MARKER(color) ((void)0)
-#endif
-
-#define PS2_STORAGE_DIAG_PRE_RPC_READY   0x000080ffULL /* orange */
-#define PS2_STORAGE_DIAG_RESET_ACCEPTED  0x00ffffffULL /* white */
-#define PS2_STORAGE_DIAG_SYNC_DONE       0x00ff0000ULL /* blue */
-#define PS2_STORAGE_DIAG_POST_RPC_READY  0x00ff8000ULL /* azure */
-#define PS2_STORAGE_DIAG_LOADFILE_READY  0x00808000ULL /* teal */
-
 extern unsigned char usbd_irx[] __attribute__((aligned(16)));
 extern unsigned int size_usbd_irx;
 extern unsigned char usbhdfsd_irx[] __attribute__((aligned(16)));
@@ -113,13 +85,10 @@ s32 ps2StorageResetIopForCleanBoot(void)
      * This is intentionally a startup-only diagnostic path. It is justified
      * only when the inherited launcher IOP personality is known to be toxic.
      */
-#ifndef PD_PS2_DIRECT_IOP_RESET_DIAGNOSTIC
     sceSifInitRpc(0);
-    PS2_STORAGE_MARKER(PS2_STORAGE_DIAG_PRE_RPC_READY);
-#endif
 
     const uint64_t request_start = sysGetMicroseconds();
-    while (!SifIopReset("", 0)) {
+    while (!SifIopReset(NULL, 0)) {
         if (sysGetMicroseconds() - request_start >=
                 PS2_STORAGE_IOP_RESET_REQUEST_TIMEOUT_USEC) {
             sysLogPrintf(LOG_ERROR,
@@ -129,7 +98,6 @@ s32 ps2StorageResetIopForCleanBoot(void)
         }
         DelayThread(PS2_STORAGE_IOP_RESET_RETRY_USEC);
     }
-    PS2_STORAGE_MARKER(PS2_STORAGE_DIAG_RESET_ACCEPTED);
 
     const uint64_t sync_start = sysGetMicroseconds();
     while (!SifIopSync()) {
@@ -142,13 +110,9 @@ s32 ps2StorageResetIopForCleanBoot(void)
         }
         DelayThread(PS2_STORAGE_IOP_RESET_RETRY_USEC);
     }
-    PS2_STORAGE_MARKER(PS2_STORAGE_DIAG_SYNC_DONE);
 
     sceSifInitRpc(0);
-    PS2_STORAGE_MARKER(PS2_STORAGE_DIAG_POST_RPC_READY);
-
     SifLoadFileInit();
-    PS2_STORAGE_MARKER(PS2_STORAGE_DIAG_LOADFILE_READY);
 
     sysLogPrintf(LOG_NOTE,
         "IOP: clean reboot complete; inherited modules/RPC discarded");
