@@ -67,3 +67,31 @@ Current PS2SDK `libpad` can wait indefinitely inside `padInit()` while binding
 the expected PAD RPC server. Therefore Green with no Cyan is a particularly
 strong signal that the resident PAD module/service and the current EE libpad
 client do not agree.
+
+
+## Clean-IOP recovery A/B
+
+Real-hardware evidence now isolates the failing launch path further: the normal
+startup reaches the PAD-internal Green marker and never reaches Cyan. Green is
+emitted immediately before current PS2SDK `padInit(0)`; Cyan is emitted only
+after it returns. Current PS2SDK `libpad` waits indefinitely while binding the
+expected PAD RPC server, so this result isolates the hang to the PAD RPC bind/
+initialization boundary.
+
+A separate diagnostic target,
+`pd-ps2-game-fmcb-clean-iop.elf`, performs one controlled IOP reboot after
+EE/system startup but before any game-owned IOP service. It then reinitializes
+SIF/LOADFILE and lets the normal storage path rebuild USBD/USBHDFSD before PAD
+and audio start.
+
+Additional colours:
+
+| Colour | Meaning |
+| --- | --- |
+| Purple | clean IOP reboot is about to begin |
+| Teal | IOP reboot synchronized and SIF/LOADFILE were reinitialized |
+| Dark red after Purple | clean IOP bootstrap failed/timed out |
+
+This is an A/B recovery experiment, not yet the default runtime policy. An IOP
+reboot is a system-personality change: inherited modules, heaps, drivers and RPC
+bindings are invalidated and every required service must be rebuilt.

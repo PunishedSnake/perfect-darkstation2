@@ -69,6 +69,14 @@ option(PD_PS2_FMCB_STARTUP_DIAGNOSTIC
   "Show direct GS BGCOLOR markers through full-game startup"
   OFF
 )
+option(PD_PS2_CLEAN_IOP_STARTUP_DIAGNOSTIC
+  "Discard inherited IOP state before PS2 runtime service bootstrap"
+  OFF
+)
+if(PD_PS2_CLEAN_IOP_STARTUP_DIAGNOSTIC AND NOT PD_PS2_FMCB_STARTUP_DIAGNOSTIC)
+  message(FATAL_ERROR
+    "PD_PS2_CLEAN_IOP_STARTUP_DIAGNOSTIC requires PD_PS2_FMCB_STARTUP_DIAGNOSTIC")
+endif()
 if(PD_PS2_ALPHA_TRILERP_DIAGNOSTIC AND PD_PS2_VU1_COLOR_DIAGNOSTIC)
   message(FATAL_ERROR "Select one hardware diagnostic per build directory")
 endif()
@@ -890,6 +898,11 @@ if(PD_PS2_FMCB_STARTUP_DIAGNOSTIC)
     PD_PS2_FMCB_STARTUP_DIAGNOSTIC=1
   )
 endif()
+if(PD_PS2_CLEAN_IOP_STARTUP_DIAGNOSTIC)
+  target_compile_definitions(pd_ps2_game PRIVATE
+    PD_PS2_CLEAN_IOP_STARTUP_DIAGNOSTIC=1
+  )
+endif()
 target_link_directories(pd_ps2_game PRIVATE "${GSKIT}/lib")
 set(PD_PS2_GAME_LINK_MAP "${CMAKE_CURRENT_BINARY_DIR}/pd-ps2-game.map")
 target_link_options(pd_ps2_game PRIVATE
@@ -898,7 +911,12 @@ target_link_options(pd_ps2_game PRIVATE
 )
 target_link_libraries(pd_ps2_game PRIVATE
   gskit dmakit padx z audsrv -ldebug patches kernel m)
-if(PD_PS2_FMCB_STARTUP_DIAGNOSTIC)
+if(PD_PS2_CLEAN_IOP_STARTUP_DIAGNOSTIC)
+  set_target_properties(pd_ps2_game PROPERTIES
+    OUTPUT_NAME "pd-ps2-game-fmcb-clean-iop"
+    SUFFIX ".elf"
+  )
+elseif(PD_PS2_FMCB_STARTUP_DIAGNOSTIC)
   set_target_properties(pd_ps2_game PROPERTIES
     OUTPUT_NAME "pd-ps2-game-fmcb-startup"
     SUFFIX ".elf"

@@ -6,6 +6,7 @@
 
 #include <delaythread.h>
 #include <dirent.h>
+#include <iopcontrol.h>
 #include <loadfile.h>
 #include <sbv_patches.h>
 #include <sifrpc.h>
@@ -15,6 +16,9 @@
 
 #define PS2_STORAGE_ENUM_TIMEOUT_USEC 2000000u
 #define PS2_STORAGE_ENUM_RETRY_USEC 10000u
+#define PS2_STORAGE_IOP_RESET_REQUEST_TIMEOUT_USEC 500000u
+#define PS2_STORAGE_IOP_RESET_SYNC_TIMEOUT_USEC 3000000u
+#define PS2_STORAGE_IOP_RESET_RETRY_USEC 1000u
 
 extern unsigned char usbd_irx[] __attribute__((aligned(16)));
 extern unsigned int size_usbd_irx;
@@ -68,6 +72,51 @@ static int ps2StorageWaitForMass(void)
         "STORAGE: mass: enumeration timeout attempts=%u limit=%u us",
         attempts, PS2_STORAGE_ENUM_TIMEOUT_USEC);
     return -1;
+}
+
+s32 ps2StorageResetIopForCleanBoot(void)
+{
+    /*
+     * POTWIERDZONE / CURRENT PS2SDK:
+     * an IOP reboot invalidates resident modules and RPC bindings. Current
+     * PS2SDK clients use the reboot counter to discard stale bindings on their
+     * next init. Re-establish RPC + LOADFILE before rebuilding device services.
+     *
+     * This is intentionally a startup-only diagnostic path. It is justified
+     * only when the inherited launcher IOP personality is known to be toxic.
+     */
+    sceSifInitRpc(0);
+
+    const uint64_t request_start = sysGetMicroseconds();
+    while (!SifIopReset(NULL, 0)) {
+        if (sysGetMicroseconds() - request_start >=
+                PS2_STORAGE_IOP_RESET_REQUEST_TIMEOUT_USEC) {
+            sysLogPrintf(LOG_ERROR,
+                "IOP: reset request timeout limit=%u us",
+                PS2_STORAGE_IOP_RESET_REQUEST_TIMEOUT_USEC);
+            return -1;
+        }
+        DelayThread(PS2_STORAGE_IOP_RESET_RETRY_USEC);
+    }
+
+    const uint64_t sync_start = sysGetMicroseconds();
+    while (!SifIopSync()) {
+        if (sysGetMicroseconds() - sync_start >=
+                PS2_STORAGE_IOP_RESET_SYNC_TIMEOUT_USEC) {
+            sysLogPrintf(LOG_ERROR,
+                "IOP: reset sync timeout limit=%u us",
+                PS2_STORAGE_IOP_RESET_SYNC_TIMEOUT_USEC);
+            return -2;
+        }
+        DelayThread(PS2_STORAGE_IOP_RESET_RETRY_USEC);
+    }
+
+    sceSifInitRpc(0);
+    SifLoadFileInit();
+
+    sysLogPrintf(LOG_NOTE,
+        "IOP: clean reboot complete; inherited modules/RPC discarded");
+    return 0;
 }
 
 static int ps2StorageEnsureEmbeddedModule(

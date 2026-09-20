@@ -8,9 +8,15 @@ extern "C" {
 #endif
 
 /*
- * Ensure mass: is usable without resetting the IOP. A resident launcher stack
- * is reused. If it is absent, current PS2SDK USBD and USBHDFSD are started from
- * embedded IRX images and enumeration is bounded.
+ * Diagnostic clean-IOP bootstrap. This is a system-personality change: all
+ * inherited IOP module/RPC state is discarded and must be reconstructed.
+ */
+s32 ps2StorageResetIopForCleanBoot(void);
+
+/*
+ * Ensure mass: is usable. A resident launcher stack is reused when present.
+ * After a clean IOP reset this naturally falls back to the project-owned
+ * current-PS2SDK USBD/USBHDFSD pair and bounded enumeration.
  */
 s32 ps2StorageEnsureMass(const char *boot_path);
 

@@ -56,6 +56,8 @@ static void ps2FmcbStartupMarker(u64 color)
 #define PS2_FMCB_COLOR_ARG_SCAN_OK       0x0000ffffULL /* yellow */
 #define PS2_FMCB_COLOR_CRASH_READY       0x0000ff80ULL /* lime */
 #define PS2_FMCB_COLOR_SYSTEM_READY      0x0000ff00ULL /* green */
+#define PS2_FMCB_COLOR_CLEAN_IOP_BEGIN   0x00800080ULL /* purple */
+#define PS2_FMCB_COLOR_CLEAN_IOP_READY   0x00808000ULL /* teal */
 #define PS2_FMCB_COLOR_STORAGE_READY     0x00ffff00ULL /* cyan: mass usable */
 #define PS2_FMCB_COLOR_STORAGE_FAILED    0x00000080ULL /* dark red */
 #define PS2_FMCB_COLOR_FS_INIT_READY     0x00ff8000ULL /* azure */
@@ -170,6 +172,22 @@ int main(int argc, const char **argv)
 	PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_SYSTEM_READY);
 	sysLogPrintf(LOG_NOTE, "runtime: system ready");
 	GAME_STARTUP_CHECKPOINT();
+
+#if PLATFORM_PS2 && defined(PD_PS2_CLEAN_IOP_STARTUP_DIAGNOSTIC)
+	/*
+	 * A/B recovery for launchers that leave PAD/SIO2/RPC in a poisoned state.
+	 * This deliberately throws away the inherited IOP personality before any
+	 * game-owned IOP service is initialized. Storage is rebuilt immediately
+	 * afterwards from embedded current-PS2SDK modules.
+	 */
+	PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_CLEAN_IOP_BEGIN);
+	const s32 clean_iop_result = ps2StorageResetIopForCleanBoot();
+	if (clean_iop_result < 0) {
+		PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_STORAGE_FAILED);
+		sysFatalError("Clean IOP bootstrap failed (%d).", clean_iop_result);
+	}
+	PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_CLEAN_IOP_READY);
+#endif
 
 #if PLATFORM_PS2
 	/*
