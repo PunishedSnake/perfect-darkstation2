@@ -117,3 +117,28 @@ The diagnostic now exposes the first two binds before calling libpad:
 A separate `pd-ps2-game-fmcb-current-pad.elf` build combines the clean IOP A/B
 with embedded current-PS2SDK `sio2man.irx` and `padman.irx`. This tests a
 matched current server/client stack instead of the ROM XSIO2MAN/XPADMAN pair.
+
+
+## SIF/IOP reset handshake refinement
+
+A Purple stop with the controller ANALOG LED still lit occurs before the clean
+IOP helper reaches its previous Teal completion marker. Current PS2SDK
+`sceSifInitRpc(0)` itself contains an unbounded wait for
+`SIF_SREG_RPCINIT`, so the pre-reset RPC handshake is now instrumented
+separately.
+
+Immediately after the main Purple marker:
+
+| Colour | Reset boundary reached |
+| --- | --- |
+| Orange | pre-reset `sceSifInitRpc(0)` returned |
+| White | `SifIopReset()` request was accepted by SIF DMA |
+| Blue | `SifIopSync()` observed IOP BOOTEND |
+| Azure | post-reset `sceSifInitRpc(0)` returned |
+| Teal | `SifLoadFileInit()` returned; clean IOP bootstrap is ready |
+
+A separate `pd-ps2-game-fmcb-direct-reset.elf` skips the pre-reset
+`sceSifInitRpc(0)` entirely and issues `SifIopReset("", 0)` directly.
+Current PS2SDK's `SifIopReset` implementation uses the SIF DMA/register reset
+path rather than RPC, so this A/B tests whether the inherited launch state is
+specifically wedging RPC initialization before the reset can even be sent.
