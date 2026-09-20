@@ -14,6 +14,40 @@
 #define PS2_PAD_RPC_BYTES 256
 #define PS2_PAD_MODE_TABLE_MAX 8
 
+#ifdef PD_PS2_FMCB_STARTUP_DIAGNOSTIC
+static void ps2PadStartupMarker(uint64_t color)
+{
+    *(volatile uint64_t *)0x120000e0 = color;
+
+    uint32_t spins = 40000000u;
+    __asm__ __volatile__(
+        ".set noreorder\n\t"
+        "1:\n\t"
+        "addiu %0, %0, -1\n\t"
+        "bnez %0, 1b\n\t"
+        "nop\n\t"
+        ".set reorder\n\t"
+        : "+r"(spins)
+        :
+        : "memory");
+}
+
+#define PS2_PAD_STARTUP_MARKER(color) ps2PadStartupMarker((uint64_t)(color))
+#else
+#define PS2_PAD_STARTUP_MARKER(color) ((void)0)
+#endif
+
+#define PS2_PAD_DIAG_ENTER          0x00000080ULL /* dark red */
+#define PS2_PAD_DIAG_RPC_READY      0x000000ffULL /* red */
+#define PS2_PAD_DIAG_SIO2_SEARCHED  0x000080ffULL /* orange */
+#define PS2_PAD_DIAG_SIO2_READY     0x0000ffffULL /* yellow */
+#define PS2_PAD_DIAG_PAD_SEARCHED   0x0000ff80ULL /* lime */
+#define PS2_PAD_DIAG_PAD_READY      0x0000ff00ULL /* green */
+#define PS2_PAD_DIAG_PADINIT_READY  0x00ffff00ULL /* cyan */
+#define PS2_PAD_DIAG_PORT0_READY    0x00ff0000ULL /* blue */
+#define PS2_PAD_DIAG_PORT1_READY    0x00ff00ffULL /* magenta */
+#define PS2_PAD_DIAG_BACKEND_READY  0x00ffffffULL /* white */
+
 enum Ps2PadConfigureStage {
     PS2_PAD_STAGE_WAIT_STABLE = 0,
     PS2_PAD_STAGE_WAIT_ANALOG,
@@ -51,6 +85,11 @@ static int s_pad_module_result = -1;
 static int ps2PadEnsureModule(const char *name, const char *rom_path)
 {
     int result = SifSearchModuleByName(name);
+    if (!strcmp(name, "sio2man")) {
+        PS2_PAD_STARTUP_MARKER(PS2_PAD_DIAG_SIO2_SEARCHED);
+    } else if (!strcmp(name, "padman")) {
+        PS2_PAD_STARTUP_MARKER(PS2_PAD_DIAG_PAD_SEARCHED);
+    }
     if (result >= 0) {
         sysLogPrintf(LOG_NOTE,
             "PAD: reuse resident IOP module %s id=%d", name, result);
@@ -252,6 +291,8 @@ bool ps2PadInit(void)
         return true;
     }
 
+    PS2_PAD_STARTUP_MARKER(PS2_PAD_DIAG_ENTER);
+
     memset(s_ports, 0, sizeof(s_ports));
     memset(s_pad_rpc_area, 0, sizeof(s_pad_rpc_area));
     for (int player = 0; player < PS2_PAD_MAX_PLAYERS; ++player) {
@@ -260,6 +301,7 @@ bool ps2PadInit(void)
 
     /* Current PS2SDK padx sample uses the ROM extended SIO2/PAD modules. */
     sceSifInitRpc(0);
+    PS2_PAD_STARTUP_MARKER(PS2_PAD_DIAG_RPC_READY);
 
     s_sio2_module_result =
         ps2PadEnsureModule("sio2man", "rom0:XSIO2MAN");
@@ -267,6 +309,7 @@ bool ps2PadInit(void)
         ps2LogCheckpoint();
         return false;
     }
+    PS2_PAD_STARTUP_MARKER(PS2_PAD_DIAG_SIO2_READY);
 
     s_pad_module_result =
         ps2PadEnsureModule("padman", "rom0:XPADMAN");
@@ -274,6 +317,7 @@ bool ps2PadInit(void)
         ps2LogCheckpoint();
         return false;
     }
+    PS2_PAD_STARTUP_MARKER(PS2_PAD_DIAG_PAD_READY);
 
     if (padInit(0) != 1) {
         sysLogPrintf(LOG_ERROR, "PAD: padInit failed");
@@ -281,6 +325,7 @@ bool ps2PadInit(void)
         return false;
     }
     s_pad_rpc_initialized = true;
+    PS2_PAD_STARTUP_MARKER(PS2_PAD_DIAG_PADINIT_READY);
 
     int opened = 0;
     for (int player = 0; player < PS2_PAD_MAX_PLAYERS; ++player) {
@@ -292,6 +337,12 @@ bool ps2PadInit(void)
         } else {
             sysLogPrintf(LOG_WARNING, "PAD%d: padPortOpen failed", player + 1);
         }
+
+        if (player == 0) {
+            PS2_PAD_STARTUP_MARKER(PS2_PAD_DIAG_PORT0_READY);
+        } else if (player == 1) {
+            PS2_PAD_STARTUP_MARKER(PS2_PAD_DIAG_PORT1_READY);
+        }
     }
 
     s_pad_initialized = opened > 0;
@@ -299,6 +350,7 @@ bool ps2PadInit(void)
         "PAD: backend ready ports=%d/%d scheme=dual-analog shooter",
         opened, PS2_PAD_MAX_PLAYERS);
     ps2LogCheckpoint();
+    PS2_PAD_STARTUP_MARKER(PS2_PAD_DIAG_BACKEND_READY);
     return s_pad_initialized;
 }
 

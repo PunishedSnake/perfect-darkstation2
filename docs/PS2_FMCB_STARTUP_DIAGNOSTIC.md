@@ -43,3 +43,27 @@ isolates the first scan of launcher-supplied argv.
 
 This diagnostic intentionally adds visible stalls and must never be used for
 performance measurements or releases.
+
+
+## PAD refinement
+
+If the filesystem diagnostic reaches **Mint** and then stops before the main
+input marker, the next diagnostic colours are emitted inside `ps2PadInit()`:
+
+| Colour | PAD boundary reached | Next operation |
+| --- | --- | --- |
+| Dark red | entered `ps2PadInit()` | clear local PAD state |
+| Red | `sceSifInitRpc(0)` returned | search resident `sio2man` |
+| Orange | `SifSearchModuleByName("sio2man")` returned | reuse/load SIO2 |
+| Yellow | SIO2 service/module step completed | search resident `padman` |
+| Lime | `SifSearchModuleByName("padman")` returned | reuse/load PADMAN |
+| Green | PADMAN service/module step completed | call `padInit(0)` |
+| Cyan | `padInit(0)` returned successfully | open controller port 0 |
+| Blue | port 0 open attempt returned | open controller port 1 |
+| Magenta | port 1 open attempt returned | finish PAD backend init |
+| White | `ps2PadInit()` is about to return | first `ps2PadUpdate()` follows |
+
+Current PS2SDK `libpad` can wait indefinitely inside `padInit()` while binding
+the expected PAD RPC server. Therefore Green with no Cyan is a particularly
+strong signal that the resident PAD module/service and the current EE libpad
+client do not agree.
