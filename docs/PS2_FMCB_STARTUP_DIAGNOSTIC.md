@@ -18,18 +18,24 @@ game. Note the last clearly visible colour before a hang, reset, or transition.
 | Yellow | first argument scan returned | next operation is `crashInit()`, unless disabled |
 | Lime | crash handler init returned or was skipped | next operation is `sysInit()` |
 | Green | `sysInit()` returned | next operation is mass-storage/SIF bootstrap |
-| Cyan | storage bootstrap returned | next operations are filesystem/config init |
-| Light blue | filesystem and config init completed | next operation is controller/input init |
+| Cyan | storage bootstrap returned success | next operation is `fsInit()` |
+| Dark red | storage bootstrap returned failure/timeout | mass is not usable; next operation is still `fsInit()` |
+| Azure | `fsInit()` returned | next operation is first `fsFileSize(CONFIG_PATH)` / `stat()` |
+| Violet | first config-file `stat()` returned | next operation is `configInit()` |
+| Magenta | `configInit()` returned | next operation may create the default config |
+| White | config-save stage completed or was skipped | next operation is final filesystem/config logging |
+| Mint | filesystem and config init completed | next operation is controller/input init |
 | Blue | `inputInit()` returned | next operation is audio init |
-| Violet | `audioInit()` returned | next operation is ROM-data init |
-| Magenta | ROM init/check completed | next operation is `videoInit()` |
-| White | `videoInit()` returned | game-side initialization continues |
+| Violet (later) | `audioInit()` returned | next operation is ROM-data init |
+| Magenta (later) | ROM init/check completed | next operation is `videoInit()` |
+| White (later) | `videoInit()` returned | game-side initialization continues |
 | Grey | final startup/argument parsing completed | next operation is `mainProc()` |
 
 The markers after `videoInit()` are secondary evidence: once the renderer owns
 the GS display circuits, BGCOLOR visibility depends on the configured PMODE and
-framebuffer. The red-through-magenta markers are the authoritative launch-path
-checkpoints.
+framebuffer. The pre-video markers are the authoritative launch-path checkpoints. The
+diagnostic intentionally reuses some colours later in startup; sequence matters,
+and the filesystem refinement above occurs immediately after green.
 
 Interpret a reset between two colours as a failure in the operation named by
 the earlier colour. For example, orange followed by a reset before yellow

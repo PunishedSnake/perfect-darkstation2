@@ -56,8 +56,13 @@ static void ps2FmcbStartupMarker(u64 color)
 #define PS2_FMCB_COLOR_ARG_SCAN_OK       0x0000ffffULL /* yellow */
 #define PS2_FMCB_COLOR_CRASH_READY       0x0000ff80ULL /* lime */
 #define PS2_FMCB_COLOR_SYSTEM_READY      0x0000ff00ULL /* green */
-#define PS2_FMCB_COLOR_STORAGE_READY     0x00ffff00ULL /* cyan */
-#define PS2_FMCB_COLOR_FILES_READY       0x00ff8000ULL /* light blue */
+#define PS2_FMCB_COLOR_STORAGE_READY     0x00ffff00ULL /* cyan: mass usable */
+#define PS2_FMCB_COLOR_STORAGE_FAILED    0x00000080ULL /* dark red */
+#define PS2_FMCB_COLOR_FS_INIT_READY     0x00ff8000ULL /* azure */
+#define PS2_FMCB_COLOR_CONFIG_STAT_READY 0x00ff0080ULL /* violet */
+#define PS2_FMCB_COLOR_CONFIG_LOAD_READY 0x00ff00ffULL /* magenta */
+#define PS2_FMCB_COLOR_CONFIG_SAVE_READY 0x00ffffffULL /* white */
+#define PS2_FMCB_COLOR_FILES_READY       0x0080ff00ULL /* mint */
 #define PS2_FMCB_COLOR_INPUT_READY       0x00ff0000ULL /* blue */
 #define PS2_FMCB_COLOR_AUDIO_READY       0x00ff0080ULL /* violet */
 #define PS2_FMCB_COLOR_ROM_READY         0x00ff00ffULL /* magenta */
@@ -178,18 +183,23 @@ int main(int argc, const char **argv)
 	sysLogPrintf(mass_result >= 0 ? LOG_NOTE : LOG_WARNING,
 		"runtime: mass storage bootstrap result=%d", mass_result);
 	GAME_STARTUP_CHECKPOINT();
-	PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_STORAGE_READY);
+	PS2_FMCB_STARTUP_MARKER(
+		mass_result >= 0 ? PS2_FMCB_COLOR_STORAGE_READY
+		                 : PS2_FMCB_COLOR_STORAGE_FAILED);
 #endif
 
 	if (fsInit() < 0) {
 		sysFatalError("Filesystem initialisation failed.");
 	}
+	PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_FS_INIT_READY);
 
 #if PLATFORM_PS2
 	const s32 initial_config_size = fsFileSize(CONFIG_PATH);
+	PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_CONFIG_STAT_READY);
 #endif
 
 	configInit();
+	PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_CONFIG_LOAD_READY);
 
 #if PLATFORM_PS2
 	/*
@@ -207,6 +217,7 @@ int main(int argc, const char **argv)
 			initial_config_size);
 		GAME_STARTUP_CHECKPOINT();
 	}
+	PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_CONFIG_SAVE_READY);
 #endif
 
 	sysLogPrintf(LOG_NOTE, "runtime: filesystem and configuration ready");
