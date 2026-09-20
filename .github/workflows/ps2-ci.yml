@@ -48,7 +48,11 @@ jobs:
     name: Build and test PS2 port
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/ps2dev/ps2dev:latest
+      # Pin the exact image used by hardware-known-good CI run #60.
+      # `latest` moved between runs #60 and #61 without any repository change
+      # to the toolchain contract, making real-hardware regressions impossible
+      # to attribute cleanly.
+      image: ghcr.io/ps2dev/ps2dev@sha256:318461c8814a47a1bdf1f6e179cd859f981c3e65e0be3529cd91b9828254e8a6
       options: --user 0
     timeout-minutes: 15
 
@@ -64,6 +68,7 @@ jobs:
           {
             echo "repository_sha=$GITHUB_SHA"
             echo "repository_ref=$GITHUB_REF"
+            echo "ps2dev_image=ghcr.io/ps2dev/ps2dev@sha256:318461c8814a47a1bdf1f6e179cd859f981c3e65e0be3529cd91b9828254e8a6"
             echo "default_profile=Og"
             echo "optional_comparison_profile=O2"
             echo "ps2dev=$PS2DEV"
