@@ -4,6 +4,7 @@
 
 #include <libpad.h>
 #include <loadfile.h>
+#include <sbv_patches.h>
 #include <sifrpc.h>
 
 #include "log_ps2.h"
@@ -43,6 +44,8 @@ static void ps2PadStartupMarker(uint64_t color)
 #define PS2_PAD_DIAG_SIO2_READY     0x0000ffffULL /* yellow */
 #define PS2_PAD_DIAG_PAD_SEARCHED   0x0000ff80ULL /* lime */
 #define PS2_PAD_DIAG_PAD_READY      0x0000ff00ULL /* green */
+#define PS2_PAD_DIAG_RPC1_READY     0x00808000ULL /* teal */
+#define PS2_PAD_DIAG_RPC2_READY     0x00ff80ffULL /* pink */
 #define PS2_PAD_DIAG_PADINIT_READY  0x00ffff00ULL /* cyan */
 #define PS2_PAD_DIAG_PORT0_READY    0x00ff0000ULL /* blue */
 #define PS2_PAD_DIAG_PORT1_READY    0x00ff00ffULL /* magenta */
@@ -81,6 +84,77 @@ static bool s_pad_rpc_initialized;
 static bool s_pad_initialized;
 static int s_sio2_module_result = -1;
 static int s_pad_module_result = -1;
+
+#ifdef PD_PS2_CURRENT_PAD_IRX_DIAGNOSTIC
+extern unsigned char sio2man_irx[] __attribute__((aligned(16)));
+extern unsigned int size_sio2man_irx;
+extern unsigned char padman_irx[] __attribute__((aligned(16)));
+extern unsigned int size_padman_irx;
+#endif
+
+#ifdef PD_PS2_FMCB_STARTUP_DIAGNOSTIC
+static void ps2PadProbeRpcRegistration(void)
+{
+    static const uint32_t rpc1_ids[2] = { 0x80000100u, 0x8000010fu };
+    static const uint32_t rpc2_ids[2] = { 0x80000101u, 0x8000011fu };
+    SifRpcClientData_t first[2] __attribute__((aligned(64)));
+    SifRpcClientData_t second __attribute__((aligned(64)));
+    int selected = -1;
+
+    memset(first, 0, sizeof(first));
+    memset(&second, 0, sizeof(second));
+
+    /*
+     * Mirror current PS2SDK libpad's bind order, but expose the two otherwise
+     * invisible wait points as separate hardware-visible markers.
+     */
+    for (;;) {
+        for (int i = 0; i < 2; ++i) {
+            if (sceSifBindRpc(&first[i], rpc1_ids[i], 0) < 0) {
+                continue;
+            }
+            if (first[i].server != NULL) {
+                selected = i;
+                break;
+            }
+        }
+        if (selected >= 0) {
+            break;
+        }
+    }
+    PS2_PAD_STARTUP_MARKER(PS2_PAD_DIAG_RPC1_READY);
+
+    while (second.server == NULL) {
+        if (sceSifBindRpc(&second, rpc2_ids[selected], 0) < 0) {
+            continue;
+        }
+    }
+    PS2_PAD_STARTUP_MARKER(PS2_PAD_DIAG_RPC2_READY);
+}
+#endif
+
+#ifdef PD_PS2_CURRENT_PAD_IRX_DIAGNOSTIC
+static int ps2PadExecCurrentModule(
+    const char *name, unsigned char *image, unsigned int image_size)
+{
+    int module_result = 0;
+    const int result = SifExecModuleBuffer(
+        image, image_size, 0, NULL, &module_result);
+
+    if (result >= 0) {
+        sysLogPrintf(LOG_NOTE,
+            "PAD: executed embedded current %s id=%d start_result=%d bytes=%u",
+            name, result, module_result, image_size);
+        return result;
+    }
+
+    const int resident = SifSearchModuleByName(name);
+    sysLogPrintf(resident >= 0 ? LOG_WARNING : LOG_ERROR,
+        "PAD: embedded current %s load result=%d start_result=%d resident=%d",
+        name, result, module_result, resident);
+    return resident >= 0 ? resident : result;
+}
+#endif
 
 static int ps2PadEnsureModule(const char *name, const char *rom_path)
 {
@@ -303,21 +377,36 @@ bool ps2PadInit(void)
     sceSifInitRpc(0);
     PS2_PAD_STARTUP_MARKER(PS2_PAD_DIAG_RPC_READY);
 
+#ifdef PD_PS2_CURRENT_PAD_IRX_DIAGNOSTIC
+    sbv_patch_enable_lmb();
+    s_sio2_module_result =
+        ps2PadExecCurrentModule("sio2man", sio2man_irx, size_sio2man_irx);
+#else
     s_sio2_module_result =
         ps2PadEnsureModule("sio2man", "rom0:XSIO2MAN");
+#endif
     if (s_sio2_module_result < 0) {
         ps2LogCheckpoint();
         return false;
     }
     PS2_PAD_STARTUP_MARKER(PS2_PAD_DIAG_SIO2_READY);
 
+#ifdef PD_PS2_CURRENT_PAD_IRX_DIAGNOSTIC
+    s_pad_module_result =
+        ps2PadExecCurrentModule("padman", padman_irx, size_padman_irx);
+#else
     s_pad_module_result =
         ps2PadEnsureModule("padman", "rom0:XPADMAN");
+#endif
     if (s_pad_module_result < 0) {
         ps2LogCheckpoint();
         return false;
     }
     PS2_PAD_STARTUP_MARKER(PS2_PAD_DIAG_PAD_READY);
+
+#ifdef PD_PS2_FMCB_STARTUP_DIAGNOSTIC
+    ps2PadProbeRpcRegistration();
+#endif
 
     if (padInit(0) != 1) {
         sysLogPrintf(LOG_ERROR, "PAD: padInit failed");

@@ -95,3 +95,25 @@ Additional colours:
 This is an A/B recovery experiment, not yet the default runtime policy. An IOP
 reboot is a system-personality change: inherited modules, heaps, drivers and RPC
 bindings are invalidated and every required service must be rebuilt.
+
+
+## PAD RPC endpoint refinement
+
+Current PS2SDK libpad hides three distinct operations inside `padInit()`:
+
+1. bind PAD RPC endpoint #1 (new 0x80000100 or old 0x8000010f),
+2. bind the matching endpoint #2 (0x80000101 or 0x8000011f),
+3. issue the PAD INIT RPC for the new protocol.
+
+The diagnostic now exposes the first two binds before calling libpad:
+
+| Last colour | Meaning |
+| --- | --- |
+| Green | PAD module load returned, but RPC endpoint #1 has not appeared |
+| Teal | endpoint #1 is bindable; waiting for endpoint #2 |
+| Pink | both PAD RPC endpoints are bindable; any later hang is inside libpad/PAD INIT |
+| Cyan | libpad `padInit(0)` returned |
+
+A separate `pd-ps2-game-fmcb-current-pad.elf` build combines the clean IOP A/B
+with embedded current-PS2SDK `sio2man.irx` and `padman.irx`. This tests a
+matched current server/client stack instead of the ROM XSIO2MAN/XPADMAN pair.

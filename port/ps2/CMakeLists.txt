@@ -73,9 +73,17 @@ option(PD_PS2_CLEAN_IOP_STARTUP_DIAGNOSTIC
   "Discard inherited IOP state before PS2 runtime service bootstrap"
   OFF
 )
+option(PD_PS2_CURRENT_PAD_IRX_DIAGNOSTIC
+  "Use embedded current-PS2SDK sio2man/padman instead of ROM X modules"
+  OFF
+)
 if(PD_PS2_CLEAN_IOP_STARTUP_DIAGNOSTIC AND NOT PD_PS2_FMCB_STARTUP_DIAGNOSTIC)
   message(FATAL_ERROR
     "PD_PS2_CLEAN_IOP_STARTUP_DIAGNOSTIC requires PD_PS2_FMCB_STARTUP_DIAGNOSTIC")
+endif()
+if(PD_PS2_CURRENT_PAD_IRX_DIAGNOSTIC AND NOT PD_PS2_CLEAN_IOP_STARTUP_DIAGNOSTIC)
+  message(FATAL_ERROR
+    "PD_PS2_CURRENT_PAD_IRX_DIAGNOSTIC requires clean-IOP startup diagnostic")
 endif()
 if(PD_PS2_ALPHA_TRILERP_DIAGNOSTIC AND PD_PS2_VU1_COLOR_DIAGNOSTIC)
   message(FATAL_ERROR "Select one hardware diagnostic per build directory")
@@ -180,8 +188,11 @@ set(PD_PS2_AUDSRV_IRX_C
 
 set(PD_PS2_USBD_IRX "$ENV{PS2SDK}/iop/irx/usbd.irx")
 set(PD_PS2_USBHDFSD_IRX "$ENV{PS2SDK}/iop/irx/usbhdfsd.irx")
+set(PD_PS2_SIO2MAN_IRX "$ENV{PS2SDK}/iop/irx/sio2man.irx")
+set(PD_PS2_PADMAN_IRX "$ENV{PS2SDK}/iop/irx/padman.irx")
 foreach(PD_PS2_STORAGE_IRX IN ITEMS
-    "${PD_PS2_USBD_IRX}" "${PD_PS2_USBHDFSD_IRX}")
+    "${PD_PS2_USBD_IRX}" "${PD_PS2_USBHDFSD_IRX}"
+    "${PD_PS2_SIO2MAN_IRX}" "${PD_PS2_PADMAN_IRX}")
   if(NOT EXISTS "${PD_PS2_STORAGE_IRX}")
     message(FATAL_ERROR
       "Current PS2SDK storage IRX not found: ${PD_PS2_STORAGE_IRX}")
@@ -193,6 +204,12 @@ set(PD_PS2_USBD_IRX_C
 )
 set(PD_PS2_USBHDFSD_IRX_C
   "${CMAKE_CURRENT_BINARY_DIR}/generated/usbhdfsd_irx.c"
+)
+set(PD_PS2_SIO2MAN_IRX_C
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/sio2man_irx.c"
+)
+set(PD_PS2_PADMAN_IRX_C
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/padman_irx.c"
 )
 add_custom_command(
   OUTPUT "${PD_PS2_AUDSRV_IRX_C}"
@@ -229,9 +246,31 @@ add_custom_command(
   COMMENT "Embedding PS2SDK usbhdfsd.irx for launcher-independent mass storage"
   VERBATIM
 )
+add_custom_command(
+  OUTPUT "${PD_PS2_SIO2MAN_IRX_C}"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  COMMAND "${PD_PS2_BIN2C}"
+    "${PD_PS2_SIO2MAN_IRX}" "${PD_PS2_SIO2MAN_IRX_C}" sio2man_irx
+  DEPENDS "${PD_PS2_SIO2MAN_IRX}"
+  COMMENT "Embedding current PS2SDK sio2man.irx for PAD A/B"
+  VERBATIM
+)
+add_custom_command(
+  OUTPUT "${PD_PS2_PADMAN_IRX_C}"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  COMMAND "${PD_PS2_BIN2C}"
+    "${PD_PS2_PADMAN_IRX}" "${PD_PS2_PADMAN_IRX_C}" padman_irx
+  DEPENDS "${PD_PS2_PADMAN_IRX}"
+  COMMENT "Embedding current PS2SDK padman.irx for PAD A/B"
+  VERBATIM
+)
 set_source_files_properties(
   "${PD_PS2_USBD_IRX_C}"
   "${PD_PS2_USBHDFSD_IRX_C}"
+  "${PD_PS2_SIO2MAN_IRX_C}"
+  "${PD_PS2_PADMAN_IRX_C}"
   PROPERTIES GENERATED TRUE
 )
 
@@ -769,6 +808,8 @@ set(PD_PS2_GAME_RUNTIME_SOURCES
   "${PD_PS2_AUDSRV_IRX_C}"
   "${PD_PS2_USBD_IRX_C}"
   "${PD_PS2_USBHDFSD_IRX_C}"
+  "${PD_PS2_SIO2MAN_IRX_C}"
+  "${PD_PS2_PADMAN_IRX_C}"
   video_ps2.c
   input_ps2.c
   input_ps2_map.c
@@ -903,6 +944,11 @@ if(PD_PS2_CLEAN_IOP_STARTUP_DIAGNOSTIC)
     PD_PS2_CLEAN_IOP_STARTUP_DIAGNOSTIC=1
   )
 endif()
+if(PD_PS2_CURRENT_PAD_IRX_DIAGNOSTIC)
+  target_compile_definitions(pd_ps2_game PRIVATE
+    PD_PS2_CURRENT_PAD_IRX_DIAGNOSTIC=1
+  )
+endif()
 target_link_directories(pd_ps2_game PRIVATE "${GSKIT}/lib")
 set(PD_PS2_GAME_LINK_MAP "${CMAKE_CURRENT_BINARY_DIR}/pd-ps2-game.map")
 target_link_options(pd_ps2_game PRIVATE
@@ -911,7 +957,12 @@ target_link_options(pd_ps2_game PRIVATE
 )
 target_link_libraries(pd_ps2_game PRIVATE
   gskit dmakit padx z audsrv -ldebug patches kernel m)
-if(PD_PS2_CLEAN_IOP_STARTUP_DIAGNOSTIC)
+if(PD_PS2_CURRENT_PAD_IRX_DIAGNOSTIC)
+  set_target_properties(pd_ps2_game PROPERTIES
+    OUTPUT_NAME "pd-ps2-game-fmcb-current-pad"
+    SUFFIX ".elf"
+  )
+elseif(PD_PS2_CLEAN_IOP_STARTUP_DIAGNOSTIC)
   set_target_properties(pd_ps2_game PROPERTIES
     OUTPUT_NAME "pd-ps2-game-fmcb-clean-iop"
     SUFFIX ".elf"
