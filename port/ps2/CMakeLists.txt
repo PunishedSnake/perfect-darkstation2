@@ -491,6 +491,78 @@ set_target_properties(pd_ps2_audio_diag PROPERTIES
   SUFFIX ".elf"
 )
 
+# FMCB/ExecPS2 loader probes. These deliberately avoid the game runtime so a
+# black-screen launch can be separated into loader, CRT and load-image-size
+# failures on real hardware.
+set(PD_PS2_LOADER_PROBE_RAW_OBJ
+  "${CMAKE_CURRENT_BINARY_DIR}/loader-probe-raw.o")
+set(PD_PS2_LOADER_PROBE_RAW_ELF
+  "${CMAKE_CURRENT_BINARY_DIR}/pd-ps2-loader-probe-raw.elf")
+set(PD_PS2_LOADER_PROBE_LARGE_OBJ
+  "${CMAKE_CURRENT_BINARY_DIR}/loader-probe-large.o")
+set(PD_PS2_LOADER_PROBE_LARGE_ELF
+  "${CMAKE_CURRENT_BINARY_DIR}/pd-ps2-loader-probe-large.elf")
+
+add_custom_command(
+  OUTPUT "${PD_PS2_LOADER_PROBE_RAW_OBJ}"
+  COMMAND "${CMAKE_C_COMPILER}" -c -x assembler-with-cpp -G0
+    "${CMAKE_CURRENT_LIST_DIR}/loader_probe_raw.S"
+    -o "${PD_PS2_LOADER_PROBE_RAW_OBJ}"
+  DEPENDS "${CMAKE_CURRENT_LIST_DIR}/loader_probe_raw.S"
+  VERBATIM
+)
+add_custom_command(
+  OUTPUT "${PD_PS2_LOADER_PROBE_RAW_ELF}"
+  COMMAND "${CMAKE_C_COMPILER}"
+    -nostdlib -nostartfiles -nodefaultlibs -G0
+    -Wl,-zmax-page-size=128
+    "-Wl,-T,${CMAKE_CURRENT_LIST_DIR}/loader_probe.ld"
+    -Wl,-e,_start
+    "${PD_PS2_LOADER_PROBE_RAW_OBJ}"
+    -o "${PD_PS2_LOADER_PROBE_RAW_ELF}"
+  DEPENDS "${PD_PS2_LOADER_PROBE_RAW_OBJ}"
+    "${CMAKE_CURRENT_LIST_DIR}/loader_probe.ld"
+  VERBATIM
+)
+
+add_custom_command(
+  OUTPUT "${PD_PS2_LOADER_PROBE_LARGE_OBJ}"
+  COMMAND "${CMAKE_C_COMPILER}" -c -x assembler-with-cpp -G0
+    "${CMAKE_CURRENT_LIST_DIR}/loader_probe_large.S"
+    -o "${PD_PS2_LOADER_PROBE_LARGE_OBJ}"
+  DEPENDS "${CMAKE_CURRENT_LIST_DIR}/loader_probe_large.S"
+  VERBATIM
+)
+add_custom_command(
+  OUTPUT "${PD_PS2_LOADER_PROBE_LARGE_ELF}"
+  COMMAND "${CMAKE_C_COMPILER}"
+    -nostdlib -nostartfiles -nodefaultlibs -G0
+    -Wl,-zmax-page-size=128
+    "-Wl,-T,${CMAKE_CURRENT_LIST_DIR}/loader_probe.ld"
+    -Wl,-e,_start
+    "${PD_PS2_LOADER_PROBE_LARGE_OBJ}"
+    -o "${PD_PS2_LOADER_PROBE_LARGE_ELF}"
+  DEPENDS "${PD_PS2_LOADER_PROBE_LARGE_OBJ}"
+    "${CMAKE_CURRENT_LIST_DIR}/loader_probe.ld"
+  VERBATIM
+)
+
+add_executable(pd_ps2_loader_probe_crt EXCLUDE_FROM_ALL
+  loader_probe_crt.c
+)
+target_compile_options(pd_ps2_loader_probe_crt PRIVATE -Og -G0)
+set_target_properties(pd_ps2_loader_probe_crt PROPERTIES
+  OUTPUT_NAME "pd-ps2-loader-probe-crt"
+  SUFFIX ".elf"
+)
+
+add_custom_target(pd_ps2_loader_probes
+  DEPENDS
+    "${PD_PS2_LOADER_PROBE_RAW_ELF}"
+    "${PD_PS2_LOADER_PROBE_LARGE_ELF}"
+    pd_ps2_loader_probe_crt
+)
+
 if(PD_PS2_ALPHA_TRILERP_DIAGNOSTIC)
   set(PD_PS2_BOOTSTRAP_OUTPUT_NAME "pd-ps2-alpha-trilerp-diag")
 elseif(PD_PS2_VU1_COLOR_DIAGNOSTIC)

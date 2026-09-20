@@ -425,6 +425,18 @@ jobs:
       - name: Build PS2 bootstrap
         run: cmake --build build-ps2 -j2 --verbose
 
+      - name: Build FMCB loader probes
+        run: |
+          cmake --build build-ps2 --target pd_ps2_loader_probes -j2 --verbose
+          for elf in \
+            build-ps2/pd-ps2-loader-probe-raw.elf \
+            build-ps2/pd-ps2-loader-probe-crt.elf \
+            build-ps2/pd-ps2-loader-probe-large.elf; do
+            test -s "$elf"
+            echo "===== $elf ====="
+            mips64r5900el-ps2-elf-readelf -h -lW "$elf"
+          done
+
       - name: Build full Perfect Dark PS2 runtime
         run: cmake --build build-ps2 --target pd_ps2_game -j2 --verbose
 
@@ -486,6 +498,18 @@ jobs:
           test -z "$(mips64r5900el-ps2-elf-nm -u build-ps2-o2/pd-ps2-game.elf)"
           mips64r5900el-ps2-elf-size -A build-ps2-o2/pd-ps2-game.elf > \
             build-ps2-o2/pd-ps2-game.sections.txt
+
+      - name: Upload FMCB loader probes
+        uses: actions/upload-artifact@v7
+        with:
+          name: pd-ps2-loader-probes
+          path: |
+            build-ps2/pd-ps2-loader-probe-raw.elf
+            build-ps2/pd-ps2-loader-probe-crt.elf
+            build-ps2/pd-ps2-loader-probe-large.elf
+            docs/PS2_FMCB_LOADER_PROBE.md
+          if-no-files-found: error
+          retention-days: 3
 
       - name: Upload full game ELF
         uses: actions/upload-artifact@v7
