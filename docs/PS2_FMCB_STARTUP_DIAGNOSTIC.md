@@ -140,3 +140,25 @@ and audio startup have therefore both completed; the next boundary is
 
 A stop on Green specifically isolates the streamed RZIP inflate and its repeated
 file-backed reads/decompression.
+
+
+## ROM source-open refinement
+
+A real-hardware run reached the ROM-level Red marker and did not reach the
+previous source-open completion marker. The pre-open path is now split into a
+dedicated source-open cycle:
+
+| Colour | Boundary reached |
+| --- | --- |
+| Red | entered `romdataInit()` |
+| Orange | argv/ROM segment policy setup completed; entering `romdataLoadRom()` |
+| Yellow | ROM path resolved, prior source closed, about to call `fopen()` |
+| Lime | `fopen(path, "rb")` returned a valid `FILE *` |
+| Green | `fseek(..., SEEK_END)` returned |
+| Cyan | `ftell()` returned a valid 32-bit file size |
+| Blue | rewind `fseek(..., SEEK_SET)` returned |
+| Magenta | ROM read cache allocated/reset; `romSourceOpenFile()` can return |
+| White | caller observed successful `romSourceOpenFile()` |
+
+This deliberately distinguishes a path/setup stall from newlib stdio or the
+mass-backed seek/size operations.

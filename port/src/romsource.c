@@ -10,6 +10,34 @@
 
 #include "romsource.h"
 
+#if defined(PLATFORM_PS2) && defined(PD_PS2_FMCB_STARTUP_DIAGNOSTIC)
+static void romSourceStartupMarker(uint64_t color)
+{
+	*(volatile uint64_t *)0x120000e0 = color;
+
+	uint32_t spins = 40000000u;
+	__asm__ __volatile__(
+		".set noreorder\n\t"
+		"1:\n\t"
+		"addiu %0, %0, -1\n\t"
+		"bnez %0, 1b\n\t"
+		"nop\n\t"
+		".set reorder\n\t"
+		: "+r"(spins)
+		:
+		: "memory");
+}
+#define ROMSOURCE_STARTUP_MARKER(color) romSourceStartupMarker((uint64_t)(color))
+#else
+#define ROMSOURCE_STARTUP_MARKER(color) ((void)0)
+#endif
+
+#define ROMSOURCE_DIAG_FOPEN_READY   UINT64_C(0x0000ff80) /* lime */
+#define ROMSOURCE_DIAG_SEEK_END      UINT64_C(0x0000ff00) /* green */
+#define ROMSOURCE_DIAG_SIZE_READY    UINT64_C(0x00ffff00) /* cyan */
+#define ROMSOURCE_DIAG_REWIND_READY  UINT64_C(0x00ff0000) /* blue */
+#define ROMSOURCE_DIAG_CACHE_READY   UINT64_C(0x00ff00ff) /* magenta */
+
 #define ROMSOURCE_FILE_CACHE_LINE_SIZE (4u * 1024u)
 #define ROMSOURCE_FILE_CACHE_SIZE \
 	(ROMSOURCE_FILE_CACHE_SLOTS * ROMSOURCE_FILE_CACHE_LINE_SIZE)
@@ -75,22 +103,26 @@ bool romSourceOpenFile(struct romsource *source, const char *path)
 	if (!file) {
 		return false;
 	}
+	ROMSOURCE_STARTUP_MARKER(ROMSOURCE_DIAG_FOPEN_READY);
 
 	if (fseek(file, 0, SEEK_END) != 0) {
 		fclose(file);
 		return false;
 	}
+	ROMSOURCE_STARTUP_MARKER(ROMSOURCE_DIAG_SEEK_END);
 
 	const long fileSize = ftell(file);
 	if (fileSize < 0 || (unsigned long)fileSize > 0xfffffffful) {
 		fclose(file);
 		return false;
 	}
+	ROMSOURCE_STARTUP_MARKER(ROMSOURCE_DIAG_SIZE_READY);
 
 	if (fseek(file, 0, SEEK_SET) != 0) {
 		fclose(file);
 		return false;
 	}
+	ROMSOURCE_STARTUP_MARKER(ROMSOURCE_DIAG_REWIND_READY);
 
 	source->kind = ROMSOURCE_FILE;
 	source->memory = NULL;
@@ -98,6 +130,7 @@ bool romSourceOpenFile(struct romsource *source, const char *path)
 	source->size = (u32)fileSize;
 	source->read_cache = romSourceAllocCache();
 	romSourceResetCache(source);
+	ROMSOURCE_STARTUP_MARKER(ROMSOURCE_DIAG_CACHE_READY);
 
 	return true;
 }

@@ -40,15 +40,17 @@ static void romdataStartupMarker(u64 color)
 #define ROMDATA_STARTUP_MARKER(color) ((void)0)
 #endif
 
-#define ROMDATA_DIAG_ENTER          0x000000ffULL
-#define ROMDATA_DIAG_SOURCE_OPEN    0x000080ffULL
-#define ROMDATA_DIAG_HEADER_VALID   0x0000ffffULL
-#define ROMDATA_DIAG_RZIP_READY     0x0000ff80ULL
-#define ROMDATA_DIAG_ALLOC_READY    0x0000ff00ULL
-#define ROMDATA_DIAG_INFLATE_READY  0x00ffff00ULL
-#define ROMDATA_DIAG_SEGMENTS_READY 0x00ff0000ULL
-#define ROMDATA_DIAG_FILES_READY    0x00ff00ffULL
-#define ROMDATA_DIAG_RETURN         0x00ffffffULL
+#define ROMDATA_DIAG_ENTER          0x000000ffULL /* red */
+#define ROMDATA_DIAG_PRE_OPEN       0x000080ffULL /* orange */
+#define ROMDATA_DIAG_CALL_OPEN      0x0000ffffULL /* yellow */
+#define ROMDATA_DIAG_SOURCE_OPEN    0x00ffffffULL /* white: romSourceOpenFile returned */
+#define ROMDATA_DIAG_HEADER_VALID   0x0000ff80ULL /* lime */
+#define ROMDATA_DIAG_RZIP_READY     0x0000ff00ULL /* green */
+#define ROMDATA_DIAG_ALLOC_READY    0x00ffff00ULL /* cyan */
+#define ROMDATA_DIAG_INFLATE_READY  0x00ff0000ULL /* blue */
+#define ROMDATA_DIAG_SEGMENTS_READY 0x00ff00ffULL /* magenta */
+#define ROMDATA_DIAG_FILES_READY    0x00808080ULL /* grey */
+#define ROMDATA_DIAG_RETURN         0x00ffffffULL /* white */
 #else
 #define ROMDATA_CHECKPOINT() ((void)0)
 #define ROMDATA_STARTUP_MARKER(color) ((void)0)
@@ -317,6 +319,7 @@ static inline void romdataLoadRom(void)
 
 	sysLogPrintf(LOG_NOTE, "ROM source: opening %s", path);
 	ROMDATA_CHECKPOINT();
+	ROMDATA_STARTUP_MARKER(ROMDATA_DIAG_CALL_OPEN);
 	if (!romSourceOpenFile(&romSource, path)) {
 		sysFatalError("Could not open ROM file %s.\nEnsure that it is in the %s directory.", romName, fsFullPath(""));
 	}
@@ -844,6 +847,7 @@ s32 romdataInit(void)
 		seg->streamed = romdataSegmentShouldStream(seg);
 #endif
 	}
+	ROMDATA_STARTUP_MARKER(ROMDATA_DIAG_PRE_OPEN);
 
 	romdataLoadRom();
 	ROMDATA_CHECKPOINT();
