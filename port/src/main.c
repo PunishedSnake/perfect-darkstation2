@@ -20,6 +20,7 @@
 
 #ifdef PLATFORM_PS2
 #include "log_ps2.h"
+#include "storage_ps2.h"
 #define GAME_STARTUP_CHECKPOINT() ps2LogCheckpointForce()
 #else
 #define GAME_STARTUP_CHECKPOINT() ((void)0)
@@ -111,6 +112,21 @@ int main(int argc, const char **argv)
 	sysInit();
 	sysLogPrintf(LOG_NOTE, "runtime: system ready");
 	GAME_STARTUP_CHECKPOINT();
+
+#if PLATFORM_PS2
+	/*
+	 * The ROM and configuration are commonly next to an ELF launched from
+	 * mass:. Do not make that storage service an undocumented property of the
+	 * parent launcher. Reuse a working inherited stack, otherwise provide the
+	 * current PS2SDK USBD/USBHDFSD pair without resetting the IOP.
+	 */
+	const s32 mass_result = ps2StorageEnsureMass(
+		argc > 0 && argv ? argv[0] : NULL);
+	sysLogPrintf(mass_result >= 0 ? LOG_NOTE : LOG_WARNING,
+		"runtime: mass storage bootstrap result=%d", mass_result);
+	GAME_STARTUP_CHECKPOINT();
+#endif
+
 	if (fsInit() < 0) {
 		sysFatalError("Filesystem initialisation failed.");
 	}

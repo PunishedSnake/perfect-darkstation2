@@ -165,6 +165,23 @@ endif()
 set(PD_PS2_AUDSRV_IRX_C
   "${CMAKE_CURRENT_BINARY_DIR}/generated/audsrv_irx.c"
 )
+
+set(PD_PS2_USBD_IRX "$ENV{PS2SDK}/iop/irx/usbd.irx")
+set(PD_PS2_USBHDFSD_IRX "$ENV{PS2SDK}/iop/irx/usbhdfsd.irx")
+foreach(PD_PS2_STORAGE_IRX IN ITEMS
+    "${PD_PS2_USBD_IRX}" "${PD_PS2_USBHDFSD_IRX}")
+  if(NOT EXISTS "${PD_PS2_STORAGE_IRX}")
+    message(FATAL_ERROR
+      "Current PS2SDK storage IRX not found: ${PD_PS2_STORAGE_IRX}")
+  endif()
+endforeach()
+
+set(PD_PS2_USBD_IRX_C
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/usbd_irx.c"
+)
+set(PD_PS2_USBHDFSD_IRX_C
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/usbhdfsd_irx.c"
+)
 add_custom_command(
   OUTPUT "${PD_PS2_AUDSRV_IRX_C}"
   COMMAND "${CMAKE_COMMAND}" -E make_directory
@@ -177,6 +194,32 @@ add_custom_command(
 )
 set_source_files_properties(
   "${PD_PS2_AUDSRV_IRX_C}"
+  PROPERTIES GENERATED TRUE
+)
+
+add_custom_command(
+  OUTPUT "${PD_PS2_USBD_IRX_C}"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  COMMAND "${PD_PS2_BIN2C}"
+    "${PD_PS2_USBD_IRX}" "${PD_PS2_USBD_IRX_C}" usbd_irx
+  DEPENDS "${PD_PS2_USBD_IRX}"
+  COMMENT "Embedding PS2SDK usbd.irx for launcher-independent mass storage"
+  VERBATIM
+)
+add_custom_command(
+  OUTPUT "${PD_PS2_USBHDFSD_IRX_C}"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  COMMAND "${PD_PS2_BIN2C}"
+    "${PD_PS2_USBHDFSD_IRX}" "${PD_PS2_USBHDFSD_IRX_C}" usbhdfsd_irx
+  DEPENDS "${PD_PS2_USBHDFSD_IRX}"
+  COMMENT "Embedding PS2SDK usbhdfsd.irx for launcher-independent mass storage"
+  VERBATIM
+)
+set_source_files_properties(
+  "${PD_PS2_USBD_IRX_C}"
+  "${PD_PS2_USBHDFSD_IRX_C}"
   PROPERTIES GENERATED TRUE
 )
 
@@ -635,10 +678,13 @@ set(PD_PS2_GAME_RUNTIME_SOURCES
   "${PD_ROOT}/port/src/utils.c"
   ${PD_PS2_PREPROCESS_SOURCES}
   system_ps2.c
+  storage_ps2.c
   fast_math_ps2.c
   audio_ps2.c
   audio_ps2_queue.c
   "${PD_PS2_AUDSRV_IRX_C}"
+  "${PD_PS2_USBD_IRX_C}"
+  "${PD_PS2_USBHDFSD_IRX_C}"
   video_ps2.c
   input_ps2.c
   input_ps2_map.c
