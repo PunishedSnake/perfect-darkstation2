@@ -15,6 +15,7 @@
 #include "memory_budget.h"
 #include "system.h"
 #include "log_ps2.h"
+#include "path_ps2.h"
 
 #define USEC_IN_SEC 1000000ULL
 #define LOG_FNAME "pdps2.log"
@@ -70,6 +71,16 @@ static void pathBaseFromArgv0(char *outPath, u32 outLen)
     if (sysArgc > 0 && sysArgv && sysArgv[0] && sysArgv[0][0]) {
         strncpy(outPath, sysArgv[0], outLen - 1);
         outPath[outLen - 1] = '\0';
+
+#ifdef PD_PS2_FORCE_LEGACY_MASS0_ALIAS_DIAGNOSTIC
+        /*
+         * HIPOTEZA DO TESTU:
+         * R3Z supplies mass0:/... while direct FMCB can preserve mass:/....
+         * Canonicalise only argv[0]-derived executable/home paths so explicit
+         * user --basedir/--rom-file arguments keep their exact semantics.
+         */
+        (void)ps2PathCanonicalizeMass0ToLegacy(outPath);
+#endif
 
         char *lastSlash = strrchr(outPath, '/');
         if (lastSlash) {

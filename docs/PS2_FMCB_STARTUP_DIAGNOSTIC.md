@@ -162,3 +162,30 @@ dedicated source-open cycle:
 
 This deliberately distinguishes a path/setup stall from newlib stdio or the
 mass-backed seek/size operations.
+
+
+## wLaunchELF mass0: -> mass: path-contract A/B
+
+Real hardware now gives a launcher-dependent split with the same current-PAD
+diagnostic build:
+
+- direct FMCB hotkey (R1, bypassing OSDSYS) eventually launches the game,
+- wLaunchELF R3Z stops at the ROM source-open Yellow marker.
+
+Current wLaunchELF R3Z source explicitly normalises USB execution paths to
+`massN:/...` before handing the target its argv path. The classic/direct FMCB
+loader path can preserve the configured path without that normalisation.
+Current PS2SDK documentation still exposes the legacy USB mass alias
+`mass:`.
+
+The `pd-ps2-game-fmcb-mass-alias.elf` A/B therefore makes exactly one
+launcher-contract change: if and only if argv[0] begins with `mass0:`, the
+executable/home path derived from argv[0] is rewritten to `mass:`.
+It does **not** rewrite explicit `--basedir`, `--savedir`, or
+`--rom-file` arguments, does not touch `mass1:` or higher units, and does
+not change PAD/SIF/storage bootstrap policy.
+
+HIPOTEZA DO TESTU: if this build launched through wLaunchELF passes the final
+Yellow ROM-open marker and behaves like the direct R1 path, the incompatibility
+is in the launcher-to-runtime path representation rather than the recovered
+IOP/PAD stack.
