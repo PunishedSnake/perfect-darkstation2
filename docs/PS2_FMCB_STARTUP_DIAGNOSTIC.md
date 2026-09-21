@@ -189,3 +189,26 @@ HIPOTEZA DO TESTU: if this build launched through wLaunchELF passes the final
 Yellow ROM-open marker and behaves like the direct R1 path, the incompatibility
 is in the launcher-to-runtime path representation rather than the recovered
 IOP/PAD stack.
+
+
+## R3Z usb:/usb0:/mass0: -> mass: refinement
+
+The first path-contract A/B only rewrote `mass0:`. Real hardware feedback
+showed that the affected R3Z launch path can describe the USB filesystem using
+the `usb:` family instead. Current PS2SDK source for the USBHDFSD/FAT
+filesystem registers the IOP filesystem device as `mass`.
+
+That distinction matters after the clean-IOP recovery: any R3Z-owned USB device
+alias disappears with the inherited IOP personality, while the project then
+loads current PS2SDK `usbd.irx` + `usbhdfsd.irx`, whose filesystem contract
+is `mass:`.
+
+The refined `pd-ps2-game-fmcb-usb-alias.elf` maps only unit-zero,
+argv[0]-derived launcher paths:
+
+- `usb:/...` -> `mass:/...`
+- `usb0:/...` -> `mass:/...`
+- `mass0:/...` -> `mass:/...`
+
+It deliberately leaves `usb1:`, `mass1:` and explicit user-supplied paths
+unchanged.

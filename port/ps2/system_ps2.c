@@ -72,14 +72,15 @@ static void pathBaseFromArgv0(char *outPath, u32 outLen)
         strncpy(outPath, sysArgv[0], outLen - 1);
         outPath[outLen - 1] = '\0';
 
-#ifdef PD_PS2_FORCE_LEGACY_MASS0_ALIAS_DIAGNOSTIC
+#ifdef PD_PS2_FORCE_LEGACY_USB_ALIAS_DIAGNOSTIC
         /*
          * HIPOTEZA DO TESTU:
-         * R3Z supplies mass0:/... while direct FMCB can preserve mass:/....
-         * Canonicalise only argv[0]-derived executable/home paths so explicit
-         * user --basedir/--rom-file arguments keep their exact semantics.
+         * R3Z can describe the USB target as usb:/..., usb0:/... or mass0:/...
+         * while our post-reset current PS2SDK USBHDFSD exposes the legacy
+         * mass: device. Canonicalise only argv[0]-derived executable/home
+         * paths; explicit user paths keep their exact semantics.
          */
-        (void)ps2PathCanonicalizeMass0ToLegacy(outPath);
+        (void)ps2PathCanonicalizeUsbMassToLegacy(outPath, outLen);
 #endif
 
         char *lastSlash = strrchr(outPath, '/');

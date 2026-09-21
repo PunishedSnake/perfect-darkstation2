@@ -6,17 +6,34 @@
 
 int main(void)
 {
-    char mass0Path[] = "mass0:/APPS/PD/pd-ps2-game.elf";
-    assert(ps2PathCanonicalizeMass0ToLegacy(mass0Path));
+    char mass0Path[64] = "mass0:/APPS/PD/pd-ps2-game.elf";
+    assert(ps2PathCanonicalizeUsbMassToLegacy(mass0Path, sizeof(mass0Path)));
     assert(!strcmp(mass0Path, "mass:/APPS/PD/pd-ps2-game.elf"));
 
-    char legacyMassPath[] = "mass:/APPS/PD/pd-ps2-game.elf";
-    assert(!ps2PathCanonicalizeMass0ToLegacy(legacyMassPath));
+    char usb0Path[64] = "usb0:/APPS/PD/pd-ps2-game.elf";
+    assert(ps2PathCanonicalizeUsbMassToLegacy(usb0Path, sizeof(usb0Path)));
+    assert(!strcmp(usb0Path, "mass:/APPS/PD/pd-ps2-game.elf"));
+
+    char usbPath[64] = "usb:/APPS/PD/pd-ps2-game.elf";
+    assert(ps2PathCanonicalizeUsbMassToLegacy(usbPath, sizeof(usbPath)));
+    assert(!strcmp(usbPath, "mass:/APPS/PD/pd-ps2-game.elf"));
+
+    char legacyMassPath[64] = "mass:/APPS/PD/pd-ps2-game.elf";
+    assert(!ps2PathCanonicalizeUsbMassToLegacy(
+        legacyMassPath, sizeof(legacyMassPath)));
     assert(!strcmp(legacyMassPath, "mass:/APPS/PD/pd-ps2-game.elf"));
 
-    char mass1Path[] = "mass1:/APPS/PD/pd-ps2-game.elf";
-    assert(!ps2PathCanonicalizeMass0ToLegacy(mass1Path));
+    char mass1Path[64] = "mass1:/APPS/PD/pd-ps2-game.elf";
+    assert(!ps2PathCanonicalizeUsbMassToLegacy(mass1Path, sizeof(mass1Path)));
     assert(!strcmp(mass1Path, "mass1:/APPS/PD/pd-ps2-game.elf"));
+
+    char usb1Path[64] = "usb1:/APPS/PD/pd-ps2-game.elf";
+    assert(!ps2PathCanonicalizeUsbMassToLegacy(usb1Path, sizeof(usb1Path)));
+    assert(!strcmp(usb1Path, "usb1:/APPS/PD/pd-ps2-game.elf"));
+
+    char shortUsb[5] = "usb:";
+    assert(!ps2PathCanonicalizeUsbMassToLegacy(shortUsb, sizeof(shortUsb)));
+    assert(!strcmp(shortUsb, "usb:"));
 
     assert(ps2PathHasDevicePrefix("mass:PDPS2/pd.ntsc-final.z64"));
     assert(ps2PathHasDevicePrefix("mass0:/PDPS2/pd.ntsc-final.z64"));

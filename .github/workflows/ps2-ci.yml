@@ -477,18 +477,18 @@ jobs:
           mips64r5900el-ps2-elf-readelf -h -lW \
             build-ps2-fmcb-current-pad/pd-ps2-game-fmcb-current-pad.elf
 
-      - name: Build wLaunchELF legacy mass-alias A/B
+      - name: Build wLaunchELF legacy USB-alias A/B
         run: |
-          cmake -S port/ps2 -B build-ps2-fmcb-mass-alias -G Ninja \
+          cmake -S port/ps2 -B build-ps2-fmcb-usb-alias -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/port/ps2/ps2dev-toolchain.cmake" \
             -DPD_PS2_FMCB_STARTUP_DIAGNOSTIC=ON \
             -DPD_PS2_CLEAN_IOP_STARTUP_DIAGNOSTIC=ON \
             -DPD_PS2_CURRENT_PAD_IRX_DIAGNOSTIC=ON \
-            -DPD_PS2_FORCE_LEGACY_MASS0_ALIAS_DIAGNOSTIC=ON
-          cmake --build build-ps2-fmcb-mass-alias --target pd_ps2_game -j2 --verbose
-          test -s build-ps2-fmcb-mass-alias/pd-ps2-game-fmcb-mass-alias.elf
+            -DPD_PS2_FORCE_LEGACY_USB_ALIAS_DIAGNOSTIC=ON
+          cmake --build build-ps2-fmcb-usb-alias --target pd_ps2_game -j2 --verbose
+          test -s build-ps2-fmcb-usb-alias/pd-ps2-game-fmcb-usb-alias.elf
           mips64r5900el-ps2-elf-readelf -h -lW \
-            build-ps2-fmcb-mass-alias/pd-ps2-game-fmcb-mass-alias.elf
+            build-ps2-fmcb-usb-alias/pd-ps2-game-fmcb-usb-alias.elf
 
       - name: Inspect EE ELF
         run: |
@@ -594,12 +594,12 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-      - name: Upload wLaunchELF legacy mass-alias A/B
+      - name: Upload wLaunchELF legacy USB-alias A/B
         uses: actions/upload-artifact@v7
         with:
-          name: pd-ps2-fmcb-mass-alias
+          name: pd-ps2-fmcb-usb-alias
           path: |
-            build-ps2-fmcb-mass-alias/pd-ps2-game-fmcb-mass-alias.elf
+            build-ps2-fmcb-usb-alias/pd-ps2-game-fmcb-usb-alias.elf
             docs/PS2_FMCB_STARTUP_DIAGNOSTIC.md
             ps2-build-metadata.txt
           if-no-files-found: error
