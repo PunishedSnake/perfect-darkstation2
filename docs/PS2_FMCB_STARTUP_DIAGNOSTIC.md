@@ -212,3 +212,29 @@ argv[0]-derived launcher paths:
 
 It deliberately leaves `usb1:`, `mass1:` and explicit user-supplied paths
 unchanged.
+
+
+## Post-storage USB text logger (no color markers)
+
+The colour probes are intentionally excluded from
+`pd-ps2-game-fmcb-usb-log.elf`. Their long EE busy-loops distort startup
+timing and are no longer useful now that the failure boundary is narrow.
+
+This build keeps the clean-IOP + current-PS2SDK PAD recovery, but does **not**
+enable `PD_PS2_FMCB_STARTUP_DIAGNOSTIC`, so the GS BGCOLOR marker loops in
+main/PAD/ROM code compile out.
+
+The logger is opened only **after** `ps2StorageEnsureMass()` has rebuilt the
+post-reset USB stack. This is deliberate: carrying a stdio/fileio descriptor
+across `SifIopReset()` would leave the EE FILE object referring to a dead IOP
+filesystem service.
+
+Output:
+
+`mass:/pdps2-r3z.log`
+
+Immediately after opening, the log repeats the raw `argc/argv[]` supplied by
+the launcher and the executable base derived by the runtime. Existing startup
+checkpoints then persist filesystem, input, audio and ROM-source progress. The
+build deliberately performs no usb:/mass: argv canonicalisation, so it records
+R3Z's handoff exactly as received.

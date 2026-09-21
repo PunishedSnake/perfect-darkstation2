@@ -490,6 +490,18 @@ jobs:
           mips64r5900el-ps2-elf-readelf -h -lW \
             build-ps2-fmcb-usb-alias/pd-ps2-game-fmcb-usb-alias.elf
 
+      - name: Build R3Z post-storage USB logger
+        run: |
+          cmake -S port/ps2 -B build-ps2-fmcb-usb-log -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/port/ps2/ps2dev-toolchain.cmake" \
+            -DPD_PS2_CLEAN_IOP_STARTUP_DIAGNOSTIC=ON \
+            -DPD_PS2_CURRENT_PAD_IRX_DIAGNOSTIC=ON \
+            -DPD_PS2_POST_STORAGE_USB_LOG_DIAGNOSTIC=ON
+          cmake --build build-ps2-fmcb-usb-log --target pd_ps2_game -j2 --verbose
+          test -s build-ps2-fmcb-usb-log/pd-ps2-game-fmcb-usb-log.elf
+          mips64r5900el-ps2-elf-readelf -h -lW \
+            build-ps2-fmcb-usb-log/pd-ps2-game-fmcb-usb-log.elf
+
       - name: Inspect EE ELF
         run: |
           test -f build-ps2/pd-ps2-bootstrap.elf
@@ -600,6 +612,17 @@ jobs:
           name: pd-ps2-fmcb-usb-alias
           path: |
             build-ps2-fmcb-usb-alias/pd-ps2-game-fmcb-usb-alias.elf
+            docs/PS2_FMCB_STARTUP_DIAGNOSTIC.md
+            ps2-build-metadata.txt
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Upload R3Z post-storage USB logger
+        uses: actions/upload-artifact@v7
+        with:
+          name: pd-ps2-fmcb-usb-log
+          path: |
+            build-ps2-fmcb-usb-log/pd-ps2-game-fmcb-usb-log.elf
             docs/PS2_FMCB_STARTUP_DIAGNOSTIC.md
             ps2-build-metadata.txt
           if-no-files-found: error

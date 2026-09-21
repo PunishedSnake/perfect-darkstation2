@@ -145,6 +145,38 @@ void ps2LogFlush(void)
     fflush(stderr);
 }
 
+int ps2LogOpenPostStorageFile(const char *path)
+{
+    if (!path || !path[0]) {
+        return 0;
+    }
+
+    /*
+     * Never preserve a fileio descriptor across an IOP reboot. The dedicated
+     * launcher diagnostic calls this only after USBD/USBHDFSD have been rebuilt.
+     */
+    if (logFile) {
+        FILE *closing = logFile;
+        logFile = NULL;
+        fclose(closing);
+    }
+
+    logStageUsed = 0;
+    logLastDurableUsec = 0;
+    logHasDurableCheckpoint = false;
+
+    strncpy(logPath, path, sizeof(logPath) - 1);
+    logPath[sizeof(logPath) - 1] = '\0';
+
+    logFile = fopen(logPath, "wb");
+    if (!logFile) {
+        logPath[0] = '\0';
+        return 0;
+    }
+
+    return 1;
+}
+
 static void ps2LogCheckpointInternal(bool force)
 {
     char reopenPath[sizeof(logPath)];

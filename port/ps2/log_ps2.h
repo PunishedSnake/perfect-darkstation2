@@ -16,6 +16,13 @@ extern "C" {
 void ps2LogFlush(void);
 
 /*
+ * Open a diagnostic file sink only after the owning storage stack is known to
+ * be alive. This avoids carrying a FILE/fileio descriptor across an IOP reboot.
+ * Returns non-zero on success.
+ */
+int ps2LogOpenPostStorageFile(const char *path);
+
+/*
  * Durable bring-up checkpoint.
  *
  * Current PS2SDK does not implement fsync(). On filesystem-backed launchers,

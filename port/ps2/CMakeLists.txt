@@ -81,10 +81,10 @@ option(PD_PS2_FORCE_LEGACY_USB_ALIAS_DIAGNOSTIC
   "Rewrite argv[0]-derived usb:/usb0:/mass0: paths to legacy mass:"
   OFF
 )
-if(PD_PS2_CLEAN_IOP_STARTUP_DIAGNOSTIC AND NOT PD_PS2_FMCB_STARTUP_DIAGNOSTIC)
-  message(FATAL_ERROR
-    "PD_PS2_CLEAN_IOP_STARTUP_DIAGNOSTIC requires PD_PS2_FMCB_STARTUP_DIAGNOSTIC")
-endif()
+option(PD_PS2_POST_STORAGE_USB_LOG_DIAGNOSTIC
+  "Open mass:/pdps2-r3z.log after clean IOP/storage recovery, without GS color markers"
+  OFF
+)
 if(PD_PS2_CURRENT_PAD_IRX_DIAGNOSTIC AND NOT PD_PS2_CLEAN_IOP_STARTUP_DIAGNOSTIC)
   message(FATAL_ERROR
     "PD_PS2_CURRENT_PAD_IRX_DIAGNOSTIC requires clean-IOP startup diagnostic")
@@ -92,6 +92,10 @@ endif()
 if(PD_PS2_FORCE_LEGACY_USB_ALIAS_DIAGNOSTIC AND NOT PD_PS2_CURRENT_PAD_IRX_DIAGNOSTIC)
   message(FATAL_ERROR
     "PD_PS2_FORCE_LEGACY_USB_ALIAS_DIAGNOSTIC requires current-PAD diagnostic")
+endif()
+if(PD_PS2_POST_STORAGE_USB_LOG_DIAGNOSTIC AND NOT PD_PS2_CLEAN_IOP_STARTUP_DIAGNOSTIC)
+  message(FATAL_ERROR
+    "PD_PS2_POST_STORAGE_USB_LOG_DIAGNOSTIC requires clean-IOP recovery")
 endif()
 if(PD_PS2_ALPHA_TRILERP_DIAGNOSTIC AND PD_PS2_VU1_COLOR_DIAGNOSTIC)
   message(FATAL_ERROR "Select one hardware diagnostic per build directory")
@@ -962,6 +966,11 @@ if(PD_PS2_FORCE_LEGACY_USB_ALIAS_DIAGNOSTIC)
     PD_PS2_FORCE_LEGACY_USB_ALIAS_DIAGNOSTIC=1
   )
 endif()
+if(PD_PS2_POST_STORAGE_USB_LOG_DIAGNOSTIC)
+  target_compile_definitions(pd_ps2_game PRIVATE
+    PD_PS2_POST_STORAGE_USB_LOG_DIAGNOSTIC=1
+  )
+endif()
 target_link_directories(pd_ps2_game PRIVATE "${GSKIT}/lib")
 set(PD_PS2_GAME_LINK_MAP "${CMAKE_CURRENT_BINARY_DIR}/pd-ps2-game.map")
 target_link_options(pd_ps2_game PRIVATE
@@ -970,7 +979,12 @@ target_link_options(pd_ps2_game PRIVATE
 )
 target_link_libraries(pd_ps2_game PRIVATE
   gskit dmakit padx z audsrv -ldebug patches kernel m)
-if(PD_PS2_FORCE_LEGACY_USB_ALIAS_DIAGNOSTIC)
+if(PD_PS2_POST_STORAGE_USB_LOG_DIAGNOSTIC)
+  set_target_properties(pd_ps2_game PROPERTIES
+    OUTPUT_NAME "pd-ps2-game-fmcb-usb-log"
+    SUFFIX ".elf"
+  )
+elseif(PD_PS2_FORCE_LEGACY_USB_ALIAS_DIAGNOSTIC)
   set_target_properties(pd_ps2_game PROPERTIES
     OUTPUT_NAME "pd-ps2-game-fmcb-usb-alias"
     SUFFIX ".elf"

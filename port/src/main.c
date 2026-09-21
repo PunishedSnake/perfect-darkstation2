@@ -204,6 +204,35 @@ int main(int argc, const char **argv)
 	PS2_FMCB_STARTUP_MARKER(
 		mass_result >= 0 ? PS2_FMCB_COLOR_STORAGE_READY
 		                 : PS2_FMCB_COLOR_STORAGE_FAILED);
+
+#ifdef PD_PS2_POST_STORAGE_USB_LOG_DIAGNOSTIC
+	/*
+	 * Dedicated launcher trace. Open the USB file only after clean-IOP and
+	 * storage recovery, otherwise the descriptor would belong to the dead
+	 * pre-reset fileio/USB stack.
+	 */
+	const char *const startup_log_path = "mass:/pdps2-r3z.log";
+	const s32 startup_log_open = ps2LogOpenPostStorageFile(startup_log_path);
+	if (startup_log_open) {
+		char executable_base[FS_MAXPATH + 1];
+		sysGetExecutablePath(executable_base, sizeof(executable_base));
+		sysLogPrintf(LOG_NOTE,
+			"R3Z TRACE: post-storage logger opened path=%s mass_result=%d",
+			startup_log_path, mass_result);
+		sysLogPrintf(LOG_NOTE, "R3Z TRACE: argc=%d", argc);
+		for (s32 i = 0; i < argc; ++i) {
+			sysLogPrintf(LOG_NOTE, "R3Z TRACE: raw argv[%d]=%s", i,
+				argv && argv[i] ? argv[i] : "(null)");
+		}
+		sysLogPrintf(LOG_NOTE, "R3Z TRACE: argv0-derived executable base=%s",
+			executable_base);
+		ps2LogCheckpointForce();
+	} else {
+		sysLogPrintf(LOG_WARNING,
+			"R3Z TRACE: could not open post-storage log at %s",
+			startup_log_path);
+	}
+#endif
 #endif
 
 	if (fsInit() < 0) {
