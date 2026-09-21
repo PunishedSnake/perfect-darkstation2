@@ -23,6 +23,105 @@
 #include "storage_ps2.h"
 #define GAME_STARTUP_CHECKPOINT() ps2LogCheckpointForce()
 
+#if defined(PD_PS2_POST_STORAGE_USB_LOG_DIAGNOSTIC)
+#define NEWLIB_PORT_AWARE
+#include <fileXio_rpc.h>
+#include <fileio.h>
+#include <sifrpc.h>
+#include <delaythread.h>
+
+static int ps2R3zBoundedRpcProbe(u32 sid)
+{
+	SifRpcClientData_t client __attribute__((aligned(64)));
+	memset(&client, 0, sizeof(client));
+
+	for (s32 i = 0; i < 100; ++i) {
+		const s32 rc = sceSifBindRpc(&client, sid, 0);
+		if (rc < 0) {
+			return rc;
+		}
+		if (client.server != NULL) {
+			return 1;
+		}
+		DelayThread(1000);
+	}
+
+	return 0;
+}
+
+static int ps2R3zWritePreLogFxio(s32 argc, const char **argv,
+		const char *derived_base)
+{
+	static const char *const candidates[] = {
+		"mass0:/pdps2-r3z-pre-fxio.log",
+		"mass:/pdps2-r3z-pre-fxio.log",
+		"usb0:/pdps2-r3z-pre-fxio.log",
+		"usb:/pdps2-r3z-pre-fxio.log",
+	};
+	char textbuf[4096];
+	s32 used = 0;
+	s32 fd = -1;
+	const char *opened_path = NULL;
+
+	sceSifInitRpc(0);
+	const s32 filexio_rpc = ps2R3zBoundedRpcProbe(FILEXIO_IRX);
+	const s32 legacy_fio_rpc = ps2R3zBoundedRpcProbe(0x80000001u);
+
+	if (filexio_rpc != 1) {
+		return -1000 + filexio_rpc;
+	}
+
+	const s32 init_result = fileXioInit();
+	if (init_result < 0) {
+		return init_result;
+	}
+
+	for (u32 i = 0; i < ARRAYCOUNT(candidates); ++i) {
+		fd = fileXioOpen(candidates[i],
+			FIO_O_WRONLY | FIO_O_CREAT | FIO_O_TRUNC, 0666);
+		if (fd >= 0) {
+			opened_path = candidates[i];
+			break;
+		}
+	}
+
+	if (fd < 0) {
+		fileXioExit();
+		return fd;
+	}
+
+	used += snprintf(textbuf + used, sizeof(textbuf) - (u32)used,
+		"R3Z FXIO PRE\n"
+		"fileXio_rpc=%d legacy_fio_rpc_80000001=%d\n"
+		"opened=%s\n"
+		"derived_base=%s\n"
+		"argc=%d\n",
+		filexio_rpc, legacy_fio_rpc,
+		opened_path ? opened_path : "(null)",
+		derived_base ? derived_base : "(null)", argc);
+
+	for (s32 i = 0; i < argc && used > 0 && (u32)used < sizeof(textbuf); ++i) {
+		used += snprintf(textbuf + used, sizeof(textbuf) - (u32)used,
+			"argv[%d]=%s\n", i,
+			argv && argv[i] ? argv[i] : "(null)");
+	}
+
+	if (used < 0) {
+		used = 0;
+	}
+	if ((u32)used >= sizeof(textbuf)) {
+		used = (s32)sizeof(textbuf) - 1;
+	}
+
+	const s32 write_result =
+		used > 0 ? fileXioWrite(fd, textbuf, used) : 0;
+	const s32 close_result = fileXioClose(fd);
+	fileXioExit();
+
+	return write_result < 0 ? write_result : close_result;
+}
+#endif
+
 #ifdef PD_PS2_FMCB_STARTUP_DIAGNOSTIC
 /*
  * Real-hardware launcher diagnostic.
@@ -175,30 +274,15 @@ int main(int argc, const char **argv)
 
 #if PLATFORM_PS2 && defined(PD_PS2_POST_STORAGE_USB_LOG_DIAGNOSTIC)
 	/*
-	 * PRE phase: capture the exact launcher handoff using the launcher's own
-	 * still-live device namespace. The file is placed next to argv[0], forced
-	 * durable, and CLOSED before any IOP reboot.
+	 * PRE phase deliberately bypasses newlib/fopen. R3Z itself uses fileXio,
+	 * while current libcglue defaults to legacy fio. If fileXio logging works
+	 * here but ordinary fopen does not, the launcher handoff is not the same
+	 * thing as a working target-side legacy FILEIO service.
 	 */
 	{
 		char inherited_base[FS_MAXPATH + 1];
-		char inherited_log[FS_MAXPATH + 64];
 		sysGetExecutablePath(inherited_base, sizeof(inherited_base));
-		snprintf(inherited_log, sizeof(inherited_log),
-			"%s/%s", inherited_base, "pdps2-r3z-pre.log");
-
-		if (ps2LogOpenPostStorageFile(inherited_log)) {
-			sysLogPrintf(LOG_NOTE,
-				"R3Z PRE: inherited logger opened path=%s", inherited_log);
-			sysLogPrintf(LOG_NOTE, "R3Z PRE: argc=%d", argc);
-			for (s32 i = 0; i < argc; ++i) {
-				sysLogPrintf(LOG_NOTE, "R3Z PRE: raw argv[%d]=%s", i,
-					argv && argv[i] ? argv[i] : "(null)");
-			}
-			sysLogPrintf(LOG_NOTE,
-				"R3Z PRE: argv0-derived executable base=%s", inherited_base);
-			ps2LogCheckpointForce();
-			ps2LogCloseFileSink();
-		}
+		(void)ps2R3zWritePreLogFxio(argc, argv, inherited_base);
 	}
 #endif
 

@@ -980,6 +980,9 @@ target_link_options(pd_ps2_game PRIVATE
 target_link_libraries(pd_ps2_game PRIVATE
   gskit dmakit padx z audsrv -ldebug patches kernel m)
 if(PD_PS2_POST_STORAGE_USB_LOG_DIAGNOSTIC)
+  target_link_libraries(pd_ps2_game PRIVATE fileXio)
+endif()
+if(PD_PS2_POST_STORAGE_USB_LOG_DIAGNOSTIC)
   set_target_properties(pd_ps2_game PROPERTIES
     OUTPUT_NAME "pd-ps2-game-fmcb-usb-log"
     SUFFIX ".elf"

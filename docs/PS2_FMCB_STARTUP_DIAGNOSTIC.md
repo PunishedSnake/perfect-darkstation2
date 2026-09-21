@@ -270,3 +270,32 @@ creation. If neither exists, the inherited argv0 namespace itself is not usable
 for stdio from the target. If both exist, compare the raw launcher handoff and
 the last durable POST line. The POST logger closes again immediately before
 `mainProc()` so diagnostic USB I/O cannot distort gameplay FPS.
+
+
+## PRE logger v3: bypass newlib with fileXio
+
+The two-phase stdio PRE file still did not appear when launched through R3Z.
+That materially changes the diagnosis: the failure exists before the
+application's own IOP reboot and before the post-reset storage stack.
+
+Current PS2SDK separates the relevant clients:
+
+- current libcglue/newlib defaults file operations to legacy `fio`,
+- `fioInit()` binds RPC SID `0x80000001` and can wait indefinitely,
+- R3Z itself initializes and uses `fileXio`,
+- R3Z loads the target through `SifLoadElf()`, which is a separate LOADFILE
+  service and therefore does not prove target-side `fio` is usable.
+
+The PRE diagnostic now bypasses stdio entirely and uses
+`fileXioOpen/fileXioWrite/fileXioClose`. It first performs bounded RPC probes
+for both the fileXio server and legacy FILEIO SID 0x80000001, then tries these
+fixed paths in order:
+
+1. `mass0:/pdps2-r3z-pre-fxio.log`
+2. `mass:/pdps2-r3z-pre-fxio.log`
+3. `usb0:/pdps2-r3z-pre-fxio.log`
+4. `usb:/pdps2-r3z-pre-fxio.log`
+
+The first successful file records both RPC-probe results, the selected path,
+the argv0-derived base, and raw argc/argv. This avoids relying on the very
+newlib/fio path currently under suspicion.
