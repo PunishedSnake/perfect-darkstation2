@@ -173,6 +173,35 @@ int main(int argc, const char **argv)
 	sysLogPrintf(LOG_NOTE, "runtime: system ready");
 	GAME_STARTUP_CHECKPOINT();
 
+#if PLATFORM_PS2 && defined(PD_PS2_POST_STORAGE_USB_LOG_DIAGNOSTIC)
+	/*
+	 * PRE phase: capture the exact launcher handoff using the launcher's own
+	 * still-live device namespace. The file is placed next to argv[0], forced
+	 * durable, and CLOSED before any IOP reboot.
+	 */
+	{
+		char inherited_base[FS_MAXPATH + 1];
+		char inherited_log[FS_MAXPATH + 64];
+		sysGetExecutablePath(inherited_base, sizeof(inherited_base));
+		snprintf(inherited_log, sizeof(inherited_log),
+			"%s/%s", inherited_base, "pdps2-r3z-pre.log");
+
+		if (ps2LogOpenPostStorageFile(inherited_log)) {
+			sysLogPrintf(LOG_NOTE,
+				"R3Z PRE: inherited logger opened path=%s", inherited_log);
+			sysLogPrintf(LOG_NOTE, "R3Z PRE: argc=%d", argc);
+			for (s32 i = 0; i < argc; ++i) {
+				sysLogPrintf(LOG_NOTE, "R3Z PRE: raw argv[%d]=%s", i,
+					argv && argv[i] ? argv[i] : "(null)");
+			}
+			sysLogPrintf(LOG_NOTE,
+				"R3Z PRE: argv0-derived executable base=%s", inherited_base);
+			ps2LogCheckpointForce();
+			ps2LogCloseFileSink();
+		}
+	}
+#endif
+
 #if PLATFORM_PS2 && defined(PD_PS2_CLEAN_IOP_STARTUP_DIAGNOSTIC)
 	/*
 	 * A/B recovery for launchers that leave PAD/SIO2/RPC in a poisoned state.
@@ -207,11 +236,10 @@ int main(int argc, const char **argv)
 
 #ifdef PD_PS2_POST_STORAGE_USB_LOG_DIAGNOSTIC
 	/*
-	 * Dedicated launcher trace. Open the USB file only after clean-IOP and
-	 * storage recovery, otherwise the descriptor would belong to the dead
-	 * pre-reset fileio/USB stack.
+	 * POST phase: now use only the current-PS2SDK filesystem rebuilt after the
+	 * reset. PRE and POST are deliberately separate files/descriptor lifetimes.
 	 */
-	const char *const startup_log_path = "mass:/pdps2-r3z.log";
+	const char *const startup_log_path = "mass:/pdps2-r3z-post.log";
 	const s32 startup_log_open = ps2LogOpenPostStorageFile(startup_log_path);
 	if (startup_log_open) {
 		char executable_base[FS_MAXPATH + 1];
@@ -396,6 +424,13 @@ int main(int argc, const char **argv)
 	sysLogPrintf(LOG_NOTE, "runtime: entering Perfect Dark main loop stage=0x%02x", g_StageNum);
 	GAME_STARTUP_CHECKPOINT();
 	PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_MAIN_LOOP_READY);
+#if PLATFORM_PS2 && defined(PD_PS2_POST_STORAGE_USB_LOG_DIAGNOSTIC)
+	/*
+	 * This artifact diagnoses startup only. Do not let synchronous USB logging
+	 * contaminate renderer/audio timing once the game loop begins.
+	 */
+	ps2LogCloseFileSink();
+#endif
 	mainProc();
 
 	return 0;

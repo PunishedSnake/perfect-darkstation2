@@ -22,6 +22,9 @@ void ps2LogFlush(void);
  */
 int ps2LogOpenPostStorageFile(const char *path);
 
+/* Flush and close the current file sink without affecting console logging. */
+void ps2LogCloseFileSink(void);
+
 /*
  * Durable bring-up checkpoint.
  *

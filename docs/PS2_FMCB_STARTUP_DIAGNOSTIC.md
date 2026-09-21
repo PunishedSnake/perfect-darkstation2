@@ -238,3 +238,35 @@ the launcher and the executable base derived by the runtime. Existing startup
 checkpoints then persist filesystem, input, audio and ROM-source progress. The
 build deliberately performs no usb:/mass: argv canonicalisation, so it records
 R3Z's handoff exactly as received.
+
+
+## Two-phase R3Z USB logger
+
+The first no-colour logger produced no post-reset file. That result is
+ambiguous between "POST logger open failed" and "execution never reached the
+POST logger". The logger is therefore split into two disjoint descriptor
+lifetimes.
+
+### PRE
+
+Before `SifIopReset()`, the diagnostic derives the directory directly from
+the raw launcher `argv[0]`, opens:
+
+`<argv0-directory>/pdps2-r3z-pre.log`
+
+writes the raw `argc/argv[]` plus derived base path, forces a durable
+checkpoint, and closes the descriptor **before** the IOP reboot.
+
+### POST
+
+After clean-IOP and `ps2StorageEnsureMass()`, it independently opens:
+
+`mass:/pdps2-r3z-post.log`
+
+and continues normal startup logging.
+
+If PRE exists but POST does not, the failure is at/before post-reset mass file
+creation. If neither exists, the inherited argv0 namespace itself is not usable
+for stdio from the target. If both exist, compare the raw launcher handoff and
+the last durable POST line. The POST logger closes again immediately before
+`mainProc()` so diagnostic USB I/O cannot distort gameplay FPS.

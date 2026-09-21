@@ -145,6 +145,26 @@ void ps2LogFlush(void)
     fflush(stderr);
 }
 
+void ps2LogCloseFileSink(void)
+{
+    if (!logFile) {
+        logPath[0] = '\0';
+        logStageUsed = 0;
+        return;
+    }
+
+    ps2LogFlush();
+
+    FILE *closing = logFile;
+    logFile = NULL;
+    fclose(closing);
+
+    logPath[0] = '\0';
+    logStageUsed = 0;
+    logLastDurableUsec = 0;
+    logHasDurableCheckpoint = false;
+}
+
 int ps2LogOpenPostStorageFile(const char *path)
 {
     if (!path || !path[0]) {
