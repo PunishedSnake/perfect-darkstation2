@@ -883,6 +883,7 @@ target_compile_options(pd_ps2_game PRIVATE
 target_compile_definitions(pd_ps2_game PRIVATE
   ${PD_PS2_GAME_DEFINITIONS}
   PD_PS2_GIT_COMMIT="${PD_PS2_GIT_COMMIT}"
+  PD_PS2_OWNED_IOP_RUNTIME=1
 )
 if(PD_PS2_GAME_VU1)
   target_compile_definitions(pd_ps2_game PRIVATE
