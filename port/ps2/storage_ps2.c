@@ -16,7 +16,6 @@
 #include <sifrpc.h>
 
 #include "log_ps2.h"
-#include "memory_card_ps2.h"
 #include "path_ps2.h"
 #include "system.h"
 
@@ -322,29 +321,21 @@ s32 ps2StoragePrepareBootMedium(const char *boot_path)
         case PS2_BOOT_MEDIUM_HDD:
             return ps2StorageEnsureHdd(boot_path);
 
-        case PS2_BOOT_MEDIUM_MC:
-            /*
-             * When the executable itself lives on mc0:/mc1:, memory-card I/O
-             * is boot storage rather than an optional profile feature. Load
-             * only its SIO2/MCMAN/MCSERV service here. On USB/HDD boots the
-             * same service remains lazy until profile/save code requests it.
-             */
-            return ps2MemoryCardEnsureService();
-
         /*
-         * These media intentionally do not trigger USB/HDD/MC drivers. Their
-         * owned backends will be added when the runtime actually supports data
-         * files from them.
+         * The full game boots from USB or HDD. Memory-card services are
+         * requested only by explicit mc0:/mc1: file access. Reject other
+         * boot paths before fsInit tries to read the ROM from an absent stack.
          */
+        case PS2_BOOT_MEDIUM_MC:
         case PS2_BOOT_MEDIUM_CDVD:
         case PS2_BOOT_MEDIUM_HOST:
         case PS2_BOOT_MEDIUM_NETWORK:
         case PS2_BOOT_MEDIUM_ROM:
         case PS2_BOOT_MEDIUM_UNKNOWN:
         default:
-            sysLogPrintf(LOG_NOTE,
-                "STORAGE: no boot-storage IRX stack selected for medium=%s",
+            sysLogPrintf(LOG_ERROR,
+                "STORAGE: unsupported game boot medium=%s",
                 ps2PathBootMediumName(medium));
-            return 0;
+            return -22;
     }
 }

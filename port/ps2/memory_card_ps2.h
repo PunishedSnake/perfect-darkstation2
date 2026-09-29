@@ -11,8 +11,8 @@ extern "C" {
  * Lazily provide the project-owned memory-card service.
  *
  * This is deliberately separate from boot-medium selection. A USB/HDD boot
- * should not load MCMAN/MCSERV merely because the executable came from that
- * device. SIO2MAN is shared with PAD and is reused when already resident.
+ * loads MCMAN/MCSERV only for an explicit mc0:/mc1: read or write.
+ * SIO2MAN is shared with PAD and is reused when already resident.
  *
  * Current service dependency:
  *   SIO2MAN -> MCMAN -> MCSERV -> libmc mcInit()

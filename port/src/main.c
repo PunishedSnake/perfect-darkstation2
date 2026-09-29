@@ -309,11 +309,7 @@ int main(int argc, const char **argv)
 	}
 	PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_CLEAN_IOP_READY);
 
-	/*
-	 * Rebuild mass: from our embedded current-PS2SDK USBD/USBHDFSD pair. The
-	 * ensure helper still checks for a resident service, but after the reset any
-	 * resident module can only have been installed by this process.
-	 */
+	/* Rebuild only the boot medium's USB or HDD storage stack. */
 	const char *const boot_path =
 		argc > 0 && argv ? argv[0] : NULL;
 	const s32 storage_result = ps2StoragePrepareBootMedium(boot_path);
@@ -325,6 +321,9 @@ int main(int argc, const char **argv)
 	PS2_FMCB_STARTUP_MARKER(
 		storage_result >= 0 ? PS2_FMCB_COLOR_STORAGE_READY
 		                 : PS2_FMCB_COLOR_STORAGE_FAILED);
+	if (storage_result < 0) {
+		sysFatalError("Owned boot storage failed (%d).", storage_result);
+	}
 
 #ifdef PD_PS2_POST_STORAGE_USB_LOG_DIAGNOSTIC
 	/*
