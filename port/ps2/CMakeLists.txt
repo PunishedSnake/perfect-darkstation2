@@ -204,6 +204,7 @@ set(PD_PS2_SIO2MAN_IRX "$ENV{PS2SDK}/iop/irx/sio2man.irx")
 set(PD_PS2_PADMAN_IRX "$ENV{PS2SDK}/iop/irx/padman.irx")
 set(PD_PS2_IOMANX_IRX "$ENV{PS2SDK}/iop/irx/iomanX.irx")
 set(PD_PS2_FILEXIO_IRX "$ENV{PS2SDK}/iop/irx/fileXio.irx")
+set(PD_PS2_POWEROFF_IRX "$ENV{PS2SDK}/iop/irx/poweroff.irx")
 set(PD_PS2_DEV9_IRX "$ENV{PS2SDK}/iop/irx/ps2dev9.irx")
 set(PD_PS2_ATAD_IRX "$ENV{PS2SDK}/iop/irx/ps2atad.irx")
 set(PD_PS2_HDD_IRX "$ENV{PS2SDK}/iop/irx/ps2hdd.irx")
@@ -212,7 +213,7 @@ foreach(PD_PS2_STORAGE_IRX IN ITEMS
     "${PD_PS2_USBD_IRX}" "${PD_PS2_USBHDFSD_IRX}"
     "${PD_PS2_SIO2MAN_IRX}" "${PD_PS2_PADMAN_IRX}"
     "${PD_PS2_IOMANX_IRX}" "${PD_PS2_FILEXIO_IRX}"
-    "${PD_PS2_DEV9_IRX}" "${PD_PS2_ATAD_IRX}"
+    "${PD_PS2_POWEROFF_IRX}" "${PD_PS2_DEV9_IRX}" "${PD_PS2_ATAD_IRX}"
     "${PD_PS2_HDD_IRX}" "${PD_PS2_PFS_IRX}")
   if(NOT EXISTS "${PD_PS2_STORAGE_IRX}")
     message(FATAL_ERROR
@@ -237,6 +238,9 @@ set(PD_PS2_IOMANX_IRX_C
 )
 set(PD_PS2_FILEXIO_IRX_C
   "${CMAKE_CURRENT_BINARY_DIR}/generated/fileXio_irx.c"
+)
+set(PD_PS2_POWEROFF_IRX_C
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/poweroff_irx.c"
 )
 set(PD_PS2_DEV9_IRX_C
   "${CMAKE_CURRENT_BINARY_DIR}/generated/ps2dev9_irx.c"
@@ -326,6 +330,16 @@ add_custom_command(
   VERBATIM
 )
 add_custom_command(
+  OUTPUT "${PD_PS2_POWEROFF_IRX_C}"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  COMMAND "${PD_PS2_BIN2C}"
+    "${PD_PS2_POWEROFF_IRX}" "${PD_PS2_POWEROFF_IRX_C}" poweroff_irx
+  DEPENDS "${PD_PS2_POWEROFF_IRX}"
+  COMMENT "Embedding PS2SDK poweroff.irx for DEV9 dependency"
+  VERBATIM
+)
+add_custom_command(
   OUTPUT "${PD_PS2_DEV9_IRX_C}"
   COMMAND "${CMAKE_COMMAND}" -E make_directory
     "${CMAKE_CURRENT_BINARY_DIR}/generated"
@@ -373,6 +387,7 @@ set_source_files_properties(
   "${PD_PS2_PADMAN_IRX_C}"
   "${PD_PS2_IOMANX_IRX_C}"
   "${PD_PS2_FILEXIO_IRX_C}"
+  "${PD_PS2_POWEROFF_IRX_C}"
   "${PD_PS2_DEV9_IRX_C}"
   "${PD_PS2_ATAD_IRX_C}"
   "${PD_PS2_HDD_IRX_C}"
@@ -918,6 +933,7 @@ set(PD_PS2_GAME_RUNTIME_SOURCES
   "${PD_PS2_PADMAN_IRX_C}"
   "${PD_PS2_IOMANX_IRX_C}"
   "${PD_PS2_FILEXIO_IRX_C}"
+  "${PD_PS2_POWEROFF_IRX_C}"
   "${PD_PS2_DEV9_IRX_C}"
   "${PD_PS2_ATAD_IRX_C}"
   "${PD_PS2_HDD_IRX_C}"
