@@ -17,7 +17,7 @@ Real hardware has confirmed through the 2026-09-15 no-file-log build:
 
 - system, filesystem and logger startup;
 - bounded loading of the NTSC-final ROM data segment;
-- GS presentation and the diagnostic renderer;
+- GS presentation and the native renderer;
 - DualShock 2 discovery and corrected stick extrema;
 - the legal screen followed by the Rare, Nintendo 64 and Perfect Dark logos;
 - the main menu and mission loading;
@@ -105,23 +105,10 @@ cmake --build build-ps2 -j2
 # build-ps2/pd-ps2-game.elf and pd-ps2-game-fmcb.elf
 ```
 
-Optional hardware diagnostics use separate build directories:
-
-```sh
-cmake -S port/ps2 -B build-ps2-alpha-diag -G Ninja \
-  -DPD_PS2_ALPHA_TRILERP_DIAGNOSTIC=ON
-cmake --build build-ps2-alpha-diag --target pd_ps2_bootstrap -j2
-
-cmake -S port/ps2 -B build-ps2-vu1-diag -G Ninja \
-  -DPD_PS2_VU1_COLOR_DIAGNOSTIC=ON
-cmake --build build-ps2-vu1-diag --target pd_ps2_bootstrap -j2
-```
-
-CI builds and inspects the normal `Og` game ELF. It runs backend-independent host tests,
-rejects undefined symbols, and publishes the game ELF with its linker map,
-section sizes and build metadata. `O2` is built and published only when the
-manual workflow input requests it. The specialized alpha/VU1 scene selectors
-remain local hardware diagnostics rather than routine CI artifacts.
+CI builds and inspects the normal `Og` game ELF. It runs host tests for active
+runtime paths, rejects undefined symbols, and publishes the game ELF with its
+linker map, section sizes and build metadata. `O2` is built only when the
+manual workflow input requests it.
 
 ## Runtime options useful during bring-up
 
@@ -215,5 +202,5 @@ baseline. Compare O2 only against the same scene and storage configuration.
 - [Modern optimization audit](../../docs/PS2_MODERN_OPTIMIZATION_AUDIT.md)
 - [Native renderer architecture](../../docs/PS2_NATIVE_RENDERER_ARCHITECTURE.md)
 - [N64 RDP/TMEM semantics](../../docs/N64_RDP_TMEM_SEMANTICS.md)
-- [Diagnostic test procedure](PROTOTYPE_TEST.md)
-- [VU1 diagnostic](VU1_COLOR_DIAGNOSTIC.md)
+- [Historical bootstrap hardware evidence](PROTOTYPE_TEST.md)
+- [Historical VU1 diagnostic evidence](VU1_COLOR_DIAGNOSTIC.md)

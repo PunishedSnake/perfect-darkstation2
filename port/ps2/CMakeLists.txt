@@ -7,16 +7,8 @@ if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
       CACHE FILEPATH "PS2SDK-compatible EE CMake toolchain" FORCE)
 endif()
 
-project(pd_ps2_bootstrap C CXX)
+project(pd_ps2_game C CXX)
 
-option(PD_PS2_ALPHA_TRILERP_DIAGNOSTIC
-  "Start the PS2 bootstrap on the hardware-validated alpha-trilerp A/B scene"
-  OFF
-)
-option(PD_PS2_VU1_COLOR_DIAGNOSTIC
-  "Enable VU1 textured transforms, A+D transport and runtime hardware A/B"
-  OFF
-)
 option(PD_PS2_GAME_VU1
   "Use the VU1/PATH1 transform path in the full game"
   ON
@@ -65,10 +57,6 @@ option(PD_PS2_DISABLE_DEPTH_DIAGNOSTIC
   "Disable GS depth testing and writes in the full game"
   OFF
 )
-if(PD_PS2_ALPHA_TRILERP_DIAGNOSTIC AND PD_PS2_VU1_COLOR_DIAGNOSTIC)
-  message(FATAL_ERROR "Select one hardware diagnostic per build directory")
-endif()
-
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_EXTENSIONS OFF)
 set(CMAKE_CXX_STANDARD 20)
@@ -147,14 +135,6 @@ set_source_files_properties(
   "${PD_PS2_VU1_TRANSFORM_PROGRAM_OBJECT}"
   PROPERTIES GENERATED TRUE EXTERNAL_OBJECT TRUE
 )
-
-set(PD_PS2_BOOTSTRAP_VU1_OBJECTS "")
-if(PD_PS2_VU1_COLOR_DIAGNOSTIC)
-  list(APPEND PD_PS2_BOOTSTRAP_VU1_OBJECTS
-    "${PD_PS2_VU1_PROGRAM_OBJECT}"
-    "${PD_PS2_VU1_TRANSFORM_PROGRAM_OBJECT}"
-  )
-endif()
 
 set(PD_PS2_AUDSRV_IRX "$ENV{PS2SDK}/iop/irx/audsrv.irx")
 if(NOT EXISTS "${PD_PS2_AUDSRV_IRX}")
@@ -531,109 +511,6 @@ set_source_files_properties(
       "gfx_start_frame=gfx_start_frame_ps2_impl;gfx_run=gfx_run_ps2_impl;TEXTURE_CACHE_MAX_SIZE=64"
 )
 
-add_executable(pd_ps2_bootstrap EXCLUDE_FROM_ALL
-  bootstrap.c
-  system_ps2.c
-  audio_ps2.c
-  audio_ps2_queue.c
-  "${PD_PS2_AUDSRV_IRX_C}"
-  video_diag.c
-  gs_alpha_equation.cpp
-  gs_frame_mask.cpp
-  gs_command_budget.cpp
-  gs_clip.cpp
-  gs_core.cpp
-  gs_native_queue.cpp
-  gs_render_target_layout.cpp
-  gs_state_shadow.cpp
-  gs_texture_convert.cpp
-  gs_vu1_batch.cpp
-  gs_vu1_queue.cpp
-  gs_vu1_transform.cpp
-  gs_vu1_wait.cpp
-  gs_vram_allocator.cpp
-  ps2_renderer_stats.cpp
-  renderer_trace.cpp
-  gfx_api_scene.c
-  gfx_frame_ps2.c
-  gfx_run_tmem_ps2.cpp
-  gfx_ps2.cpp
-  gfx_ps2_combiner.cpp
-  gfx_ps2_pass_graph.cpp
-  gfx_window_ps2.c
-  pad_axis_ps2.c
-  pad_ps2.c
-  controls_ps2.c
-  rom_probe.c
-  "${PD_ROOT}/port/src/romsource.c"
-  "${PD_ROOT}/port/fast3d/gfx_cc.cpp"
-  "${PD_PS2_FAST3D_LIVE_CPP}"
-  "${PD_ROOT}/port/fast3d/rdp_tmem.cpp"
-  "${PD_ROOT}/port/fast3d/rdp_tmem_runtime.cpp"
-  "${PD_ROOT}/port/fast3d/rdp_tmem_live.cpp"
-  "${PD_ROOT}/port/fast3d/rdp_tmem_trace.cpp"
-  ${PD_PS2_BOOTSTRAP_VU1_OBJECTS}
-)
-
-if(PD_PS2_ALPHA_TRILERP_DIAGNOSTIC)
-  target_compile_definitions(pd_ps2_bootstrap PRIVATE
-    PERFECT_DARK_PS2_ALPHA_TRILERP_DIAGNOSTIC=1
-  )
-endif()
-if(PD_PS2_ALPHA_SPARSE_SHUFFLE)
-  target_compile_definitions(pd_ps2_bootstrap PRIVATE
-    PERFECT_DARK_PS2_ALPHA_SPARSE_SHUFFLE=1
-  )
-endif()
-if(PD_PS2_ALPHA_SAME_SAMPLE_FASTPATH)
-  target_compile_definitions(pd_ps2_bootstrap PRIVATE
-    PERFECT_DARK_PS2_ALPHA_SAME_SAMPLE_FASTPATH=1
-  )
-endif()
-if(PD_PS2_INDEPENDENT_ALPHA_MASK)
-  target_compile_definitions(pd_ps2_bootstrap PRIVATE
-    PERFECT_DARK_PS2_INDEPENDENT_ALPHA_MASK=1
-  )
-endif()
-if(PD_PS2_INDEPENDENT_ALPHA_DIRECT)
-  target_compile_definitions(pd_ps2_bootstrap PRIVATE
-    PERFECT_DARK_PS2_INDEPENDENT_ALPHA_DIRECT=1
-  )
-endif()
-
-if(PD_PS2_VU1_COLOR_DIAGNOSTIC)
-  target_compile_definitions(pd_ps2_bootstrap PRIVATE
-    PERFECT_DARK_PS2_VU1_COLOR_BATCH=1
-    PERFECT_DARK_PS2_VU1_AD_TRANSPORT=1
-  )
-endif()
-
-target_include_directories(pd_ps2_bootstrap PRIVATE
-  ${PD_PS2_COMMON_INCLUDE_DIRS}
-  "${GSKIT}/include"
-)
-
-# Bootstrap is a correctness target. Current PS2SDK injects -O2 globally,
-# while the Perfect Dark port currently carries known -O2 issues.
-# The target-local -Og deliberately wins here until correctness is established.
-target_compile_options(pd_ps2_bootstrap PRIVATE
-  ${PD_PS2_CORRECTNESS_FLAGS}
-  $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>
-  $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>
-)
-
-target_compile_definitions(pd_ps2_bootstrap PRIVATE
-  PLATFORM_PS2=1
-  PD_PS2_GIT_COMMIT="${PD_PS2_GIT_COMMIT}"
-)
-target_link_directories(pd_ps2_bootstrap PRIVATE "${GSKIT}/lib")
-
-# Current ps2sdk-ports installs EE zlib into PS2SDK/ports. Keep it behind the
-# bootstrap only until the full build has a platform dependency layer.
-# libpadx matches the ROM XPADMAN module used by the current PS2SDK padx sample.
-target_link_libraries(pd_ps2_bootstrap PRIVATE
-  gskit dmakit padx z audsrv -ldebug patches kernel)
-
 # Standalone hardware probe for the EE -> SIF/RPC -> audsrv -> SPU2 path.
 # It deliberately has no renderer or game-mixer dependency, so an audible
 # 440 Hz tone proves that silence in the full game originates above audsrv.
@@ -662,20 +539,7 @@ set_target_properties(pd_ps2_audio_diag PROPERTIES
   SUFFIX ".elf"
 )
 
-if(PD_PS2_ALPHA_TRILERP_DIAGNOSTIC)
-  set(PD_PS2_BOOTSTRAP_OUTPUT_NAME "pd-ps2-alpha-trilerp-diag")
-elseif(PD_PS2_VU1_COLOR_DIAGNOSTIC)
-  set(PD_PS2_BOOTSTRAP_OUTPUT_NAME "pd-ps2-vu1-color-diag")
-else()
-  set(PD_PS2_BOOTSTRAP_OUTPUT_NAME "pd-ps2-bootstrap")
-endif()
-
-set_target_properties(pd_ps2_bootstrap PROPERTIES
-  OUTPUT_NAME "${PD_PS2_BOOTSTRAP_OUTPUT_NAME}"
-  SUFFIX ".elf"
-)
-
-# Compile real game/render producers next to the renderer bootstrap.
+# Compile the real game/render producers for the full runtime.
 #
 # This stays an OBJECT target for now: the migration frontier exposes EE
 # compiler/platform-contract breakage without hiding it behind unresolved
@@ -1025,8 +889,7 @@ add_custom_command(TARGET pd_ps2_game POST_BUILD
 )
 
 # The real Fast3D translator remains linked as the compatibility frontend.
-# gfx_api_scene.c is the current lower-level correctness baseline while GS
-# ownership is moved below gfx_ps2 into gs_core. DualShock 2 input is a separate
+# GS ownership is moving below gfx_ps2 into gs_core. DualShock 2 input is a separate
 # physical backend plus semantic shooter mapping. gs_native_queue is the first
 # project-owned PATH3 transport layer and is compiled before taking over the
 # active renderer so packet correctness can be gated independently.
@@ -1035,8 +898,8 @@ add_custom_command(TARGET pd_ps2_game POST_BUILD
 # authoritative link/runtime frontier and must never resolve missing services by
 # silently discarding or weakening their contracts.
 
-message(STATUS "Perfect Dark PS2 bootstrap root: ${PD_ROOT}")
-message(STATUS "Perfect Dark PS2 bootstrap gsKit: ${GSKIT}")
-message(STATUS "Perfect Dark PS2 bootstrap commit: ${PD_PS2_GIT_COMMIT}")
+message(STATUS "Perfect Dark PS2 root: ${PD_ROOT}")
+message(STATUS "Perfect Dark PS2 gsKit: ${GSKIT}")
+message(STATUS "Perfect Dark PS2 commit: ${PD_PS2_GIT_COMMIT}")
 message(STATUS "Perfect Dark PS2 EE optimization: ${PD_PS2_OPTIMIZATION}")
 message(STATUS "Perfect Dark PS2 default file logger: ${PD_PS2_FILE_LOG_DEFAULT}")

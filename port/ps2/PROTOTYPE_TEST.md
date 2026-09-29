@@ -1,5 +1,8 @@
 # Perfect DarkStation 2 prototype test
 
+> Historical hardware record. The color bootstrap target and its source were
+> retired on the owned-IOP branch. Build and test `pd_ps2_game` instead.
+
 This document covers the standalone `pd_ps2_bootstrap` diagnostic. It is not
 the normal `pd_ps2_game` hardware procedure and it is not a playable build. For
 the current game ELF, start with [README.md](README.md).
