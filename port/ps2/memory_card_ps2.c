@@ -8,6 +8,7 @@
 #include <sifrpc.h>
 
 #include "log_ps2.h"
+#include "system.h"
 
 extern unsigned char sio2man_irx[] __attribute__((aligned(16)));
 extern unsigned int size_sio2man_irx;
