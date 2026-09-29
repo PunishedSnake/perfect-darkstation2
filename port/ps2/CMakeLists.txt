@@ -202,9 +202,18 @@ set(PD_PS2_USBD_IRX "$ENV{PS2SDK}/iop/irx/usbd.irx")
 set(PD_PS2_USBHDFSD_IRX "$ENV{PS2SDK}/iop/irx/usbhdfsd.irx")
 set(PD_PS2_SIO2MAN_IRX "$ENV{PS2SDK}/iop/irx/sio2man.irx")
 set(PD_PS2_PADMAN_IRX "$ENV{PS2SDK}/iop/irx/padman.irx")
+set(PD_PS2_IOMANX_IRX "$ENV{PS2SDK}/iop/irx/iomanX.irx")
+set(PD_PS2_FILEXIO_IRX "$ENV{PS2SDK}/iop/irx/fileXio.irx")
+set(PD_PS2_DEV9_IRX "$ENV{PS2SDK}/iop/irx/ps2dev9.irx")
+set(PD_PS2_ATAD_IRX "$ENV{PS2SDK}/iop/irx/ps2atad.irx")
+set(PD_PS2_HDD_IRX "$ENV{PS2SDK}/iop/irx/ps2hdd.irx")
+set(PD_PS2_PFS_IRX "$ENV{PS2SDK}/iop/irx/ps2fs.irx")
 foreach(PD_PS2_STORAGE_IRX IN ITEMS
     "${PD_PS2_USBD_IRX}" "${PD_PS2_USBHDFSD_IRX}"
-    "${PD_PS2_SIO2MAN_IRX}" "${PD_PS2_PADMAN_IRX}")
+    "${PD_PS2_SIO2MAN_IRX}" "${PD_PS2_PADMAN_IRX}"
+    "${PD_PS2_IOMANX_IRX}" "${PD_PS2_FILEXIO_IRX}"
+    "${PD_PS2_DEV9_IRX}" "${PD_PS2_ATAD_IRX}"
+    "${PD_PS2_HDD_IRX}" "${PD_PS2_PFS_IRX}")
   if(NOT EXISTS "${PD_PS2_STORAGE_IRX}")
     message(FATAL_ERROR
       "Current PS2SDK storage IRX not found: ${PD_PS2_STORAGE_IRX}")
@@ -222,6 +231,24 @@ set(PD_PS2_SIO2MAN_IRX_C
 )
 set(PD_PS2_PADMAN_IRX_C
   "${CMAKE_CURRENT_BINARY_DIR}/generated/padman_irx.c"
+)
+set(PD_PS2_IOMANX_IRX_C
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/iomanX_irx.c"
+)
+set(PD_PS2_FILEXIO_IRX_C
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/fileXio_irx.c"
+)
+set(PD_PS2_DEV9_IRX_C
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/ps2dev9_irx.c"
+)
+set(PD_PS2_ATAD_IRX_C
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/ps2atad_irx.c"
+)
+set(PD_PS2_HDD_IRX_C
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/ps2hdd_irx.c"
+)
+set(PD_PS2_PFS_IRX_C
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/ps2fs_irx.c"
 )
 add_custom_command(
   OUTPUT "${PD_PS2_AUDSRV_IRX_C}"
@@ -278,11 +305,78 @@ add_custom_command(
   COMMENT "Embedding current PS2SDK padman.irx for PAD A/B"
   VERBATIM
 )
+add_custom_command(
+  OUTPUT "${PD_PS2_IOMANX_IRX_C}"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  COMMAND "${PD_PS2_BIN2C}"
+    "${PD_PS2_IOMANX_IRX}" "${PD_PS2_IOMANX_IRX_C}" iomanX_irx
+  DEPENDS "${PD_PS2_IOMANX_IRX}"
+  COMMENT "Embedding PS2SDK iomanX.irx for HDD/PFS boot"
+  VERBATIM
+)
+add_custom_command(
+  OUTPUT "${PD_PS2_FILEXIO_IRX_C}"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  COMMAND "${PD_PS2_BIN2C}"
+    "${PD_PS2_FILEXIO_IRX}" "${PD_PS2_FILEXIO_IRX_C}" fileXio_irx
+  DEPENDS "${PD_PS2_FILEXIO_IRX}"
+  COMMENT "Embedding PS2SDK fileXio.irx for HDD/PFS boot"
+  VERBATIM
+)
+add_custom_command(
+  OUTPUT "${PD_PS2_DEV9_IRX_C}"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  COMMAND "${PD_PS2_BIN2C}"
+    "${PD_PS2_DEV9_IRX}" "${PD_PS2_DEV9_IRX_C}" ps2dev9_irx
+  DEPENDS "${PD_PS2_DEV9_IRX}"
+  COMMENT "Embedding PS2SDK ps2dev9.irx for HDD boot"
+  VERBATIM
+)
+add_custom_command(
+  OUTPUT "${PD_PS2_ATAD_IRX_C}"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  COMMAND "${PD_PS2_BIN2C}"
+    "${PD_PS2_ATAD_IRX}" "${PD_PS2_ATAD_IRX_C}" ps2atad_irx
+  DEPENDS "${PD_PS2_ATAD_IRX}"
+  COMMENT "Embedding PS2SDK ps2atad.irx for HDD boot"
+  VERBATIM
+)
+add_custom_command(
+  OUTPUT "${PD_PS2_HDD_IRX_C}"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  COMMAND "${PD_PS2_BIN2C}"
+    "${PD_PS2_HDD_IRX}" "${PD_PS2_HDD_IRX_C}" ps2hdd_irx
+  DEPENDS "${PD_PS2_HDD_IRX}"
+  COMMENT "Embedding PS2SDK ps2hdd.irx for APA boot"
+  VERBATIM
+)
+add_custom_command(
+  OUTPUT "${PD_PS2_PFS_IRX_C}"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  COMMAND "${PD_PS2_BIN2C}"
+    "${PD_PS2_PFS_IRX}" "${PD_PS2_PFS_IRX_C}" ps2fs_irx
+  DEPENDS "${PD_PS2_PFS_IRX}"
+  COMMENT "Embedding PS2SDK ps2fs.irx for PFS boot"
+  VERBATIM
+)
+
 set_source_files_properties(
   "${PD_PS2_USBD_IRX_C}"
   "${PD_PS2_USBHDFSD_IRX_C}"
   "${PD_PS2_SIO2MAN_IRX_C}"
   "${PD_PS2_PADMAN_IRX_C}"
+  "${PD_PS2_IOMANX_IRX_C}"
+  "${PD_PS2_FILEXIO_IRX_C}"
+  "${PD_PS2_DEV9_IRX_C}"
+  "${PD_PS2_ATAD_IRX_C}"
+  "${PD_PS2_HDD_IRX_C}"
+  "${PD_PS2_PFS_IRX_C}"
   PROPERTIES GENERATED TRUE
 )
 
@@ -822,6 +916,12 @@ set(PD_PS2_GAME_RUNTIME_SOURCES
   "${PD_PS2_USBHDFSD_IRX_C}"
   "${PD_PS2_SIO2MAN_IRX_C}"
   "${PD_PS2_PADMAN_IRX_C}"
+  "${PD_PS2_IOMANX_IRX_C}"
+  "${PD_PS2_FILEXIO_IRX_C}"
+  "${PD_PS2_DEV9_IRX_C}"
+  "${PD_PS2_ATAD_IRX_C}"
+  "${PD_PS2_HDD_IRX_C}"
+  "${PD_PS2_PFS_IRX_C}"
   video_ps2.c
   input_ps2.c
   input_ps2_map.c
@@ -979,10 +1079,7 @@ target_link_options(pd_ps2_game PRIVATE
   "-Wl,-Map,${PD_PS2_GAME_LINK_MAP}"
 )
 target_link_libraries(pd_ps2_game PRIVATE
-  gskit dmakit padx z audsrv -ldebug patches kernel m)
-if(PD_PS2_POST_STORAGE_USB_LOG_DIAGNOSTIC)
-  target_link_libraries(pd_ps2_game PRIVATE fileXio)
-endif()
+  gskit dmakit padx z audsrv fileXio -ldebug patches kernel m)
 if(PD_PS2_POST_STORAGE_USB_LOG_DIAGNOSTIC)
   set_target_properties(pd_ps2_game PROPERTIES
     OUTPUT_NAME "pd-ps2-game-fmcb-usb-log"
