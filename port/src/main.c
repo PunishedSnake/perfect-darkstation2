@@ -314,13 +314,16 @@ int main(int argc, const char **argv)
 	 * ensure helper still checks for a resident service, but after the reset any
 	 * resident module can only have been installed by this process.
 	 */
-	const s32 mass_result = ps2StorageEnsureMass(
-		argc > 0 && argv ? argv[0] : NULL);
-	sysLogPrintf(mass_result >= 0 ? LOG_NOTE : LOG_WARNING,
-		"runtime: mass storage bootstrap result=%d", mass_result);
+	const char *const boot_path =
+		argc > 0 && argv ? argv[0] : NULL;
+	const s32 storage_result = ps2StoragePrepareBootMedium(boot_path);
+	sysLogPrintf(storage_result >= 0 ? LOG_NOTE : LOG_WARNING,
+		"runtime: boot storage bootstrap result=%d medium=%s",
+		storage_result,
+		ps2PathBootMediumName(ps2PathClassifyBootMedium(boot_path)));
 	GAME_STARTUP_CHECKPOINT();
 	PS2_FMCB_STARTUP_MARKER(
-		mass_result >= 0 ? PS2_FMCB_COLOR_STORAGE_READY
+		storage_result >= 0 ? PS2_FMCB_COLOR_STORAGE_READY
 		                 : PS2_FMCB_COLOR_STORAGE_FAILED);
 
 #ifdef PD_PS2_POST_STORAGE_USB_LOG_DIAGNOSTIC
@@ -334,8 +337,8 @@ int main(int argc, const char **argv)
 		char executable_base[FS_MAXPATH + 1];
 		sysGetExecutablePath(executable_base, sizeof(executable_base));
 		sysLogPrintf(LOG_NOTE,
-			"R3Z TRACE: post-storage logger opened path=%s mass_result=%d",
-			startup_log_path, mass_result);
+			"R3Z TRACE: post-storage logger opened path=%s storage_result=%d",
+			startup_log_path, storage_result);
 		sysLogPrintf(LOG_NOTE, "R3Z TRACE: argc=%d", argc);
 		for (s32 i = 0; i < argc; ++i) {
 			sysLogPrintf(LOG_NOTE, "R3Z TRACE: raw argv[%d]=%s", i,
