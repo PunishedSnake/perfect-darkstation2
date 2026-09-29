@@ -80,7 +80,7 @@ static void pathBaseFromArgv0(char *outPath, u32 outLen)
          * argv[0]-derived executable/home paths; explicit user paths retain
          * their caller-supplied device semantics.
          */
-        (void)ps2PathCanonicalizeUsbMassToLegacy(outPath, outLen);
+        (void)ps2PathCanonicalizeOwnedBootPath(outPath, outLen);
 #endif
 
         char *lastSlash = strrchr(outPath, '/');
