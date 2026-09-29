@@ -202,6 +202,8 @@ set(PD_PS2_USBD_IRX "$ENV{PS2SDK}/iop/irx/usbd.irx")
 set(PD_PS2_USBHDFSD_IRX "$ENV{PS2SDK}/iop/irx/usbhdfsd.irx")
 set(PD_PS2_SIO2MAN_IRX "$ENV{PS2SDK}/iop/irx/sio2man.irx")
 set(PD_PS2_PADMAN_IRX "$ENV{PS2SDK}/iop/irx/padman.irx")
+set(PD_PS2_MCMAN_IRX "$ENV{PS2SDK}/iop/irx/mcman.irx")
+set(PD_PS2_MCSERV_IRX "$ENV{PS2SDK}/iop/irx/mcserv.irx")
 set(PD_PS2_IOMANX_IRX "$ENV{PS2SDK}/iop/irx/iomanX.irx")
 set(PD_PS2_FILEXIO_IRX "$ENV{PS2SDK}/iop/irx/fileXio.irx")
 set(PD_PS2_POWEROFF_IRX "$ENV{PS2SDK}/iop/irx/poweroff.irx")
@@ -212,6 +214,7 @@ set(PD_PS2_PFS_IRX "$ENV{PS2SDK}/iop/irx/ps2fs.irx")
 foreach(PD_PS2_STORAGE_IRX IN ITEMS
     "${PD_PS2_USBD_IRX}" "${PD_PS2_USBHDFSD_IRX}"
     "${PD_PS2_SIO2MAN_IRX}" "${PD_PS2_PADMAN_IRX}"
+    "${PD_PS2_MCMAN_IRX}" "${PD_PS2_MCSERV_IRX}"
     "${PD_PS2_IOMANX_IRX}" "${PD_PS2_FILEXIO_IRX}"
     "${PD_PS2_POWEROFF_IRX}" "${PD_PS2_DEV9_IRX}" "${PD_PS2_ATAD_IRX}"
     "${PD_PS2_HDD_IRX}" "${PD_PS2_PFS_IRX}")
@@ -232,6 +235,12 @@ set(PD_PS2_SIO2MAN_IRX_C
 )
 set(PD_PS2_PADMAN_IRX_C
   "${CMAKE_CURRENT_BINARY_DIR}/generated/padman_irx.c"
+)
+set(PD_PS2_MCMAN_IRX_C
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/mcman_irx.c"
+)
+set(PD_PS2_MCSERV_IRX_C
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/mcserv_irx.c"
 )
 set(PD_PS2_IOMANX_IRX_C
   "${CMAKE_CURRENT_BINARY_DIR}/generated/iomanX_irx.c"
@@ -310,6 +319,26 @@ add_custom_command(
   VERBATIM
 )
 add_custom_command(
+  OUTPUT "${PD_PS2_MCMAN_IRX_C}"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  COMMAND "${PD_PS2_BIN2C}"
+    "${PD_PS2_MCMAN_IRX}" "${PD_PS2_MCMAN_IRX_C}" mcman_irx
+  DEPENDS "${PD_PS2_MCMAN_IRX}"
+  COMMENT "Embedding current PS2SDK mcman.irx for lazy memory-card profiles"
+  VERBATIM
+)
+add_custom_command(
+  OUTPUT "${PD_PS2_MCSERV_IRX_C}"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  COMMAND "${PD_PS2_BIN2C}"
+    "${PD_PS2_MCSERV_IRX}" "${PD_PS2_MCSERV_IRX_C}" mcserv_irx
+  DEPENDS "${PD_PS2_MCSERV_IRX}"
+  COMMENT "Embedding current PS2SDK mcserv.irx for lazy memory-card profiles"
+  VERBATIM
+)
+add_custom_command(
   OUTPUT "${PD_PS2_IOMANX_IRX_C}"
   COMMAND "${CMAKE_COMMAND}" -E make_directory
     "${CMAKE_CURRENT_BINARY_DIR}/generated"
@@ -385,6 +414,8 @@ set_source_files_properties(
   "${PD_PS2_USBHDFSD_IRX_C}"
   "${PD_PS2_SIO2MAN_IRX_C}"
   "${PD_PS2_PADMAN_IRX_C}"
+  "${PD_PS2_MCMAN_IRX_C}"
+  "${PD_PS2_MCSERV_IRX_C}"
   "${PD_PS2_IOMANX_IRX_C}"
   "${PD_PS2_FILEXIO_IRX_C}"
   "${PD_PS2_POWEROFF_IRX_C}"
@@ -923,6 +954,7 @@ set(PD_PS2_GAME_RUNTIME_SOURCES
   ${PD_PS2_PREPROCESS_SOURCES}
   system_ps2.c
   storage_ps2.c
+  memory_card_ps2.c
   fast_math_ps2.c
   audio_ps2.c
   audio_ps2_queue.c
@@ -931,6 +963,8 @@ set(PD_PS2_GAME_RUNTIME_SOURCES
   "${PD_PS2_USBHDFSD_IRX_C}"
   "${PD_PS2_SIO2MAN_IRX_C}"
   "${PD_PS2_PADMAN_IRX_C}"
+  "${PD_PS2_MCMAN_IRX_C}"
+  "${PD_PS2_MCSERV_IRX_C}"
   "${PD_PS2_IOMANX_IRX_C}"
   "${PD_PS2_FILEXIO_IRX_C}"
   "${PD_PS2_POWEROFF_IRX_C}"
@@ -1095,7 +1129,7 @@ target_link_options(pd_ps2_game PRIVATE
   "-Wl,-Map,${PD_PS2_GAME_LINK_MAP}"
 )
 target_link_libraries(pd_ps2_game PRIVATE
-  gskit dmakit padx z audsrv fileXio -ldebug patches kernel m)
+  gskit dmakit padx z audsrv mc fileXio -ldebug patches kernel m)
 if(PD_PS2_POST_STORAGE_USB_LOG_DIAGNOSTIC)
   set_target_properties(pd_ps2_game PROPERTIES
     OUTPUT_NAME "pd-ps2-game-fmcb-usb-log"
