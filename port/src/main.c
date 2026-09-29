@@ -153,6 +153,7 @@ int main(int argc, const char **argv)
 	if (storage_result < 0) {
 		sysFatalError("Owned boot storage failed (%d).", storage_result);
 	}
+	ps2LogOpenAfterStorage();
 
 #endif
 

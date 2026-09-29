@@ -18,9 +18,9 @@ void ps2LogFlush(void);
 /*
  * Open a diagnostic file sink only after the owning storage stack is known to
  * be alive. This avoids carrying a FILE/fileio descriptor across an IOP reboot.
- * Returns non-zero on success.
+ * A failed optional open is reported through the console logger.
  */
-int ps2LogOpenPostStorageFile(const char *path);
+void ps2LogOpenAfterStorage(void);
 
 /* Flush and close the current file sink without affecting console logging. */
 void ps2LogCloseFileSink(void);
@@ -30,7 +30,8 @@ void ps2LogCloseFileSink(void);
  *
  * Current PS2SDK does not implement fsync(). On filesystem-backed launchers,
  * especially mass:, file size/directory metadata may remain stale until close.
- * A checkpoint always flushes and periodically closes/reopens the file. Dense
+ * With no file sink, a checkpoint does no work. Otherwise it flushes and
+ * periodically closes/reopens the file. Dense
  * callers are throttled because repeated mass: reopen cycles can stop making
  * progress. Keep these checkpoints out of frame/hot paths.
  */
