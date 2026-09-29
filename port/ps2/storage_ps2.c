@@ -34,6 +34,8 @@ extern unsigned char iomanX_irx[] __attribute__((aligned(16)));
 extern unsigned int size_iomanX_irx;
 extern unsigned char fileXio_irx[] __attribute__((aligned(16)));
 extern unsigned int size_fileXio_irx;
+extern unsigned char poweroff_irx[] __attribute__((aligned(16)));
+extern unsigned int size_poweroff_irx;
 extern unsigned char ps2dev9_irx[] __attribute__((aligned(16)));
 extern unsigned int size_ps2dev9_irx;
 extern unsigned char ps2atad_irx[] __attribute__((aligned(16)));
@@ -237,6 +239,12 @@ static s32 ps2StorageEnsureHdd(const char *boot_path)
     if (result < 0) {
         sysLogPrintf(LOG_ERROR,
             "STORAGE: fileXioInit failed result=%d", result);
+        return result;
+    }
+
+    result = ps2StorageExecEmbeddedModuleNoArgs(
+        "poweroff", poweroff_irx, size_poweroff_irx);
+    if (result < 0) {
         return result;
     }
 
