@@ -72,13 +72,13 @@ static void pathBaseFromArgv0(char *outPath, u32 outLen)
         strncpy(outPath, sysArgv[0], outLen - 1);
         outPath[outLen - 1] = '\0';
 
-#ifdef PD_PS2_FORCE_LEGACY_USB_ALIAS_DIAGNOSTIC
+#if defined(PD_PS2_FORCE_LEGACY_USB_ALIAS_DIAGNOSTIC) || defined(PD_PS2_OWNED_IOP_RUNTIME)
         /*
-         * HIPOTEZA DO TESTU:
-         * R3Z can describe the USB target as usb:/..., usb0:/... or mass0:/...
-         * while our post-reset current PS2SDK USBHDFSD exposes the legacy
-         * mass: device. Canonicalise only argv[0]-derived executable/home
-         * paths; explicit user paths keep their exact semantics.
+         * R3Z may hand argv[0] to the ELF as usb:/..., usb0:/... or mass0:/...
+         * while the project-owned current PS2SDK USBHDFSD stack exposes the
+         * legacy mass: alias after our clean IOP reboot. Canonicalise only
+         * argv[0]-derived executable/home paths; explicit user paths retain
+         * their caller-supplied device semantics.
          */
         (void)ps2PathCanonicalizeUsbMassToLegacy(outPath, outLen);
 #endif
