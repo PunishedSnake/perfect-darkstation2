@@ -137,6 +137,19 @@ static void ps2PadProbeRpcRegistration(void)
 static int ps2PadExecCurrentModule(
     const char *name, unsigned char *image, unsigned int image_size)
 {
+    /*
+     * An optional service such as memory-card support may have already loaded
+     * the same project-owned current module. After our clean IOP reboot there
+     * is no launcher-owned module to preserve, so a resident exact-name match
+     * is safe to reuse and avoids a duplicate module-start attempt.
+     */
+    const int existing = SifSearchModuleByName(name);
+    if (existing >= 0) {
+        sysLogPrintf(LOG_NOTE,
+            "PAD: reuse project-owned current %s id=%d", name, existing);
+        return existing;
+    }
+
     int module_result = 0;
     const int result = SifExecModuleBuffer(
         image, image_size, 0, NULL, &module_result);
