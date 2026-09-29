@@ -18,42 +18,8 @@
 #include "romsource.h"
 #define ROMDATA_CHECKPOINT() ps2LogCheckpointForce()
 
-#ifdef PD_PS2_FMCB_STARTUP_DIAGNOSTIC
-static void romdataStartupMarker(u64 color)
-{
-	*(volatile u64 *)0x120000e0 = color;
-
-	u32 spins = 40000000u;
-	__asm__ __volatile__(
-		".set noreorder\n\t"
-		"1:\n\t"
-		"addiu %0, %0, -1\n\t"
-		"bnez %0, 1b\n\t"
-		"nop\n\t"
-		".set reorder\n\t"
-		: "+r"(spins)
-		:
-		: "memory");
-}
-#define ROMDATA_STARTUP_MARKER(color) romdataStartupMarker((u64)(color))
-#else
-#define ROMDATA_STARTUP_MARKER(color) ((void)0)
-#endif
-
-#define ROMDATA_DIAG_ENTER          0x000000ffULL /* red */
-#define ROMDATA_DIAG_PRE_OPEN       0x000080ffULL /* orange */
-#define ROMDATA_DIAG_CALL_OPEN      0x0000ffffULL /* yellow */
-#define ROMDATA_DIAG_SOURCE_OPEN    0x00ffffffULL /* white: romSourceOpenFile returned */
-#define ROMDATA_DIAG_HEADER_VALID   0x0000ff80ULL /* lime */
-#define ROMDATA_DIAG_RZIP_READY     0x0000ff00ULL /* green */
-#define ROMDATA_DIAG_ALLOC_READY    0x00ffff00ULL /* cyan */
-#define ROMDATA_DIAG_INFLATE_READY  0x00ff0000ULL /* blue */
-#define ROMDATA_DIAG_SEGMENTS_READY 0x00ff00ffULL /* magenta */
-#define ROMDATA_DIAG_FILES_READY    0x00808080ULL /* grey */
-#define ROMDATA_DIAG_RETURN         0x00ffffffULL /* white */
 #else
 #define ROMDATA_CHECKPOINT() ((void)0)
-#define ROMDATA_STARTUP_MARKER(color) ((void)0)
 #endif
 
 /**
@@ -319,11 +285,10 @@ static inline void romdataLoadRom(void)
 
 	sysLogPrintf(LOG_NOTE, "ROM source: opening %s", path);
 	ROMDATA_CHECKPOINT();
-	ROMDATA_STARTUP_MARKER(ROMDATA_DIAG_CALL_OPEN);
+
 	if (!romSourceOpenFile(&romSource, path)) {
 		sysFatalError("Could not open ROM file %s.\nEnsure that it is in the %s directory.", romName, fsFullPath(""));
 	}
-	ROMDATA_STARTUP_MARKER(ROMDATA_DIAG_SOURCE_OPEN);
 
 	g_RomFileSize = romSourceGetSize(&romSource);
 	sysLogPrintf(LOG_NOTE, "ROM source: opened size=%u", g_RomFileSize);
@@ -348,7 +313,6 @@ static inline void romdataLoadRom(void)
 	}
 	sysLogPrintf(LOG_NOTE, "ROM source: NTSC-final header validated");
 	ROMDATA_CHECKPOINT();
-	ROMDATA_STARTUP_MARKER(ROMDATA_DIAG_HEADER_VALID);
 
 	if (!romSourceGetRzip1173Size(&romSource, ROMDATA_DATA_OFS, &dataSegLen)) {
 		romdataWrongRomError("Data segment is not 1173-compressed.");
@@ -361,13 +325,11 @@ static inline void romdataLoadRom(void)
 		"ROM source: RZIP data segment output=%u input_chunk=%u",
 		dataSegLen, (u32)sizeof(inputScratch));
 	ROMDATA_CHECKPOINT();
-	ROMDATA_STARTUP_MARKER(ROMDATA_DIAG_RZIP_READY);
 
 	romDataSeg = sysMemAlloc(dataSegLen);
 	if (!romDataSeg) {
 		sysFatalError("Could not allocate %u bytes for data segment.", dataSegLen);
 	}
-	ROMDATA_STARTUP_MARKER(ROMDATA_DIAG_ALLOC_READY);
 
 	sysLogPrintf(LOG_NOTE,
 		"ROM source: inflate begin offset=%08x output=%u",
@@ -384,7 +346,7 @@ static inline void romdataLoadRom(void)
 	sysLogPrintf(LOG_NOTE, "ROM source is file-backed; data segment %u bytes from %u compressed bytes",
 		dataSegLen, compressedSize);
 	ROMDATA_CHECKPOINT();
-	ROMDATA_STARTUP_MARKER(ROMDATA_DIAG_INFLATE_READY);
+
 #else
 	g_RomFile = fsFileLoad(romName, &g_RomFileSize);
 
@@ -830,7 +792,7 @@ static inline struct romfile *romdataGetSeg(const char *name)
 
 s32 romdataInit(void)
 {
-	ROMDATA_STARTUP_MARKER(ROMDATA_DIAG_ENTER);
+
 	const char *altRomName = sysArgGetString("--rom-file");
 #ifdef PLATFORM_PS2
 	u32 streamedSegmentCount = 0;
@@ -847,7 +809,6 @@ s32 romdataInit(void)
 		seg->streamed = romdataSegmentShouldStream(seg);
 #endif
 	}
-	ROMDATA_STARTUP_MARKER(ROMDATA_DIAG_PRE_OPEN);
 
 	romdataLoadRom();
 	ROMDATA_CHECKPOINT();
@@ -876,7 +837,7 @@ s32 romdataInit(void)
 		"ROM streaming: %u file-backed segments, %u bytes kept out of EE RAM",
 		streamedSegmentCount, streamedBytes);
 	ROMDATA_CHECKPOINT();
-	ROMDATA_STARTUP_MARKER(ROMDATA_DIAG_SEGMENTS_READY);
+
 #endif
 
 	// load file table from the files segment
@@ -884,7 +845,6 @@ s32 romdataInit(void)
 	ROMDATA_CHECKPOINT();
 	romdataInitFiles();
 	ROMDATA_CHECKPOINT();
-	ROMDATA_STARTUP_MARKER(ROMDATA_DIAG_FILES_READY);
 
 #ifdef PLATFORM_PS2
 	// The decompressed data segment is only a bootstrap producer for the file
@@ -896,7 +856,6 @@ s32 romdataInit(void)
 #endif
 
 	sysLogPrintf(LOG_NOTE, "romdataInit: loaded rom, size = %u", g_RomFileSize);
-	ROMDATA_STARTUP_MARKER(ROMDATA_DIAG_RETURN);
 
 	return 0;
 }

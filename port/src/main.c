@@ -24,158 +24,8 @@
 #include "storage_ps2.h"
 #define GAME_STARTUP_CHECKPOINT() ps2LogCheckpointForce()
 
-#if defined(PD_PS2_POST_STORAGE_USB_LOG_DIAGNOSTIC)
-#define NEWLIB_PORT_AWARE
-#include <fileXio_rpc.h>
-#include <fileio.h>
-#include <sifrpc.h>
-#include <delaythread.h>
-
-static int ps2R3zBoundedRpcProbe(u32 sid)
-{
-	SifRpcClientData_t client __attribute__((aligned(64)));
-	memset(&client, 0, sizeof(client));
-
-	for (s32 i = 0; i < 100; ++i) {
-		const s32 rc = sceSifBindRpc(&client, sid, 0);
-		if (rc < 0) {
-			return rc;
-		}
-		if (client.server != NULL) {
-			return 1;
-		}
-		DelayThread(1000);
-	}
-
-	return 0;
-}
-
-static int ps2R3zWritePreLogFxio(s32 argc, const char **argv,
-		const char *derived_base)
-{
-	static const char *const candidates[] = {
-		"mass0:/pdps2-r3z-pre-fxio.log",
-		"mass:/pdps2-r3z-pre-fxio.log",
-		"usb0:/pdps2-r3z-pre-fxio.log",
-		"usb:/pdps2-r3z-pre-fxio.log",
-	};
-	char textbuf[4096];
-	s32 used = 0;
-	s32 fd = -1;
-	const char *opened_path = NULL;
-
-	sceSifInitRpc(0);
-	const s32 filexio_rpc = ps2R3zBoundedRpcProbe(FILEXIO_IRX);
-	const s32 legacy_fio_rpc = ps2R3zBoundedRpcProbe(0x80000001u);
-
-	if (filexio_rpc != 1) {
-		return -1000 + filexio_rpc;
-	}
-
-	const s32 init_result = fileXioInit();
-	if (init_result < 0) {
-		return init_result;
-	}
-
-	for (u32 i = 0; i < ARRAYCOUNT(candidates); ++i) {
-		fd = fileXioOpen(candidates[i],
-			FIO_O_WRONLY | FIO_O_CREAT | FIO_O_TRUNC, 0666);
-		if (fd >= 0) {
-			opened_path = candidates[i];
-			break;
-		}
-	}
-
-	if (fd < 0) {
-		fileXioExit();
-		return fd;
-	}
-
-	used += snprintf(textbuf + used, sizeof(textbuf) - (u32)used,
-		"R3Z FXIO PRE\n"
-		"fileXio_rpc=%d legacy_fio_rpc_80000001=%d\n"
-		"opened=%s\n"
-		"derived_base=%s\n"
-		"argc=%d\n",
-		filexio_rpc, legacy_fio_rpc,
-		opened_path ? opened_path : "(null)",
-		derived_base ? derived_base : "(null)", argc);
-
-	for (s32 i = 0; i < argc && used > 0 && (u32)used < sizeof(textbuf); ++i) {
-		used += snprintf(textbuf + used, sizeof(textbuf) - (u32)used,
-			"argv[%d]=%s\n", i,
-			argv && argv[i] ? argv[i] : "(null)");
-	}
-
-	if (used < 0) {
-		used = 0;
-	}
-	if ((u32)used >= sizeof(textbuf)) {
-		used = (s32)sizeof(textbuf) - 1;
-	}
-
-	const s32 write_result =
-		used > 0 ? fileXioWrite(fd, textbuf, used) : 0;
-	const s32 close_result = fileXioClose(fd);
-	fileXioExit();
-
-	return write_result < 0 ? write_result : close_result;
-}
-#endif
-
-#ifdef PD_PS2_FMCB_STARTUP_DIAGNOSTIC
-/*
- * Real-hardware launcher diagnostic.
- *
- * BGCOLOR is intentionally written without gsKit/SIF/filesystem dependencies,
- * matching the standalone loader probes. The inherited launcher scanout makes
- * the pre-video markers visible. Each marker is held by a pure EE busy-loop so
- * the diagnostic does not depend on ThreadMan, timers or IOP state.
- */
-static void ps2FmcbStartupMarker(u64 color)
-{
-	*(volatile u64 *)0x120000e0 = color;
-
-	u32 spins = 40000000u;
-	__asm__ __volatile__(
-		".set noreorder\n\t"
-		"1:\n\t"
-		"addiu %0, %0, -1\n\t"
-		"bnez %0, 1b\n\t"
-		"nop\n\t"
-		".set reorder\n\t"
-		: "+r"(spins)
-		:
-		: "memory");
-}
-
-#define PS2_FMCB_STARTUP_MARKER(color) ps2FmcbStartupMarker((u64)(color))
-
-#define PS2_FMCB_COLOR_MAIN_ENTRY        0x000000ffULL /* red */
-#define PS2_FMCB_COLOR_ARGS_STORED       0x000080ffULL /* orange */
-#define PS2_FMCB_COLOR_ARG_SCAN_OK       0x0000ffffULL /* yellow */
-#define PS2_FMCB_COLOR_CRASH_READY       0x0000ff80ULL /* lime */
-#define PS2_FMCB_COLOR_SYSTEM_READY      0x0000ff00ULL /* green */
-#define PS2_FMCB_COLOR_CLEAN_IOP_BEGIN   0x00800080ULL /* purple */
-#define PS2_FMCB_COLOR_CLEAN_IOP_READY   0x00808000ULL /* teal */
-#define PS2_FMCB_COLOR_STORAGE_READY     0x00ffff00ULL /* cyan: mass usable */
-#define PS2_FMCB_COLOR_STORAGE_FAILED    0x00000080ULL /* dark red */
-#define PS2_FMCB_COLOR_FS_INIT_READY     0x00ff8000ULL /* azure */
-#define PS2_FMCB_COLOR_CONFIG_STAT_READY 0x00ff0080ULL /* violet */
-#define PS2_FMCB_COLOR_CONFIG_LOAD_READY 0x00ff00ffULL /* magenta */
-#define PS2_FMCB_COLOR_CONFIG_SAVE_READY 0x00ffffffULL /* white */
-#define PS2_FMCB_COLOR_FILES_READY       0x0080ff00ULL /* mint */
-#define PS2_FMCB_COLOR_INPUT_READY       0x00ff0000ULL /* blue */
-#define PS2_FMCB_COLOR_AUDIO_READY       0x00ff0080ULL /* violet */
-#define PS2_FMCB_COLOR_ROM_READY         0x00ff00ffULL /* magenta */
-#define PS2_FMCB_COLOR_VIDEO_READY       0x00ffffffULL /* white */
-#define PS2_FMCB_COLOR_MAIN_LOOP_READY   0x00808080ULL /* grey */
-#else
-#define PS2_FMCB_STARTUP_MARKER(color) ((void)0)
-#endif
 #else
 #define GAME_STARTUP_CHECKPOINT() ((void)0)
-#define PS2_FMCB_STARTUP_MARKER(color) ((void)0)
 #endif
 
 u32 g_OsMemSize = 0;
@@ -255,37 +105,19 @@ static void cleanup(void)
 
 int main(int argc, const char **argv)
 {
-	PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_MAIN_ENTRY);
 
 	sysInitArgs(argc, argv);
-	PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_ARGS_STORED);
 
 	const s32 disable_crash_handler = sysArgCheck("--no-crash-handler");
-	PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_ARG_SCAN_OK);
 
 	if (!disable_crash_handler) {
 		crashInit();
 	}
-	PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_CRASH_READY);
 
 	sysInit();
-	PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_SYSTEM_READY);
+
 	sysLogPrintf(LOG_NOTE, "runtime: system ready");
 	GAME_STARTUP_CHECKPOINT();
-
-#if PLATFORM_PS2 && defined(PD_PS2_POST_STORAGE_USB_LOG_DIAGNOSTIC)
-	/*
-	 * PRE phase deliberately bypasses newlib/fopen. R3Z itself uses fileXio,
-	 * while current libcglue defaults to legacy fio. If fileXio logging works
-	 * here but ordinary fopen does not, the launcher handoff is not the same
-	 * thing as a working target-side legacy FILEIO service.
-	 */
-	{
-		char inherited_base[FS_MAXPATH + 1];
-		sysGetExecutablePath(inherited_base, sizeof(inherited_base));
-		(void)ps2R3zWritePreLogFxio(argc, argv, inherited_base);
-	}
-#endif
 
 #if PLATFORM_PS2
 	/*
@@ -300,14 +132,13 @@ int main(int argc, const char **argv)
 	 * needed afterwards is rebuilt from the ROM or project-embedded current
 	 * PS2SDK modules.
 	 */
-	PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_CLEAN_IOP_BEGIN);
+
 	ps2LogCloseFileSink();
 	const s32 clean_iop_result = ps2StorageResetIopForCleanBoot();
 	if (clean_iop_result < 0) {
-		PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_STORAGE_FAILED);
+
 		sysFatalError("Owned IOP bootstrap failed (%d).", clean_iop_result);
 	}
-	PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_CLEAN_IOP_READY);
 
 	/* Rebuild only the boot medium's USB or HDD storage stack. */
 	const char *const boot_path =
@@ -318,54 +149,23 @@ int main(int argc, const char **argv)
 		storage_result,
 		ps2PathBootMediumName(ps2PathClassifyBootMedium(boot_path)));
 	GAME_STARTUP_CHECKPOINT();
-	PS2_FMCB_STARTUP_MARKER(
-		storage_result >= 0 ? PS2_FMCB_COLOR_STORAGE_READY
-		                 : PS2_FMCB_COLOR_STORAGE_FAILED);
+
 	if (storage_result < 0) {
 		sysFatalError("Owned boot storage failed (%d).", storage_result);
 	}
 
-#ifdef PD_PS2_POST_STORAGE_USB_LOG_DIAGNOSTIC
-	/*
-	 * POST phase: now use only the current-PS2SDK filesystem rebuilt after the
-	 * reset. PRE and POST are deliberately separate files/descriptor lifetimes.
-	 */
-	const char *const startup_log_path = "mass:/pdps2-r3z-post.log";
-	const s32 startup_log_open = ps2LogOpenPostStorageFile(startup_log_path);
-	if (startup_log_open) {
-		char executable_base[FS_MAXPATH + 1];
-		sysGetExecutablePath(executable_base, sizeof(executable_base));
-		sysLogPrintf(LOG_NOTE,
-			"R3Z TRACE: post-storage logger opened path=%s storage_result=%d",
-			startup_log_path, storage_result);
-		sysLogPrintf(LOG_NOTE, "R3Z TRACE: argc=%d", argc);
-		for (s32 i = 0; i < argc; ++i) {
-			sysLogPrintf(LOG_NOTE, "R3Z TRACE: raw argv[%d]=%s", i,
-				argv && argv[i] ? argv[i] : "(null)");
-		}
-		sysLogPrintf(LOG_NOTE, "R3Z TRACE: argv0-derived executable base=%s",
-			executable_base);
-		ps2LogCheckpointForce();
-	} else {
-		sysLogPrintf(LOG_WARNING,
-			"R3Z TRACE: could not open post-storage log at %s",
-			startup_log_path);
-	}
-#endif
 #endif
 
 	if (fsInit() < 0) {
 		sysFatalError("Filesystem initialisation failed.");
 	}
-	PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_FS_INIT_READY);
 
 #if PLATFORM_PS2
 	const s32 initial_config_size = fsFileSize(CONFIG_PATH);
-	PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_CONFIG_STAT_READY);
+
 #endif
 
 	configInit();
-	PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_CONFIG_LOAD_READY);
 
 #if PLATFORM_PS2
 	/*
@@ -383,12 +183,11 @@ int main(int argc, const char **argv)
 			initial_config_size);
 		GAME_STARTUP_CHECKPOINT();
 	}
-	PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_CONFIG_SAVE_READY);
+
 #endif
 
 	sysLogPrintf(LOG_NOTE, "runtime: filesystem and configuration ready");
 	GAME_STARTUP_CHECKPOINT();
-	PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_FILES_READY);
 
 #if PLATFORM_PS2
 	/*
@@ -404,7 +203,6 @@ int main(int argc, const char **argv)
 	sysLogPrintf(input_result >= 0 ? LOG_NOTE : LOG_WARNING,
 		"runtime: input initialisation end result=%d", input_result);
 	GAME_STARTUP_CHECKPOINT();
-	PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_INPUT_READY);
 
 	sysLogPrintf(LOG_NOTE, "runtime: audio initialisation begin");
 	GAME_STARTUP_CHECKPOINT();
@@ -412,7 +210,7 @@ int main(int argc, const char **argv)
 	sysLogPrintf(audio_result >= 0 ? LOG_NOTE : LOG_WARNING,
 		"runtime: audio initialisation end result=%d", audio_result);
 	GAME_STARTUP_CHECKPOINT();
-	PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_AUDIO_READY);
+
 	sysLogPrintf(LOG_NOTE, "runtime: input and audio ready");
 	GAME_STARTUP_CHECKPOINT();
 
@@ -429,7 +227,7 @@ int main(int argc, const char **argv)
 	sysLogPrintf(LOG_NOTE, "runtime: ROM data ready");
 	GAME_STARTUP_CHECKPOINT();
 	g_ValidGbcRomFound = romdataCheckGbcRom();
-	PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_ROM_READY);
+
 #endif
 
 	if (videoInit() < 0) {
@@ -437,7 +235,6 @@ int main(int argc, const char **argv)
 	}
 	sysLogPrintf(LOG_NOTE, "runtime: video ready");
 	GAME_STARTUP_CHECKPOINT();
-	PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_VIDEO_READY);
 
 #if !PLATFORM_PS2
 	inputInit();
@@ -514,14 +311,7 @@ int main(int argc, const char **argv)
 
 	sysLogPrintf(LOG_NOTE, "runtime: entering Perfect Dark main loop stage=0x%02x", g_StageNum);
 	GAME_STARTUP_CHECKPOINT();
-	PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_MAIN_LOOP_READY);
-#if PLATFORM_PS2 && defined(PD_PS2_POST_STORAGE_USB_LOG_DIAGNOSTIC)
-	/*
-	 * This artifact diagnoses startup only. Do not let synchronous USB logging
-	 * contaminate renderer/audio timing once the game loop begins.
-	 */
-	ps2LogCloseFileSink();
-#endif
+
 	mainProc();
 
 	return 0;

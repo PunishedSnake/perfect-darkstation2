@@ -72,7 +72,7 @@ static void pathBaseFromArgv0(char *outPath, u32 outLen)
         strncpy(outPath, sysArgv[0], outLen - 1);
         outPath[outLen - 1] = '\0';
 
-#if defined(PD_PS2_FORCE_LEGACY_USB_ALIAS_DIAGNOSTIC) || defined(PD_PS2_OWNED_IOP_RUNTIME)
+#ifdef PD_PS2_OWNED_IOP_RUNTIME
         /*
          * R3Z may hand argv[0] to the ELF as usb:/..., usb0:/... or mass0:/...
          * while the project-owned current PS2SDK USBHDFSD stack exposes the

@@ -96,11 +96,11 @@ The map file is a required build artifact. It records actual archive members,
 section contributions and discarded sections after `--gc-sections`; source
 presence in CMake alone is not proof that code survives the final link.
 
-The default target builds the standalone diagnostic:
+The default target builds the owned-IOP game runtime:
 
 ```sh
 cmake --build build-ps2 -j2
-# build-ps2/pd-ps2-bootstrap.elf
+# build-ps2/pd-ps2-game.elf and pd-ps2-game-fmcb.elf
 ```
 
 Optional hardware diagnostics use separate build directories:
@@ -108,15 +108,14 @@ Optional hardware diagnostics use separate build directories:
 ```sh
 cmake -S port/ps2 -B build-ps2-alpha-diag -G Ninja \
   -DPD_PS2_ALPHA_TRILERP_DIAGNOSTIC=ON
-cmake --build build-ps2-alpha-diag -j2
+cmake --build build-ps2-alpha-diag --target pd_ps2_bootstrap -j2
 
 cmake -S port/ps2 -B build-ps2-vu1-diag -G Ninja \
   -DPD_PS2_VU1_COLOR_DIAGNOSTIC=ON
-cmake --build build-ps2-vu1-diag -j2
+cmake --build build-ps2-vu1-diag --target pd_ps2_bootstrap -j2
 ```
 
-CI builds the ordinary standalone bootstrap as a compile gate and fully builds
-and inspects the normal `Og` game ELF. It runs backend-independent host tests,
+CI builds and inspects the normal `Og` game ELF. It runs backend-independent host tests,
 rejects undefined symbols, and publishes the game ELF with its linker map,
 section sizes and build metadata. `O2` is built and published only when the
 manual workflow input requests it. The specialized alpha/VU1 scene selectors

@@ -65,38 +65,6 @@ option(PD_PS2_DISABLE_DEPTH_DIAGNOSTIC
   "Disable GS depth testing and writes in the full game"
   OFF
 )
-option(PD_PS2_FMCB_STARTUP_DIAGNOSTIC
-  "Show direct GS BGCOLOR markers through full-game startup"
-  OFF
-)
-option(PD_PS2_CLEAN_IOP_STARTUP_DIAGNOSTIC
-  "Discard inherited IOP state before PS2 runtime service bootstrap"
-  OFF
-)
-option(PD_PS2_CURRENT_PAD_IRX_DIAGNOSTIC
-  "Use embedded current-PS2SDK sio2man/padman instead of ROM X modules"
-  OFF
-)
-option(PD_PS2_FORCE_LEGACY_USB_ALIAS_DIAGNOSTIC
-  "Rewrite argv[0]-derived usb:/usb0:/mass0: paths to legacy mass:"
-  OFF
-)
-option(PD_PS2_POST_STORAGE_USB_LOG_DIAGNOSTIC
-  "Open mass:/pdps2-r3z.log after clean IOP/storage recovery, without GS color markers"
-  OFF
-)
-if(PD_PS2_CURRENT_PAD_IRX_DIAGNOSTIC AND NOT PD_PS2_CLEAN_IOP_STARTUP_DIAGNOSTIC)
-  message(FATAL_ERROR
-    "PD_PS2_CURRENT_PAD_IRX_DIAGNOSTIC requires clean-IOP startup diagnostic")
-endif()
-if(PD_PS2_FORCE_LEGACY_USB_ALIAS_DIAGNOSTIC AND NOT PD_PS2_CURRENT_PAD_IRX_DIAGNOSTIC)
-  message(FATAL_ERROR
-    "PD_PS2_FORCE_LEGACY_USB_ALIAS_DIAGNOSTIC requires current-PAD diagnostic")
-endif()
-if(PD_PS2_POST_STORAGE_USB_LOG_DIAGNOSTIC AND NOT PD_PS2_CLEAN_IOP_STARTUP_DIAGNOSTIC)
-  message(FATAL_ERROR
-    "PD_PS2_POST_STORAGE_USB_LOG_DIAGNOSTIC requires clean-IOP recovery")
-endif()
 if(PD_PS2_ALPHA_TRILERP_DIAGNOSTIC AND PD_PS2_VU1_COLOR_DIAGNOSTIC)
   message(FATAL_ERROR "Select one hardware diagnostic per build directory")
 endif()
@@ -563,7 +531,7 @@ set_source_files_properties(
       "gfx_start_frame=gfx_start_frame_ps2_impl;gfx_run=gfx_run_ps2_impl;TEXTURE_CACHE_MAX_SIZE=64"
 )
 
-add_executable(pd_ps2_bootstrap
+add_executable(pd_ps2_bootstrap EXCLUDE_FROM_ALL
   bootstrap.c
   system_ps2.c
   audio_ps2.c
@@ -694,78 +662,6 @@ set_target_properties(pd_ps2_audio_diag PROPERTIES
   SUFFIX ".elf"
 )
 
-# FMCB/ExecPS2 loader probes. These deliberately avoid the game runtime so a
-# black-screen launch can be separated into loader, CRT and load-image-size
-# failures on real hardware.
-set(PD_PS2_LOADER_PROBE_RAW_OBJ
-  "${CMAKE_CURRENT_BINARY_DIR}/loader-probe-raw.o")
-set(PD_PS2_LOADER_PROBE_RAW_ELF
-  "${CMAKE_CURRENT_BINARY_DIR}/pd-ps2-loader-probe-raw.elf")
-set(PD_PS2_LOADER_PROBE_LARGE_OBJ
-  "${CMAKE_CURRENT_BINARY_DIR}/loader-probe-large.o")
-set(PD_PS2_LOADER_PROBE_LARGE_ELF
-  "${CMAKE_CURRENT_BINARY_DIR}/pd-ps2-loader-probe-large.elf")
-
-add_custom_command(
-  OUTPUT "${PD_PS2_LOADER_PROBE_RAW_OBJ}"
-  COMMAND "${CMAKE_C_COMPILER}" -c -x assembler-with-cpp -G0
-    "${CMAKE_CURRENT_LIST_DIR}/loader_probe_raw.S"
-    -o "${PD_PS2_LOADER_PROBE_RAW_OBJ}"
-  DEPENDS "${CMAKE_CURRENT_LIST_DIR}/loader_probe_raw.S"
-  VERBATIM
-)
-add_custom_command(
-  OUTPUT "${PD_PS2_LOADER_PROBE_RAW_ELF}"
-  COMMAND "${CMAKE_C_COMPILER}"
-    -nostdlib -nostartfiles -nodefaultlibs -G0
-    -Wl,-zmax-page-size=128
-    "-Wl,-T,${CMAKE_CURRENT_LIST_DIR}/loader_probe.ld"
-    -Wl,-e,_start
-    "${PD_PS2_LOADER_PROBE_RAW_OBJ}"
-    -o "${PD_PS2_LOADER_PROBE_RAW_ELF}"
-  DEPENDS "${PD_PS2_LOADER_PROBE_RAW_OBJ}"
-    "${CMAKE_CURRENT_LIST_DIR}/loader_probe.ld"
-  VERBATIM
-)
-
-add_custom_command(
-  OUTPUT "${PD_PS2_LOADER_PROBE_LARGE_OBJ}"
-  COMMAND "${CMAKE_C_COMPILER}" -c -x assembler-with-cpp -G0
-    "${CMAKE_CURRENT_LIST_DIR}/loader_probe_large.S"
-    -o "${PD_PS2_LOADER_PROBE_LARGE_OBJ}"
-  DEPENDS "${CMAKE_CURRENT_LIST_DIR}/loader_probe_large.S"
-  VERBATIM
-)
-add_custom_command(
-  OUTPUT "${PD_PS2_LOADER_PROBE_LARGE_ELF}"
-  COMMAND "${CMAKE_C_COMPILER}"
-    -nostdlib -nostartfiles -nodefaultlibs -G0
-    -Wl,-zmax-page-size=128
-    "-Wl,-T,${CMAKE_CURRENT_LIST_DIR}/loader_probe.ld"
-    -Wl,-e,_start
-    "${PD_PS2_LOADER_PROBE_LARGE_OBJ}"
-    -o "${PD_PS2_LOADER_PROBE_LARGE_ELF}"
-  DEPENDS "${PD_PS2_LOADER_PROBE_LARGE_OBJ}"
-    "${CMAKE_CURRENT_LIST_DIR}/loader_probe.ld"
-  VERBATIM
-)
-
-add_executable(pd_ps2_loader_probe_crt EXCLUDE_FROM_ALL
-  loader_probe_crt.c
-)
-target_compile_options(pd_ps2_loader_probe_crt PRIVATE -Og -G0)
-set_target_properties(pd_ps2_loader_probe_crt PROPERTIES
-  OUTPUT_NAME "pd-ps2-loader-probe-crt"
-  SUFFIX ".elf"
-)
-
-add_custom_target(pd_ps2_loader_probes
-  DEPENDS
-    "${PD_PS2_LOADER_PROBE_RAW_ELF}"
-    "${PD_PS2_LOADER_PROBE_LARGE_ELF}"
-    pd_ps2_loader_probe_crt
-)
-
 if(PD_PS2_ALPHA_TRILERP_DIAGNOSTIC)
   set(PD_PS2_BOOTSTRAP_OUTPUT_NAME "pd-ps2-alpha-trilerp-diag")
 elseif(PD_PS2_VU1_COLOR_DIAGNOSTIC)
@@ -788,7 +684,7 @@ set_target_properties(pd_ps2_bootstrap PROPERTIES
 # finally videoSubmitCommands -> shared Fast3D -> the PS2 GS backend. The shared
 # options menu is also compiled here so console video/input APIs cannot silently
 # drift away from the game-facing settings contract.
-add_library(pd_ps2_game_bridge OBJECT
+add_library(pd_ps2_game_bridge OBJECT EXCLUDE_FROM_ALL
   "${PD_ROOT}/port/src/main.c"
   "${PD_ROOT}/port/src/config.c"
   "${PD_ROOT}/port/src/fs.c"
@@ -1012,7 +908,7 @@ set(PD_PS2_GAME_RENDERER_SOURCES
   "${PD_PS2_VU1_TRANSFORM_PROGRAM_OBJECT}"
 )
 
-add_executable(pd_ps2_game EXCLUDE_FROM_ALL
+add_executable(pd_ps2_game
   ${PD_PS2_GAME_RUNTIME_SOURCES}
   ${PD_PS2_GAME_RENDERER_SOURCES}
   $<TARGET_OBJECTS:pd_ps2_game_compile_all>
@@ -1097,31 +993,6 @@ if(PD_PS2_DISABLE_DEPTH_DIAGNOSTIC)
     PERFECT_DARK_PS2_DISABLE_DEPTH=1
   )
 endif()
-if(PD_PS2_FMCB_STARTUP_DIAGNOSTIC)
-  target_compile_definitions(pd_ps2_game PRIVATE
-    PD_PS2_FMCB_STARTUP_DIAGNOSTIC=1
-  )
-endif()
-if(PD_PS2_CLEAN_IOP_STARTUP_DIAGNOSTIC)
-  target_compile_definitions(pd_ps2_game PRIVATE
-    PD_PS2_CLEAN_IOP_STARTUP_DIAGNOSTIC=1
-  )
-endif()
-if(PD_PS2_CURRENT_PAD_IRX_DIAGNOSTIC)
-  target_compile_definitions(pd_ps2_game PRIVATE
-    PD_PS2_CURRENT_PAD_IRX_DIAGNOSTIC=1
-  )
-endif()
-if(PD_PS2_FORCE_LEGACY_USB_ALIAS_DIAGNOSTIC)
-  target_compile_definitions(pd_ps2_game PRIVATE
-    PD_PS2_FORCE_LEGACY_USB_ALIAS_DIAGNOSTIC=1
-  )
-endif()
-if(PD_PS2_POST_STORAGE_USB_LOG_DIAGNOSTIC)
-  target_compile_definitions(pd_ps2_game PRIVATE
-    PD_PS2_POST_STORAGE_USB_LOG_DIAGNOSTIC=1
-  )
-endif()
 target_link_directories(pd_ps2_game PRIVATE "${GSKIT}/lib")
 set(PD_PS2_GAME_LINK_MAP "${CMAKE_CURRENT_BINARY_DIR}/pd-ps2-game.map")
 target_link_options(pd_ps2_game PRIVATE
@@ -1130,37 +1001,10 @@ target_link_options(pd_ps2_game PRIVATE
 )
 target_link_libraries(pd_ps2_game PRIVATE
   gskit dmakit padx z audsrv mc fileXio -ldebug patches kernel m)
-if(PD_PS2_POST_STORAGE_USB_LOG_DIAGNOSTIC)
-  set_target_properties(pd_ps2_game PROPERTIES
-    OUTPUT_NAME "pd-ps2-game-fmcb-usb-log"
-    SUFFIX ".elf"
-  )
-elseif(PD_PS2_FORCE_LEGACY_USB_ALIAS_DIAGNOSTIC)
-  set_target_properties(pd_ps2_game PROPERTIES
-    OUTPUT_NAME "pd-ps2-game-fmcb-usb-alias"
-    SUFFIX ".elf"
-  )
-elseif(PD_PS2_CURRENT_PAD_IRX_DIAGNOSTIC)
-  set_target_properties(pd_ps2_game PROPERTIES
-    OUTPUT_NAME "pd-ps2-game-fmcb-current-pad"
-    SUFFIX ".elf"
-  )
-elseif(PD_PS2_CLEAN_IOP_STARTUP_DIAGNOSTIC)
-  set_target_properties(pd_ps2_game PROPERTIES
-    OUTPUT_NAME "pd-ps2-game-fmcb-clean-iop"
-    SUFFIX ".elf"
-  )
-elseif(PD_PS2_FMCB_STARTUP_DIAGNOSTIC)
-  set_target_properties(pd_ps2_game PROPERTIES
-    OUTPUT_NAME "pd-ps2-game-fmcb-startup"
-    SUFFIX ".elf"
-  )
-else()
-  set_target_properties(pd_ps2_game PROPERTIES
-    OUTPUT_NAME "pd-ps2-game"
-    SUFFIX ".elf"
-  )
-endif()
+set_target_properties(pd_ps2_game PROPERTIES
+  OUTPUT_NAME "pd-ps2-game"
+  SUFFIX ".elf"
+)
 
 # Preserve the symbol-rich ELF for post-mortem work and emit a launcher-facing
 # copy stripped only of non-loadable debug/symbol baggage.  CI verifies that
