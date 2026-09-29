@@ -286,28 +286,32 @@ int main(int argc, const char **argv)
 	}
 #endif
 
-#if PLATFORM_PS2 && defined(PD_PS2_CLEAN_IOP_STARTUP_DIAGNOSTIC)
+#if PLATFORM_PS2
 	/*
-	 * A/B recovery for launchers that leave PAD/SIO2/RPC in a poisoned state.
-	 * This deliberately throws away the inherited IOP personality before any
-	 * game-owned IOP service is initialized. Storage is rebuilt immediately
-	 * afterwards from embedded current-PS2SDK modules.
+	 * The PS2 runtime owns the IOP personality.
+	 *
+	 * Never inherit RPC servers, SIO2/PAD state, FILEIO devices or audio
+	 * services from OSDSYS/FMCB/wLaunchELF. Different launchers legitimately
+	 * leave different IOP worlds behind, and carrying any of them into the game
+	 * makes startup behaviour loader-dependent.
+	 *
+	 * Reset before the first game-owned IOP service is initialized. Everything
+	 * needed afterwards is rebuilt from the ROM or project-embedded current
+	 * PS2SDK modules.
 	 */
 	PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_CLEAN_IOP_BEGIN);
+	ps2LogCloseFileSink();
 	const s32 clean_iop_result = ps2StorageResetIopForCleanBoot();
 	if (clean_iop_result < 0) {
 		PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_STORAGE_FAILED);
-		sysFatalError("Clean IOP bootstrap failed (%d).", clean_iop_result);
+		sysFatalError("Owned IOP bootstrap failed (%d).", clean_iop_result);
 	}
 	PS2_FMCB_STARTUP_MARKER(PS2_FMCB_COLOR_CLEAN_IOP_READY);
-#endif
 
-#if PLATFORM_PS2
 	/*
-	 * The ROM and configuration are commonly next to an ELF launched from
-	 * mass:. Do not make that storage service an undocumented property of the
-	 * parent launcher. Reuse a working inherited stack, otherwise provide the
-	 * current PS2SDK USBD/USBHDFSD pair without resetting the IOP.
+	 * Rebuild mass: from our embedded current-PS2SDK USBD/USBHDFSD pair. The
+	 * ensure helper still checks for a resident service, but after the reset any
+	 * resident module can only have been installed by this process.
 	 */
 	const s32 mass_result = ps2StorageEnsureMass(
 		argc > 0 && argv ? argv[0] : NULL);
