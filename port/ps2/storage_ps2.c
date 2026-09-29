@@ -16,6 +16,7 @@
 #include <sifrpc.h>
 
 #include "log_ps2.h"
+#include "memory_card_ps2.h"
 #include "path_ps2.h"
 #include "system.h"
 
@@ -321,13 +322,20 @@ s32 ps2StoragePrepareBootMedium(const char *boot_path)
         case PS2_BOOT_MEDIUM_HDD:
             return ps2StorageEnsureHdd(boot_path);
 
-        /*
-         * These media intentionally do not trigger USB/HDD drivers. Their
-         * backends will be added when the runtime actually supports data files
-         * from them. SIO2/PAD and optional memory-card profile services are
-         * independent of boot-storage selection.
-         */
         case PS2_BOOT_MEDIUM_MC:
+            /*
+             * When the executable itself lives on mc0:/mc1:, memory-card I/O
+             * is boot storage rather than an optional profile feature. Load
+             * only its SIO2/MCMAN/MCSERV service here. On USB/HDD boots the
+             * same service remains lazy until profile/save code requests it.
+             */
+            return ps2MemoryCardEnsureService();
+
+        /*
+         * These media intentionally do not trigger USB/HDD/MC drivers. Their
+         * owned backends will be added when the runtime actually supports data
+         * files from them.
+         */
         case PS2_BOOT_MEDIUM_CDVD:
         case PS2_BOOT_MEDIUM_HOST:
         case PS2_BOOT_MEDIUM_NETWORK:
