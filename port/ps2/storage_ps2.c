@@ -1,3 +1,5 @@
+#define NEWLIB_PORT_AWARE
+
 #include "storage_ps2.h"
 
 #include <stdbool.h>
@@ -6,12 +8,15 @@
 
 #include <delaythread.h>
 #include <dirent.h>
+#include <fileio.h>
+#include <fileXio_rpc.h>
 #include <iopcontrol.h>
 #include <loadfile.h>
 #include <sbv_patches.h>
 #include <sifrpc.h>
 
 #include "log_ps2.h"
+#include "path_ps2.h"
 #include "system.h"
 
 #define PS2_STORAGE_ENUM_TIMEOUT_USEC 2000000u
@@ -25,23 +30,21 @@ extern unsigned int size_usbd_irx;
 extern unsigned char usbhdfsd_irx[] __attribute__((aligned(16)));
 extern unsigned int size_usbhdfsd_irx;
 
-static bool ps2StoragePathUsesMass(const char *path)
-{
-    if (!path) {
-        return false;
-    }
-    return strncmp(path, "mass:", 5u) == 0 ||
-        strncmp(path, "mass0:", 6u) == 0 ||
-        strncmp(path, "mass1:", 6u) == 0;
-}
+extern unsigned char iomanX_irx[] __attribute__((aligned(16)));
+extern unsigned int size_iomanX_irx;
+extern unsigned char fileXio_irx[] __attribute__((aligned(16)));
+extern unsigned int size_fileXio_irx;
+extern unsigned char ps2dev9_irx[] __attribute__((aligned(16)));
+extern unsigned int size_ps2dev9_irx;
+extern unsigned char ps2atad_irx[] __attribute__((aligned(16)));
+extern unsigned int size_ps2atad_irx;
+extern unsigned char ps2hdd_irx[] __attribute__((aligned(16)));
+extern unsigned int size_ps2hdd_irx;
+extern unsigned char ps2fs_irx[] __attribute__((aligned(16)));
+extern unsigned int size_ps2fs_irx;
 
 static bool ps2StorageMassRootReady(void)
 {
-    /*
-     * The runtime uses PS2SDK's newlib glue, which explicitly rejects direct
-     * fio/fileXio calls. Probe the inherited IOMAN device through POSIX instead
-     * so storage bootstrap follows the same API contract as the game itself.
-     */
     DIR *dir = opendir("mass:/");
     if (!dir) {
         return false;
@@ -74,16 +77,22 @@ static int ps2StorageWaitForMass(void)
     return -1;
 }
 
+static bool ps2StoragePfsRootReady(void)
+{
+    const int fd = fileXioDopen("pfs0:/");
+    if (fd < 0) {
+        return false;
+    }
+    fileXioDclose(fd);
+    return true;
+}
+
 s32 ps2StorageResetIopForCleanBoot(void)
 {
     /*
-     * POTWIERDZONE / CURRENT PS2SDK:
-     * an IOP reboot invalidates resident modules and RPC bindings. Current
-     * PS2SDK clients use the reboot counter to discard stale bindings on their
-     * next init. Re-establish RPC + LOADFILE before rebuilding device services.
-     *
-     * This is intentionally a startup-only diagnostic path. It is justified
-     * only when the inherited launcher IOP personality is known to be toxic.
+     * A clean reboot invalidates launcher modules and RPC bindings. Rebuild
+     * only the services selected by ps2StoragePrepareBootMedium() and the
+     * runtime subsystems that follow it.
      */
     sceSifInitRpc(0);
 
@@ -119,19 +128,17 @@ s32 ps2StorageResetIopForCleanBoot(void)
     return 0;
 }
 
-static int ps2StorageEnsureEmbeddedModule(
-    const char *name, const unsigned char *image, unsigned int image_size)
+static int ps2StorageExecEmbeddedModule(
+    const char *name,
+    unsigned char *image,
+    unsigned int image_size,
+    int args_len,
+    const char *args)
 {
-    int result = SifSearchModuleByName(name);
-    if (result > 0) {
-        sysLogPrintf(LOG_NOTE,
-            "STORAGE: reuse resident IOP module %s id=%d", name, result);
-        return result;
-    }
-
     int module_result = 0;
-    result = SifExecModuleBuffer(
-        (void *)image, image_size, 0, NULL, &module_result);
+    const int result = SifExecModuleBuffer(
+        image, image_size, args_len, args, &module_result);
+
     if (result >= 0) {
         sysLogPrintf(LOG_NOTE,
             "STORAGE: executed embedded %s id=%d start_result=%d bytes=%u",
@@ -139,18 +146,16 @@ static int ps2StorageEnsureEmbeddedModule(
         return result;
     }
 
-    const int resident = SifSearchModuleByName(name);
-    if (resident > 0) {
-        sysLogPrintf(LOG_WARNING,
-            "STORAGE: %s load returned %d but resident module id=%d is usable",
-            name, result, resident);
-        return resident;
-    }
-
     sysLogPrintf(LOG_ERROR,
-        "STORAGE: failed to provide IOP module %s result=%d start_result=%d",
+        "STORAGE: failed to execute embedded %s result=%d start_result=%d",
         name, result, module_result);
     return result;
+}
+
+static int ps2StorageExecEmbeddedModuleNoArgs(
+    const char *name, unsigned char *image, unsigned int image_size)
+{
+    return ps2StorageExecEmbeddedModule(name, image, image_size, 0, NULL);
 }
 
 s32 ps2StorageEnsureMass(const char *boot_path)
@@ -160,40 +165,170 @@ s32 ps2StorageEnsureMass(const char *boot_path)
 
     if (ps2StorageMassRootReady()) {
         sysLogPrintf(LOG_NOTE,
-            "STORAGE: inherited mass: service is usable boot_path=%s",
+            "STORAGE: project-owned mass: service already ready boot_path=%s",
             boot_path ? boot_path : "(null)");
         return 0;
     }
 
-    const bool boot_requires_mass = ps2StoragePathUsesMass(boot_path);
-    sysLogPrintf(boot_requires_mass ? LOG_WARNING : LOG_NOTE,
-        "STORAGE: mass: unavailable after ExecPS2; boot_path=%s; "
-        "starting embedded current-PS2SDK storage stack",
-        boot_path ? boot_path : "(null)");
+    sysLogPrintf(LOG_NOTE,
+        "STORAGE: boot medium USB; loading only USBD/USBHDFSD boot stack");
 
-    /*
-     * Loading from a buffer requires the standard PS2SDK LMB patch. Do not
-     * reset the IOP here: controller/audio services and any working launcher
-     * state remain valid, while missing USB services are added incrementally.
-     */
     sbv_patch_enable_lmb();
 
-    const int usbd = ps2StorageEnsureEmbeddedModule(
+    const int usbd = ps2StorageExecEmbeddedModuleNoArgs(
         "USB_driver", usbd_irx, size_usbd_irx);
     if (usbd < 0) {
         return usbd;
     }
 
-    const int usbhdfsd = ps2StorageEnsureEmbeddedModule(
+    const int usbhdfsd = ps2StorageExecEmbeddedModuleNoArgs(
         "usbhdfsd", usbhdfsd_irx, size_usbhdfsd_irx);
     if (usbhdfsd < 0) {
         return usbhdfsd;
     }
 
     const int ready = ps2StorageWaitForMass();
-    if (ready < 0 && boot_requires_mass) {
+    if (ready < 0) {
         sysLogPrintf(LOG_ERROR,
-            "STORAGE: executable came from mass: but the device could not be restored");
+            "STORAGE: USB boot device could not be restored after clean IOP reboot");
     }
     return ready;
+}
+
+static s32 ps2StorageEnsureHdd(const char *boot_path)
+{
+    char partition[96];
+    char relative[768];
+
+    if (!ps2PathParseHddBootContext(
+            boot_path, partition, sizeof(partition),
+            relative, sizeof(relative))) {
+        sysLogPrintf(LOG_ERROR,
+            "STORAGE: HDD boot detected but argv[0] has no recoverable APA partition context: %s",
+            boot_path ? boot_path : "(null)");
+        return -20;
+    }
+
+    sysLogPrintf(LOG_NOTE,
+        "STORAGE: boot medium HDD partition=%s path=%s",
+        partition, relative);
+
+    /*
+     * HDD/PFS uses the extended I/O manager and FILEXIO RPC stack. Keep these
+     * modules strictly inside the HDD path so USB boots do not pay the IOP RAM
+     * or startup-time cost.
+     */
+    sbv_patch_enable_lmb();
+    sbv_patch_disable_prefix_check();
+
+    int result = ps2StorageExecEmbeddedModuleNoArgs(
+        "iomanX", iomanX_irx, size_iomanX_irx);
+    if (result < 0) {
+        return result;
+    }
+
+    result = ps2StorageExecEmbeddedModuleNoArgs(
+        "fileXio", fileXio_irx, size_fileXio_irx);
+    if (result < 0) {
+        return result;
+    }
+
+    result = fileXioInit();
+    if (result < 0) {
+        sysLogPrintf(LOG_ERROR,
+            "STORAGE: fileXioInit failed result=%d", result);
+        return result;
+    }
+
+    result = ps2StorageExecEmbeddedModuleNoArgs(
+        "ps2dev9", ps2dev9_irx, size_ps2dev9_irx);
+    if (result < 0) {
+        return result;
+    }
+
+    result = ps2StorageExecEmbeddedModuleNoArgs(
+        "ps2atad", ps2atad_irx, size_ps2atad_irx);
+    if (result < 0) {
+        return result;
+    }
+
+    static const char hdd_args[] =
+        "-o\0"
+        "4\0"
+        "-n\0"
+        "20";
+    result = ps2StorageExecEmbeddedModule(
+        "ps2hdd", ps2hdd_irx, size_ps2hdd_irx,
+        sizeof(hdd_args), hdd_args);
+    if (result < 0) {
+        return result;
+    }
+
+    static const char pfs_args[] =
+        "-m\0"
+        "4\0"
+        "-o\0"
+        "10\0"
+        "-n\0"
+        "40";
+    result = ps2StorageExecEmbeddedModule(
+        "ps2fs", ps2fs_irx, size_ps2fs_irx,
+        sizeof(pfs_args), pfs_args);
+    if (result < 0) {
+        return result;
+    }
+
+    result = fileXioMount("pfs0:", partition, FIO_MT_RDWR);
+    if (result < 0) {
+        sysLogPrintf(LOG_ERROR,
+            "STORAGE: failed to mount %s as pfs0: result=%d",
+            partition, result);
+        return result;
+    }
+
+    if (!ps2StoragePfsRootReady()) {
+        sysLogPrintf(LOG_ERROR,
+            "STORAGE: pfs0: mount returned success but root is not readable");
+        return -21;
+    }
+
+    sysLogPrintf(LOG_NOTE,
+        "STORAGE: HDD/PFS boot stack ready partition=%s", partition);
+    return 0;
+}
+
+s32 ps2StoragePrepareBootMedium(const char *boot_path)
+{
+    const enum Ps2BootMedium medium = ps2PathClassifyBootMedium(boot_path);
+
+    sysLogPrintf(LOG_NOTE,
+        "STORAGE: detected boot medium=%s argv0=%s",
+        ps2PathBootMediumName(medium),
+        boot_path ? boot_path : "(null)");
+
+    switch (medium) {
+        case PS2_BOOT_MEDIUM_USB:
+            return ps2StorageEnsureMass(boot_path);
+
+        case PS2_BOOT_MEDIUM_HDD:
+            return ps2StorageEnsureHdd(boot_path);
+
+        /*
+         * These media intentionally do not trigger USB/HDD drivers. Their
+         * backends will be added when the runtime actually supports data files
+         * from them. SIO2/PAD and optional memory-card profile services are
+         * independent of boot-storage selection.
+         */
+        case PS2_BOOT_MEDIUM_MC:
+        case PS2_BOOT_MEDIUM_CDVD:
+        case PS2_BOOT_MEDIUM_HOST:
+        case PS2_BOOT_MEDIUM_NETWORK:
+        case PS2_BOOT_MEDIUM_ROM:
+        case PS2_BOOT_MEDIUM_UNKNOWN:
+        default:
+            sysLogPrintf(LOG_NOTE,
+                "STORAGE: no boot-storage IRX stack selected for medium=%s",
+                ps2PathBootMediumName(medium));
+            return 0;
+    }
 }
