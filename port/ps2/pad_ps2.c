@@ -85,7 +85,7 @@ static bool s_pad_initialized;
 static int s_sio2_module_result = -1;
 static int s_pad_module_result = -1;
 
-#ifdef PD_PS2_CURRENT_PAD_IRX_DIAGNOSTIC
+#if defined(PD_PS2_CURRENT_PAD_IRX_DIAGNOSTIC) || defined(PD_PS2_OWNED_IOP_RUNTIME)
 extern unsigned char sio2man_irx[] __attribute__((aligned(16)));
 extern unsigned int size_sio2man_irx;
 extern unsigned char padman_irx[] __attribute__((aligned(16)));
@@ -133,7 +133,7 @@ static void ps2PadProbeRpcRegistration(void)
 }
 #endif
 
-#ifdef PD_PS2_CURRENT_PAD_IRX_DIAGNOSTIC
+#if defined(PD_PS2_CURRENT_PAD_IRX_DIAGNOSTIC) || defined(PD_PS2_OWNED_IOP_RUNTIME)
 static int ps2PadExecCurrentModule(
     const char *name, unsigned char *image, unsigned int image_size)
 {
@@ -373,11 +373,11 @@ bool ps2PadInit(void)
         s_ports[player].last_libpad_state = PAD_STATE_DISCONN;
     }
 
-    /* Current PS2SDK padx sample uses the ROM extended SIO2/PAD modules. */
+    /* Full-game PS2 runtime uses a project-owned, generation-matched SIO2/PAD pair. */
     sceSifInitRpc(0);
     PS2_PAD_STARTUP_MARKER(PS2_PAD_DIAG_RPC_READY);
 
-#ifdef PD_PS2_CURRENT_PAD_IRX_DIAGNOSTIC
+#if defined(PD_PS2_CURRENT_PAD_IRX_DIAGNOSTIC) || defined(PD_PS2_OWNED_IOP_RUNTIME)
     sbv_patch_enable_lmb();
     s_sio2_module_result =
         ps2PadExecCurrentModule("sio2man", sio2man_irx, size_sio2man_irx);
@@ -391,7 +391,7 @@ bool ps2PadInit(void)
     }
     PS2_PAD_STARTUP_MARKER(PS2_PAD_DIAG_SIO2_READY);
 
-#ifdef PD_PS2_CURRENT_PAD_IRX_DIAGNOSTIC
+#if defined(PD_PS2_CURRENT_PAD_IRX_DIAGNOSTIC) || defined(PD_PS2_OWNED_IOP_RUNTIME)
     s_pad_module_result =
         ps2PadExecCurrentModule("padman", padman_irx, size_padman_irx);
 #else
