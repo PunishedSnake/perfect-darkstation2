@@ -30,7 +30,7 @@ progress or GS presentation.
 
 ## Required files
 
-Put the following in one writable directory on the launch device:
+Put the following in one writable directory on a USB or HDD/PFS launch device:
 
 ```text
 pd-ps2-game.elf
@@ -53,8 +53,9 @@ Select on controller 1 as described in
 [the trace guide](../../docs/PS2_RENDERER_TRACE.md).
 
 The ELF directory is the default base and save directory because PS2 launchers
-do not provide a reliable desktop-style working directory. Common PS2 device
-prefixes such as `mass:`, `host:`, `mc0:` and `pfs0:` are treated as absolute.
+do not provide a reliable desktop-style working directory. The owned IOP boot
+path supports USB and HDD/PFS. Memory-card modules are loaded only when a
+`mc0:` or `mc1:` file operation needs them; memory card is not a boot medium.
 
 ## Build
 
@@ -70,6 +71,7 @@ Outputs:
 
 ```text
 build-ps2/pd-ps2-game.elf
+build-ps2/pd-ps2-game-fmcb.elf
 build-ps2/pd-ps2-game.map
 ```
 

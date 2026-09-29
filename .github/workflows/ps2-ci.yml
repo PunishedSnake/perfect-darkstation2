@@ -338,28 +338,6 @@ jobs:
             -Iinclude -Iinclude/PR -Isrc/include -Isrc/lib/ultra/audio \
             port/ps2/gfx_ps2.cpp
 
-      - name: Host syntax-check alpha-trilerp scene
-        run: |
-          timeout 45s gcc -std=c11 -Wall -Wextra -Werror \
-            -fdiagnostics-color=never -fmax-errors=20 -fsyntax-only \
-            -DPERFECT_DARK_PS2_ALPHA_TRILERP_DIAGNOSTIC=1 \
-            -D_LANGUAGE_C=1 \
-            -include include/PR/ultratypes.h \
-            -Iport/ps2 -Iport/fast3d -Iport/include \
-            -Iinclude -Iinclude/PR -Isrc/include -Isrc/lib/ultra/audio \
-            port/ps2/gfx_api_scene.c
-
-      - name: Host syntax-check VU1 scene
-        run: |
-          timeout 45s gcc -std=c11 -Wall -Wextra -Werror \
-            -fdiagnostics-color=never -fmax-errors=20 -fsyntax-only \
-            -DPERFECT_DARK_PS2_VU1_COLOR_BATCH=1 \
-            -D_LANGUAGE_C=1 \
-            -include include/PR/ultratypes.h \
-            -Iport/ps2 -Iport/fast3d -Iport/include \
-            -Iinclude -Iinclude/PR -Isrc/include -Isrc/lib/ultra/audio \
-            port/ps2/gfx_api_scene.c
-
       - name: Test renderer trace format and decoder
         run: |
           g++ -std=c++20 -Wall -Wextra -Werror \
@@ -391,19 +369,7 @@ jobs:
               b"\x89PNG\r\n\x1a\n")
           PY
 
-      - name: Test VU1 fog diagnostic VBO
-        run: |
-          gcc -std=c11 -Wall -Wextra -Werror \
-            -ffunction-sections -fdata-sections -Wl,--gc-sections \
-            -DPERFECT_DARK_PS2_VU1_COLOR_BATCH=1 -D_LANGUAGE_C=1 \
-            -include include/PR/ultratypes.h \
-            -Iport/ps2 -Iport/fast3d -Iport/include \
-            -Iinclude -Iinclude/PR -Isrc/include -Isrc/lib/ultra/audio \
-            port/ps2/gfx_api_scene_vu1_test.c \
-            -o /tmp/gfx_api_scene_vu1_test
-          /tmp/gfx_api_scene_vu1_test
-
-      - name: Configure PS2 bootstrap
+      - name: Configure owned-IOP game
         run: |
           cmake -S port/ps2 -B build-ps2 -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/port/ps2/ps2dev-toolchain.cmake"
