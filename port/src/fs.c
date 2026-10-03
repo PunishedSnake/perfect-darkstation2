@@ -12,6 +12,7 @@
 #include "utils.h"
 #include "fs.h"
 #ifdef PLATFORM_PS2
+#include "memory_card_ps2.h"
 #include "path_ps2.h"
 #endif
 #ifdef PLATFORM_WIN32
@@ -25,6 +26,18 @@ static char modDir[FS_MAXPATH + 1];  // replaces $M
 static char saveDir[FS_MAXPATH + 1]; // replaces $S
 static char homeDir[FS_MAXPATH + 1]; // replaces $H
 static char exeDir[FS_MAXPATH + 1];  // replaces $E
+
+#ifdef PLATFORM_PS2
+static s32 fsEnsureMemoryCardPath(const char *path)
+{
+	if (path && (!strncmp(path, "mc0:", 4) || !strncmp(path, "mc1:", 4))) {
+		return ps2MemoryCardEnsureService();
+	}
+	return 0;
+}
+#else
+#define fsEnsureMemoryCardPath(path) (0)
+#endif
 
 static s32 fsPathIsWritable(const char *path)
 {
@@ -226,6 +239,9 @@ s32 fsFileLoadTo(const char *name, void *dst, u32 dstSize)
 	}
 
 	const char *fullName = fsFullPath(name);
+	if (fsEnsureMemoryCardPath(fullName) < 0) {
+		return -1;
+	}
 
 	FILE *f = fopen(fullName, "rb");
 	if (!f) {
@@ -282,6 +298,9 @@ void *fsFileLoad(const char *name, u32 *outSize)
 	}
 
 	const char *fullName = fsFullPath(name);
+	if (fsEnsureMemoryCardPath(fullName) < 0) {
+		return NULL;
+	}
 
 	FILE *f = fopen(fullName, "rb");
 	if (!f) {
@@ -343,6 +362,9 @@ s32 fsFileSize(const char *name)
 	}
 
 	const char *fullName = fsFullPath(name);
+	if (fsEnsureMemoryCardPath(fullName) < 0) {
+		return -1;
+	}
 	struct stat st;
 	if (stat(fullName, &st) < 0) {
 		return -1;
@@ -356,12 +378,20 @@ s32 fsFileSize(const char *name)
 
 FILE *fsFileOpenWrite(const char *name)
 {
-	return name ? fopen(fsFullPath(name), "wb") : NULL;
+	if (!name) {
+		return NULL;
+	}
+	const char *fullName = fsFullPath(name);
+	return fsEnsureMemoryCardPath(fullName) < 0 ? NULL : fopen(fullName, "wb");
 }
 
 FILE *fsFileOpenRead(const char *name)
 {
-	return name ? fopen(fsFullPath(name), "rb") : NULL;
+	if (!name) {
+		return NULL;
+	}
+	const char *fullName = fsFullPath(name);
+	return fsEnsureMemoryCardPath(fullName) < 0 ? NULL : fopen(fullName, "rb");
 }
 
 void fsFileFree(FILE *f)
@@ -376,10 +406,14 @@ s32 fsCreateDir(const char *path)
 	if (!path) {
 		return -1;
 	}
+	const char *fullName = fsFullPath(path);
+	if (fsEnsureMemoryCardPath(fullName) < 0) {
+		return -1;
+	}
 
 #ifdef PLATFORM_WIN32
-	return _mkdir(fsFullPath(path));
+	return _mkdir(fullName);
 #else
-	return mkdir(fsFullPath(path), 0777);
+	return mkdir(fullName, 0777);
 #endif
 }

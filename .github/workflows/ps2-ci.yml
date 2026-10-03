@@ -338,28 +338,6 @@ jobs:
             -Iinclude -Iinclude/PR -Isrc/include -Isrc/lib/ultra/audio \
             port/ps2/gfx_ps2.cpp
 
-      - name: Host syntax-check alpha-trilerp scene
-        run: |
-          timeout 45s gcc -std=c11 -Wall -Wextra -Werror \
-            -fdiagnostics-color=never -fmax-errors=20 -fsyntax-only \
-            -DPERFECT_DARK_PS2_ALPHA_TRILERP_DIAGNOSTIC=1 \
-            -D_LANGUAGE_C=1 \
-            -include include/PR/ultratypes.h \
-            -Iport/ps2 -Iport/fast3d -Iport/include \
-            -Iinclude -Iinclude/PR -Isrc/include -Isrc/lib/ultra/audio \
-            port/ps2/gfx_api_scene.c
-
-      - name: Host syntax-check VU1 scene
-        run: |
-          timeout 45s gcc -std=c11 -Wall -Wextra -Werror \
-            -fdiagnostics-color=never -fmax-errors=20 -fsyntax-only \
-            -DPERFECT_DARK_PS2_VU1_COLOR_BATCH=1 \
-            -D_LANGUAGE_C=1 \
-            -include include/PR/ultratypes.h \
-            -Iport/ps2 -Iport/fast3d -Iport/include \
-            -Iinclude -Iinclude/PR -Isrc/include -Isrc/lib/ultra/audio \
-            port/ps2/gfx_api_scene.c
-
       - name: Test renderer trace format and decoder
         run: |
           g++ -std=c++20 -Wall -Wextra -Werror \
@@ -391,19 +369,7 @@ jobs:
               b"\x89PNG\r\n\x1a\n")
           PY
 
-      - name: Test VU1 fog diagnostic VBO
-        run: |
-          gcc -std=c11 -Wall -Wextra -Werror \
-            -ffunction-sections -fdata-sections -Wl,--gc-sections \
-            -DPERFECT_DARK_PS2_VU1_COLOR_BATCH=1 -D_LANGUAGE_C=1 \
-            -include include/PR/ultratypes.h \
-            -Iport/ps2 -Iport/fast3d -Iport/include \
-            -Iinclude -Iinclude/PR -Isrc/include -Isrc/lib/ultra/audio \
-            port/ps2/gfx_api_scene_vu1_test.c \
-            -o /tmp/gfx_api_scene_vu1_test
-          /tmp/gfx_api_scene_vu1_test
-
-      - name: Configure PS2 bootstrap
+      - name: Configure owned-IOP game
         run: |
           cmake -S port/ps2 -B build-ps2 -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/port/ps2/ps2dev-toolchain.cmake"
@@ -422,94 +388,8 @@ jobs:
             -o /tmp/gfxmemory_bounds_test
           /tmp/gfxmemory_bounds_test
 
-      - name: Build PS2 bootstrap
-        run: cmake --build build-ps2 -j2 --verbose
-
-      - name: Build FMCB loader probes
-        run: |
-          cmake --build build-ps2 --target pd_ps2_loader_probes -j2 --verbose
-          for elf in \
-            build-ps2/pd-ps2-loader-probe-raw.elf \
-            build-ps2/pd-ps2-loader-probe-crt.elf \
-            build-ps2/pd-ps2-loader-probe-large.elf; do
-            test -s "$elf"
-            echo "===== $elf ====="
-            mips64r5900el-ps2-elf-readelf -h -lW "$elf"
-          done
-
-      - name: Build full Perfect Dark PS2 runtime
+      - name: Build owned-IOP Perfect Dark PS2 runtime
         run: cmake --build build-ps2 --target pd_ps2_game -j2 --verbose
-
-      - name: Build FMCB full-game startup diagnostic
-        run: |
-          cmake -S port/ps2 -B build-ps2-fmcb-startup -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/port/ps2/ps2dev-toolchain.cmake" \
-            -DPD_PS2_FMCB_STARTUP_DIAGNOSTIC=ON
-          cmake --build build-ps2-fmcb-startup --target pd_ps2_game -j2 --verbose
-          test -s build-ps2-fmcb-startup/pd-ps2-game-fmcb-startup.elf
-          mips64r5900el-ps2-elf-size \
-            build-ps2-fmcb-startup/pd-ps2-game-fmcb-startup.elf
-          mips64r5900el-ps2-elf-readelf -h -lW \
-            build-ps2-fmcb-startup/pd-ps2-game-fmcb-startup.elf
-
-      - name: Build FMCB clean-IOP recovery A/B
-        run: |
-          cmake -S port/ps2 -B build-ps2-fmcb-clean-iop -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/port/ps2/ps2dev-toolchain.cmake" \
-            -DPD_PS2_FMCB_STARTUP_DIAGNOSTIC=ON \
-            -DPD_PS2_CLEAN_IOP_STARTUP_DIAGNOSTIC=ON
-          cmake --build build-ps2-fmcb-clean-iop --target pd_ps2_game -j2 --verbose
-          test -s build-ps2-fmcb-clean-iop/pd-ps2-game-fmcb-clean-iop.elf
-          mips64r5900el-ps2-elf-size \
-            build-ps2-fmcb-clean-iop/pd-ps2-game-fmcb-clean-iop.elf
-          mips64r5900el-ps2-elf-readelf -h -lW \
-            build-ps2-fmcb-clean-iop/pd-ps2-game-fmcb-clean-iop.elf
-
-      - name: Build FMCB current-PAD IRX A/B
-        run: |
-          cmake -S port/ps2 -B build-ps2-fmcb-current-pad -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/port/ps2/ps2dev-toolchain.cmake" \
-            -DPD_PS2_FMCB_STARTUP_DIAGNOSTIC=ON \
-            -DPD_PS2_CLEAN_IOP_STARTUP_DIAGNOSTIC=ON \
-            -DPD_PS2_CURRENT_PAD_IRX_DIAGNOSTIC=ON
-          cmake --build build-ps2-fmcb-current-pad --target pd_ps2_game -j2 --verbose
-          test -s build-ps2-fmcb-current-pad/pd-ps2-game-fmcb-current-pad.elf
-          mips64r5900el-ps2-elf-readelf -h -lW \
-            build-ps2-fmcb-current-pad/pd-ps2-game-fmcb-current-pad.elf
-
-      - name: Build wLaunchELF legacy USB-alias A/B
-        run: |
-          cmake -S port/ps2 -B build-ps2-fmcb-usb-alias -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/port/ps2/ps2dev-toolchain.cmake" \
-            -DPD_PS2_FMCB_STARTUP_DIAGNOSTIC=ON \
-            -DPD_PS2_CLEAN_IOP_STARTUP_DIAGNOSTIC=ON \
-            -DPD_PS2_CURRENT_PAD_IRX_DIAGNOSTIC=ON \
-            -DPD_PS2_FORCE_LEGACY_USB_ALIAS_DIAGNOSTIC=ON
-          cmake --build build-ps2-fmcb-usb-alias --target pd_ps2_game -j2 --verbose
-          test -s build-ps2-fmcb-usb-alias/pd-ps2-game-fmcb-usb-alias.elf
-          mips64r5900el-ps2-elf-readelf -h -lW \
-            build-ps2-fmcb-usb-alias/pd-ps2-game-fmcb-usb-alias.elf
-
-      - name: Build R3Z post-storage USB logger
-        run: |
-          cmake -S port/ps2 -B build-ps2-fmcb-usb-log -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/port/ps2/ps2dev-toolchain.cmake" \
-            -DPD_PS2_CLEAN_IOP_STARTUP_DIAGNOSTIC=ON \
-            -DPD_PS2_CURRENT_PAD_IRX_DIAGNOSTIC=ON \
-            -DPD_PS2_POST_STORAGE_USB_LOG_DIAGNOSTIC=ON
-          cmake --build build-ps2-fmcb-usb-log --target pd_ps2_game -j2 --verbose
-          test -s build-ps2-fmcb-usb-log/pd-ps2-game-fmcb-usb-log.elf
-          mips64r5900el-ps2-elf-readelf -h -lW \
-            build-ps2-fmcb-usb-log/pd-ps2-game-fmcb-usb-log.elf
-
-      - name: Inspect EE ELF
-        run: |
-          test -f build-ps2/pd-ps2-bootstrap.elf
-          mips64r5900el-ps2-elf-size build-ps2/pd-ps2-bootstrap.elf
-          mips64r5900el-ps2-elf-readelf -h build-ps2/pd-ps2-bootstrap.elf
-          mips64r5900el-ps2-elf-nm build-ps2/pd-ps2-bootstrap.elf | \
-            grep -E ' audioInit$| audsrv_irx$| size_audsrv_irx$'
-          mips64r5900el-ps2-elf-nm -n build-ps2/pd-ps2-bootstrap.elf | tail -n 20
 
       - name: Inspect full game EE ELF
         run: |
@@ -560,73 +440,6 @@ jobs:
           test -z "$(mips64r5900el-ps2-elf-nm -u build-ps2-o2/pd-ps2-game.elf)"
           mips64r5900el-ps2-elf-size -A build-ps2-o2/pd-ps2-game.elf > \
             build-ps2-o2/pd-ps2-game.sections.txt
-
-      - name: Upload FMCB loader probes
-        uses: actions/upload-artifact@v7
-        with:
-          name: pd-ps2-loader-probes
-          path: |
-            build-ps2/pd-ps2-loader-probe-raw.elf
-            build-ps2/pd-ps2-loader-probe-crt.elf
-            build-ps2/pd-ps2-loader-probe-large.elf
-            docs/PS2_FMCB_LOADER_PROBE.md
-          if-no-files-found: error
-          retention-days: 3
-
-      - name: Upload FMCB full-game startup diagnostic
-        uses: actions/upload-artifact@v7
-        with:
-          name: pd-ps2-fmcb-startup-diagnostic
-          path: |
-            build-ps2-fmcb-startup/pd-ps2-game-fmcb-startup.elf
-            docs/PS2_FMCB_STARTUP_DIAGNOSTIC.md
-            ps2-build-metadata.txt
-          if-no-files-found: error
-          retention-days: 3
-
-      - name: Upload FMCB clean-IOP recovery A/B
-        uses: actions/upload-artifact@v7
-        with:
-          name: pd-ps2-fmcb-clean-iop
-          path: |
-            build-ps2-fmcb-clean-iop/pd-ps2-game-fmcb-clean-iop.elf
-            docs/PS2_FMCB_STARTUP_DIAGNOSTIC.md
-            ps2-build-metadata.txt
-          if-no-files-found: error
-          retention-days: 3
-
-      - name: Upload FMCB current-PAD IRX A/B
-        uses: actions/upload-artifact@v7
-        with:
-          name: pd-ps2-fmcb-current-pad
-          path: |
-            build-ps2-fmcb-current-pad/pd-ps2-game-fmcb-current-pad.elf
-            docs/PS2_FMCB_STARTUP_DIAGNOSTIC.md
-            ps2-build-metadata.txt
-          if-no-files-found: error
-          retention-days: 3
-
-      - name: Upload wLaunchELF legacy USB-alias A/B
-        uses: actions/upload-artifact@v7
-        with:
-          name: pd-ps2-fmcb-usb-alias
-          path: |
-            build-ps2-fmcb-usb-alias/pd-ps2-game-fmcb-usb-alias.elf
-            docs/PS2_FMCB_STARTUP_DIAGNOSTIC.md
-            ps2-build-metadata.txt
-          if-no-files-found: error
-          retention-days: 3
-
-      - name: Upload R3Z post-storage USB logger
-        uses: actions/upload-artifact@v7
-        with:
-          name: pd-ps2-fmcb-usb-log
-          path: |
-            build-ps2-fmcb-usb-log/pd-ps2-game-fmcb-usb-log.elf
-            docs/PS2_FMCB_STARTUP_DIAGNOSTIC.md
-            ps2-build-metadata.txt
-          if-no-files-found: error
-          retention-days: 3
 
       - name: Upload full game ELF
         uses: actions/upload-artifact@v7
