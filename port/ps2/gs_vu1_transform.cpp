@@ -159,7 +159,12 @@ extern "C" bool ps2GsVu1BuildTexturedTransformPayload(
         return false;
     }
 
-    memset(destination, 0, (size_t)planned.input_qw * 16u);
+    /*
+     * The payload is written completely: header, fixed prefix slots, vertices
+     * and the fixed suffix slot together occupy exactly planned.input_qw.
+     * Skip a preparatory memset; on UCAB destinations it doubled the uncached
+     * write traffic of every textured VU1 batch.
+     */
     struct Ps2GsVu1TransformHeader header = {};
     header.control[0] = vertex_count;
     header.control[1] = prefix_count;
@@ -231,8 +236,8 @@ extern "C" bool ps2GsVu1BuildTexturedTransformStream(
         return false;
     }
 
-    memset(destination, 0, (size_t)planned.dma_chain_qw * 16u);
-
+    /* All three chain qwords are written below; the payload builder covers
+     * the remaining planned.input_qw qwords. No preparatory clear is needed. */
     const uint64_t ref_tag = ps2GsVu1TransformDmaTag(
         planned.input_qw, PS2_DMA_TAG_REF, payload_dma_address);
     memcpy(&destination[0], &ref_tag, sizeof(ref_tag));

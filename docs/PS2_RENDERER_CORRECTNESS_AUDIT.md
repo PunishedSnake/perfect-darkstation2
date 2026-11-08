@@ -106,12 +106,24 @@ but that state can no longer leak into the next batch.
 
 ## Remaining correctness gaps
 
-1. **CONFIRMED:** `G_MODULATE_EXT` means `source * destination` in the
-   portable backend. Complex PS2 pass graphs reject it explicitly, but the
-   direct path currently enables ordinary source-over blending instead. An
-   exact GS implementation needs owned framebuffer feedback or a material-
-   specific channel graph. It must not be replaced with another approximate
-   blend equation.
+1. **CONFIRMED, PARTLY FIXED 2026-11-08:** `G_MODULATE_EXT` means
+   `source * destination` (GL `DST_COLOR, ZERO`). Perfect Dark uses it only
+   for the night-vision, IR/horizon-scanner and Infiltration film-interlace
+   tint lines: untextured `G_CC_PRIMITIVE` rectangles with alpha `0xff`.
+   For that flat, opaque case the direct path now draws exact per-channel
+   passes `(Cd - 0) * FIX + 0` under a channel FRAME mask (channels with
+   equal factors share a pass; `FIX = round(c * 128 / 255)`, within one
+   8-bit step of GL, alpha unchanged as in GL). Previously it fell back to
+   source-over and painted the tint colour solid. Non-flat, translucent,
+   textured or fogged modulate draws keep the old behaviour; complex pass
+   graphs still reject the mode explicitly.
+
+   **HYPOTHESIS TO TEST:** partial RGB FRAME masks on the PSMCT16 default
+   framebuffer. FBMSK keeps the PSMCT32 lane layout with significant bits
+   `0x80f8f8f8` (PCSX2 `GSLocalMemory`), so `ps2GsFrameWriteMask` now emits
+   real partial masks on CT16 instead of masking everything. Confirm on a
+   retail console with night vision in a lit room: the image must turn
+   green-tinted, not solid green and not unchanged.
 2. **CONFIRMED:** unsupported combiner recipes are still dropped. Renderer
    visibility cannot be complete until the hardware log inventories the
    remaining recipe IDs and their triangle counts.

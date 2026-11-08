@@ -7,13 +7,29 @@ extern "C" uint32_t ps2GsFrameWriteMask(
 
     if (target_ct16) {
         /*
-         * GS conversion maps FRAME bit 31 to CT16 alpha. Pass graphs never
-         * request a partial RGB mask on CT16, so keep that contract explicit.
+         * FBMSK keeps the PSMCT32 RGBA layout on PSMCT16 targets; only bits
+         * 0x80f8f8f8 are significant (PCSX2 GSLocalMemory: PSMCT16 fmsk).
+         * Masking a whole 8-bit lane therefore masks that 5-bit channel, and
+         * bit 31 masks the 1-bit alpha. Full/empty RGB keep their historical
+         * encodings. HYPOTHESIS TO TEST on hardware for partial RGB masks.
          */
         if (color_channels == PS2_GS_COLOR_WRITE_RGB) {
             return alpha_write ? 0u : 0x80000000u;
         }
-        return alpha_write ? 0x7fffffffu : 0xffffffffu;
+        if (color_channels == 0u) {
+            return alpha_write ? 0x7fffffffu : 0xffffffffu;
+        }
+        uint32_t mask = alpha_write ? 0u : 0x80000000u;
+        if ((color_channels & PS2_GS_COLOR_WRITE_RED) == 0u) {
+            mask |= 0x000000ffu;
+        }
+        if ((color_channels & PS2_GS_COLOR_WRITE_GREEN) == 0u) {
+            mask |= 0x0000ff00u;
+        }
+        if ((color_channels & PS2_GS_COLOR_WRITE_BLUE) == 0u) {
+            mask |= 0x00ff0000u;
+        }
+        return mask;
     }
 
     uint32_t mask = 0u;

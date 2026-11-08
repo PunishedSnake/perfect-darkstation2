@@ -85,8 +85,12 @@ extern "C" bool ps2GsVu1BuildAdBatchStream(uint32_t *destination,
         return false;
     }
 
-    memset(destination, 0, (size_t)planned.dma_chain_qw * 16u);
-
+    /*
+     * Every byte of the chain is written below: three tag/VIF-code qwords,
+     * the GIF tag and exactly register_count A+D records. The destination is
+     * usually a UCAB alias, so a preparatory memset would double the uncached
+     * bus traffic of every PATH1 batch without changing a single output byte.
+     */
     const uint64_t ref_tag = ps2GsVu1DmaTag(
         planned.gif_packet_qw, PS2_DMA_TAG_REF, payload_dma_address);
     memcpy(&destination[0], &ref_tag, sizeof(ref_tag));

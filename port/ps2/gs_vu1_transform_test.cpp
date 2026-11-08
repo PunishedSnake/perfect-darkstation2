@@ -218,5 +218,55 @@ int main(void)
         0x00102034u, scale, offset, 0u,
         prefix, 2u, vertices, 3u, &suffix, 1u, NULL));
 
+    /*
+     * The builders write UCAB memory directly and no longer pre-clear it.
+     * Prove that every byte inside the planned stream is defined: building
+     * over 0x00 and 0xa5 poisoned slots must yield byte-identical output.
+     */
+    for (uint32_t prefix_count = 0u; prefix_count <= 2u; prefix_count += 2u) {
+        for (uint32_t vertex_count = 3u;
+             vertex_count <= PS2_GS_VU1_MAX_TEXTURED_VERTICES;
+             vertex_count += 39u) {
+            static struct Ps2GsVu1TransformVertex poison_vertices[
+                PS2_GS_VU1_MAX_TEXTURED_VERTICES];
+            for (uint32_t i = 0u; i < vertex_count; ++i) {
+                poison_vertices[i] = vertices[i % 3u];
+            }
+            const uint32_t slot_qw =
+                PS2_GS_VU1_BUFFER_QW + PS2_GS_VU1_DMA_CHAIN_OVERHEAD_QW;
+            static uint32_t clean[
+                (PS2_GS_VU1_BUFFER_QW + PS2_GS_VU1_DMA_CHAIN_OVERHEAD_QW) *
+                4u];
+            static uint32_t poisoned[
+                (PS2_GS_VU1_BUFFER_QW + PS2_GS_VU1_DMA_CHAIN_OVERHEAD_QW) *
+                4u];
+            memset(clean, 0x00, sizeof(clean));
+            memset(poisoned, 0xa5, sizeof(poisoned));
+            struct Ps2GsVu1TransformLayout clean_layout = {};
+            assert(ps2GsVu1BuildTexturedTransformStream(
+                clean, slot_qw, 0x00102030u, scale, offset,
+                PS2_GS_VU1_TRANSFORM_FLAG_FOG,
+                prefix_count ? prefix : NULL, prefix_count,
+                poison_vertices, vertex_count,
+                &suffix, 1u, &clean_layout));
+            assert(ps2GsVu1BuildTexturedTransformStream(
+                poisoned, slot_qw, 0x00102030u, scale, offset,
+                PS2_GS_VU1_TRANSFORM_FLAG_FOG,
+                prefix_count ? prefix : NULL, prefix_count,
+                poison_vertices, vertex_count,
+                &suffix, 1u, NULL));
+            assert(memcmp(clean, poisoned,
+                (size_t)clean_layout.dma_chain_qw * 16u) == 0);
+            /* Bytes past the planned stream stay untouched. */
+            const uint8_t *tail = (const uint8_t *)poisoned +
+                (size_t)clean_layout.dma_chain_qw * 16u;
+            const size_t tail_bytes = sizeof(poisoned) -
+                (size_t)clean_layout.dma_chain_qw * 16u;
+            for (size_t i = 0u; i < tail_bytes; ++i) {
+                assert(tail[i] == 0xa5u);
+            }
+        }
+    }
+
     return 0;
 }

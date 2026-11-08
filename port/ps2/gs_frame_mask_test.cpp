@@ -28,6 +28,20 @@ static void test_ct16_aggregate_contract(void)
         PS2_GS_COLOR_WRITE_RGB, false, true) == 0x80000000u);
     assert(ps2GsFrameWriteMask(0u, true, true) == 0x7fffffffu);
     assert(ps2GsFrameWriteMask(0u, false, true) == 0xffffffffu);
+
+    /* Partial RGB uses the CT32 lane layout; CT16 alpha is bit 31. */
+    assert(ps2GsFrameWriteMask(
+        PS2_GS_COLOR_WRITE_RED, false, true) == 0x80ffff00u);
+    assert(ps2GsFrameWriteMask(
+        PS2_GS_COLOR_WRITE_GREEN, true, true) == 0x00ff00ffu);
+    assert(ps2GsFrameWriteMask(
+        PS2_GS_COLOR_WRITE_RED | PS2_GS_COLOR_WRITE_BLUE, false, true) ==
+        0x8000ff00u);
+    /* Every significant CT16 bit of a masked channel is covered. */
+    const uint32_t ct16_bits = 0x80f8f8f8u;
+    const uint32_t green_only =
+        ps2GsFrameWriteMask(PS2_GS_COLOR_WRITE_GREEN, false, true);
+    assert((green_only & ct16_bits) == (0x80f800f8u));
 }
 
 static void test_clear_is_independent_from_draw_masks(void)

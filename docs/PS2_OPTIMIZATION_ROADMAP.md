@@ -185,3 +185,23 @@ Every accepted optimization must satisfy all applicable gates:
 The target is not merely a higher frame counter. It is a renderer and runtime
 whose speed follows from doing less work, moving work to the correct PS2 unit
 and feeding the hardware data in the form it actually wants.
+
+## Progress note, 2026-11-08
+
+Contract-preserving changes landed without retail-hardware measurement yet:
+
+- **#25 (partial):** plain textured batches that gs_core reports as VU1
+  transform candidates no longer build PATH3 fallback vertices up front. A
+  VU1 rejection rebuilds bit-identical PATH3 vertices from the retained
+  clip-space input through the same projection/packing helpers.
+- **#24 (partial):** runs of 12+ fully-inside triangles are translated
+  straight from the Fast3D VBO in batches of up to 81 vertices instead of
+  being copied into the clip buffer and flushed at about 60 vertices.
+  Shorter runs keep the old merge behaviour (`gfx_ps2_clip_batch.h`).
+- VU1 AD/transform stream builders no longer pre-clear their UCAB slots
+  (every planned byte is written; poison tests prove it), and the clipper
+  no longer zero-fills 2304 bytes of scratch per plane-crossing triangle.
+
+Measure with the existing frame-timing window (p50/p95/p99/max) on the
+same scene against the previous `ps2-owned-iop-runtime` head before
+claiming a speedup.

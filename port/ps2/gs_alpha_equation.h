@@ -32,6 +32,27 @@ struct Ps2GsAlphaBlendFactors {
 bool ps2GsDescribeAlphaBlendEquation(enum Ps2GsAlphaBlendEquation equation,
     struct Ps2GsAlphaBlendFactors *factors);
 
+/* (Cd - 0) * FIX + 0: scale the destination colour by FIX/128. */
+struct Ps2GsAlphaBlendFactors ps2GsDestinationScaleBlend(uint8_t fix);
+
+/*
+ * Fast3D G_MODULATE_EXT with a constant source colour (GL DST_COLOR, ZERO):
+ * dst.rgb *= src.rgb / 255. The GS cannot multiply by Cs, but a constant
+ * per-channel factor is exact as FIX with a per-channel FRAME mask. Channels
+ * sharing a factor share one pass, so 1..3 passes are produced.
+ *
+ * fix = round(c * 128 / 255): 0xff -> 0x80 (identity) and 0 -> 0 are exact;
+ * other factors differ from c/255 by at most 1/256, so the 8-bit result
+ * stays within one step of GL after the GS truncating shift.
+ */
+struct Ps2GsModulatePass {
+    uint8_t channels; /* Ps2GsColorWriteChannel bits */
+    uint8_t fix;
+};
+
+uint32_t ps2GsPlanConstantModulate(uint8_t r, uint8_t g, uint8_t b,
+    struct Ps2GsModulatePass passes[3]);
+
 #ifdef __cplusplus
 }
 #endif
