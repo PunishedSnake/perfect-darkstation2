@@ -464,7 +464,7 @@ static void ps2GsCoreEmitAlpha(void)
 
     const uint64_t values[2] = { s_gs->PABE, s_gs->PrimAlpha };
     const uint64_t registers[2] = {
-        GS_PABE, GS_ALPHA_1 + s_gs->PrimContext,
+        GS_PABE, (uint64_t)(GS_ALPHA_1 + s_gs->PrimContext),
     };
     const enum Ps2GsStateSlot slots[2] = {
         PS2_GS_STATE_PABE, PS2_GS_STATE_ALPHA,
