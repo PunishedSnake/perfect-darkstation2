@@ -38,6 +38,11 @@ on:
         required: false
         default: false
         type: boolean
+      build_hot_o2:
+        description: "Build and publish the Og + hot-path O2 comparison ELF"
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: ps2-ci-${{ github.ref }}
@@ -470,6 +475,29 @@ jobs:
             build-ps2/pd-ps2-game.map
             build-ps2/pd-ps2-game.sections.txt
             build-ps2/pd-ps2-game.elf-audit.txt
+            ps2-build-metadata.txt
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Build hot-path O2 full game A/B
+        if: github.event_name == 'workflow_dispatch' && inputs.build_hot_o2
+        run: |
+          cmake -S port/ps2 -B build-ps2-hot-o2 -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/port/ps2/ps2dev-toolchain.cmake" \
+            -DPD_PS2_HOT_PATH_O2=ON
+          cmake --build build-ps2-hot-o2 --target pd_ps2_game -j2 --verbose
+          test -s build-ps2-hot-o2/pd-ps2-game.map
+          mips64r5900el-ps2-elf-size build-ps2-hot-o2/pd-ps2-game.elf
+          test -z "$(mips64r5900el-ps2-elf-nm -u build-ps2-hot-o2/pd-ps2-game.elf)"
+
+      - name: Upload hot-path O2 full game A/B
+        if: github.event_name == 'workflow_dispatch' && inputs.build_hot_o2
+        uses: actions/upload-artifact@v7
+        with:
+          name: pd-ps2-game-hot-o2
+          path: |
+            build-ps2-hot-o2/pd-ps2-game.elf
+            build-ps2-hot-o2/pd-ps2-game.map
             ps2-build-metadata.txt
           if-no-files-found: error
           retention-days: 3

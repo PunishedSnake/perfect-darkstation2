@@ -205,3 +205,15 @@ Contract-preserving changes landed without retail-hardware measurement yet:
 Measure with the existing frame-timing window (p50/p95/p99/max) on the
 same scene against the previous `ps2-owned-iop-runtime` head before
 claiming a speedup.
+
+Second pass, same date:
+
+- `sysGetMicroseconds()`/`osGetTime()` no longer call libgcc `__udivdi3`
+  or 64-bit multiplies (exact shift/divide-by-9 conversion,
+  `timer_convert_ps2.h`). These sit on every translation batch, VU1 wait
+  and game `osGetCount()`.
+- Fast3D triangle setup multiplies by exact power-of-two reciprocals
+  instead of dividing (bit-identical; NPOT keeps division), computes clamp
+  bounds once per triangle and projects the shared cull vertex once.
+- Vertex packing reads the GS primitive offsets once per draw.
+- **#7:** `PD_PS2_HOT_PATH_O2=ON` builds an `Og+hotO2` A/B profile.
