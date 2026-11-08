@@ -1378,10 +1378,24 @@ static int ps2_fixed_xy(float value, int offset)
     return fixed;
 }
 
+/*
+ * GS primitive offsets, cached per draw. gsKit sets them once when the screen
+ * is initialised; reading them through the out-of-line gs_core getters cost
+ * two calls per packed vertex in the default -Og build.
+ */
+static int s_gs_offset_x;
+static int s_gs_offset_y;
+
+static inline void ps2_refresh_gs_offsets(void)
+{
+    s_gs_offset_x = ps2GsCoreGetOffsetX();
+    s_gs_offset_y = ps2GsCoreGetOffsetY();
+}
+
 static struct Ps2GsPackedReg ps2_pack_xyz2(float x, float y, int z)
 {
-    const uint32_t fx = (uint32_t)ps2_fixed_xy(x, ps2GsCoreGetOffsetX());
-    const uint32_t fy = (uint32_t)ps2_fixed_xy(y, ps2GsCoreGetOffsetY());
+    const uint32_t fx = (uint32_t)ps2_fixed_xy(x, s_gs_offset_x);
+    const uint32_t fy = (uint32_t)ps2_fixed_xy(y, s_gs_offset_y);
 
     struct Ps2GsPackedReg out;
     out.value = (uint64_t)(fx & 0xffffu) |
@@ -1393,8 +1407,8 @@ static struct Ps2GsPackedReg ps2_pack_xyz2(float x, float y, int z)
 
 static struct Ps2GsPackedReg ps2_pack_xyzf2(float x, float y, int z, uint8_t fog)
 {
-    const uint32_t fx = (uint32_t)ps2_fixed_xy(x, ps2GsCoreGetOffsetX());
-    const uint32_t fy = (uint32_t)ps2_fixed_xy(y, ps2GsCoreGetOffsetY());
+    const uint32_t fx = (uint32_t)ps2_fixed_xy(x, s_gs_offset_x);
+    const uint32_t fy = (uint32_t)ps2_fixed_xy(y, s_gs_offset_y);
 
     struct Ps2GsPackedReg out;
     out.value = (uint64_t)(fx & 0xffffu) |
@@ -3918,6 +3932,8 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
     if (!ps2GsCoreIsReady() || !s_shader || !buf_vbo || buf_vbo_num_tris == 0) {
         return;
     }
+    /* Every vertex packer below runs inside this call. */
+    ps2_refresh_gs_offsets();
 
     if (!s_shader->plan.supported) {
         ps2RendererStatsRecordUnsupportedShader(
@@ -5163,6 +5179,7 @@ static void ps2_trace_build_config(void)
 
 static void ps2_start_frame(void)
 {
+    ps2_refresh_gs_offsets();
     ps2RendererTraceBeginFrame();
     if (ps2RendererTraceIsCapturing()) {
         ps2RendererStatsPerfSkipCurrentFrame();
