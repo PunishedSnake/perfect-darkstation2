@@ -55,6 +55,27 @@ void intersectEdge(float *destination, const float *from, const float *to,
 
 } // namespace
 
+enum Ps2GsClipClass ps2GsClipClassifyTriangle(
+    const float *triangle, size_t stride)
+{
+    for (size_t vertex = 0u; vertex < 3u; ++vertex) {
+        for (size_t component = 0u; component < 4u; ++component) {
+            if (!std::isfinite(triangle[vertex * stride + component])) {
+                return PS2_GS_CLIP_REJECT;
+            }
+        }
+    }
+
+    const unsigned int code0 = clipCode(&triangle[0u * stride]);
+    const unsigned int code1 = clipCode(&triangle[1u * stride]);
+    const unsigned int code2 = clipCode(&triangle[2u * stride]);
+    if ((code0 & code1 & code2) != 0u) {
+        return PS2_GS_CLIP_REJECT;
+    }
+    return (code0 | code1 | code2) == 0u
+        ? PS2_GS_CLIP_ACCEPT : PS2_GS_CLIP_PARTIAL;
+}
+
 bool ps2GsClipTriangle(const float *triangle, size_t stride,
     float *out_vertices, size_t out_capacity_vertices,
     size_t *out_vertex_count)
@@ -67,21 +88,12 @@ bool ps2GsClipTriangle(const float *triangle, size_t stride,
         return false;
     }
 
-    for (size_t vertex = 0u; vertex < 3u; ++vertex) {
-        for (size_t component = 0u; component < 4u; ++component) {
-            if (!std::isfinite(triangle[vertex * stride + component])) {
-                return true;
-            }
-        }
-    }
-
-    const unsigned int code0 = clipCode(&triangle[0u * stride]);
-    const unsigned int code1 = clipCode(&triangle[1u * stride]);
-    const unsigned int code2 = clipCode(&triangle[2u * stride]);
-    if ((code0 & code1 & code2) != 0u) {
+    const enum Ps2GsClipClass clip_class =
+        ps2GsClipClassifyTriangle(triangle, stride);
+    if (clip_class == PS2_GS_CLIP_REJECT) {
         return true;
     }
-    if ((code0 | code1 | code2) == 0u) {
+    if (clip_class == PS2_GS_CLIP_ACCEPT) {
         if (out_capacity_vertices < 3u) {
             return false;
         }
@@ -90,10 +102,16 @@ bool ps2GsClipTriangle(const float *triangle, size_t stride,
         return true;
     }
 
+    /*
+     * Deliberately uninitialized: every polygon slot is written (copied or
+     * interpolated) before it is read, and only `stride` floats of a slot are
+     * ever touched. Zero-initialising both arrays cost a 2304-byte clear per
+     * clipped triangle, over a quarter of the R5900's 8 KiB data cache.
+     */
     float polygon_a[PS2_GS_CLIP_MAX_POLYGON_VERTICES]
-        [PS2_GS_CLIP_MAX_VERTEX_FLOATS] = {};
+        [PS2_GS_CLIP_MAX_VERTEX_FLOATS];
     float polygon_b[PS2_GS_CLIP_MAX_POLYGON_VERTICES]
-        [PS2_GS_CLIP_MAX_VERTEX_FLOATS] = {};
+        [PS2_GS_CLIP_MAX_VERTEX_FLOATS];
     float (*input)[PS2_GS_CLIP_MAX_VERTEX_FLOATS] = polygon_a;
     float (*output)[PS2_GS_CLIP_MAX_VERTEX_FLOATS] = polygon_b;
     size_t input_count = 3u;
