@@ -16,8 +16,8 @@
 #include "system.h"
 #include "log_ps2.h"
 #include "path_ps2.h"
+#include "timer_convert_ps2.h"
 
-#define USEC_IN_SEC 1000000ULL
 #define LOG_FNAME "pdps2.log"
 #define LOG_STAGE_BUFFER_SIZE 8192u
 #define LOG_FLUSH_THRESHOLD 6144u
@@ -54,11 +54,12 @@ extern void *_sbrk(size_t increment);
 
 static u64 timerUsec(void)
 {
-    u32 sec = 0;
-    u32 usec = 0;
-
-    TimerBusClock2USec(GetTimerSystemTime(), &sec, &usec);
-    return (u64)sec * USEC_IN_SEC + (u64)usec;
+    /*
+     * Bit-identical to TimerBusClock2USec() seconds * 1e6 + microseconds,
+     * without its two libgcc 64-bit divisions. This is on every renderer
+     * batch, VU1 wait and osGetCount() path.
+     */
+    return ps2BusClocksToMicroseconds(GetTimerSystemTime());
 }
 
 static void pathBaseFromArgv0(char *outPath, u32 outLen)

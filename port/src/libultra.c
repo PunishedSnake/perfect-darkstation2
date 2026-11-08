@@ -14,6 +14,9 @@
 #include "fs.h"
 #ifdef PLATFORM_PS2
 #include "romdata.h"
+#ifdef PLATFORM_PS2
+#include "timer_convert_ps2.h"
+#endif
 #endif
 
 #define EEPROM_SIZE (EEP16K_MAXBLOCKS * 8)
@@ -39,7 +42,12 @@ static s32 eepromLoaded = 0;
 OSTime osGetTime(void)
 {
 	// u64 should be enough to last a while
+#ifdef PLATFORM_PS2
+	/* Same value as below without a libgcc 64-bit multiply and divide. */
+	return ps2MicrosecondsToN64Count(sysGetMicroseconds());
+#else
 	return (sysGetMicroseconds() * OS_COUNTER_NUM) / OS_COUNTER_DEN;
+#endif
 }
 
 u32 osGetCount(void)

@@ -24,6 +24,7 @@
 #include "platform.h"
 
 #include "gfx_pc.h"
+#include "gfx_exact_div.h"
 #include "gfx_cc.h"
 #include "gfx_window_manager_api.h"
 #include "gfx_rendering_api.h"
@@ -1481,10 +1482,13 @@ static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx, bo
     }
 
     if ((rsp.geometry_mode & G_CULL_BOTH) != 0) {
-        float dx1 = v1->x / (v1->w) - v2->x / (v2->w);
-        float dy1 = v1->y / (v1->w) - v2->y / (v2->w);
-        float dx2 = v3->x / (v3->w) - v2->x / (v2->w);
-        float dy2 = v3->y / (v3->w) - v2->y / (v2->w);
+        /* v2's projection is shared by both edges; compute it once. */
+        const float x2 = v2->x / (v2->w);
+        const float y2 = v2->y / (v2->w);
+        float dx1 = v1->x / (v1->w) - x2;
+        float dy1 = v1->y / (v1->w) - y2;
+        float dx2 = v3->x / (v3->w) - x2;
+        float dy2 = v3->y / (v3->w) - y2;
         float cross = dx1 * dy2 - dy1 * dx2;
 
         if ((v1->w < 0) ^ (v2->w < 0) ^ (v3->w < 0)) {
@@ -1692,6 +1696,30 @@ static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx, bo
 
     struct GfxClipParameters clip_parameters = gfx_rapi->get_clip_parameters();
 
+    /*
+     * Per-triangle constants for the texture coordinate loop below. Dividing
+     * by a power of two equals multiplying by its exactly representable
+     * reciprocal under IEEE rounding, so these replace per-vertex divisions
+     * with bit-identical multiplies; NPOT sizes keep the true division.
+     */
+    float tex_width_rcp[2] = { 0.0f, 0.0f };
+    float tex_height_rcp[2] = { 0.0f, 0.0f };
+    float tex_clamp_s[2] = { 0.0f, 0.0f };
+    float tex_clamp_t[2] = { 0.0f, 0.0f };
+    for (int t = 0; t < 2; t++) {
+        if (!used_textures[t]) {
+            continue;
+        }
+        tex_width_rcp[t] = gfx_exact_pow2_reciprocal(tex_width[t]);
+        tex_height_rcp[t] = gfx_exact_pow2_reciprocal(tex_height[t]);
+        if (tm & (1 << 2 * t)) {
+            tex_clamp_s[t] = (tex_width2[t] - 0.5f) / tex_width[t];
+        }
+        if (tm & (1 << (2 * t + 1))) {
+            tex_clamp_t[t] = (tex_height2[t] - 0.5f) / tex_height[t];
+        }
+    }
+
     for (int i = 0; i < 3; i++) {
         float z = v_arr[i]->z, w = v_arr[i]->w;
         if (depth_source_prim) {
@@ -1721,14 +1749,14 @@ static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx, bo
             int shiftt = rdp.texture_tile[rdp.first_tile_index + tile].shiftt;
             if (shifts != 0) {
                 if (shifts <= 10) {
-                    u /= 1 << shifts;
+                    u *= gfx_pow2_reciprocal[shifts];
                 } else {
                     u *= 1 << (16 - shifts);
                 }
             }
             if (shiftt != 0) {
                 if (shiftt <= 10) {
-                    v /= 1 << shiftt;
+                    v *= gfx_pow2_reciprocal[shiftt];
                 } else {
                     v *= 1 << (16 - shiftt);
                 }
@@ -1750,17 +1778,19 @@ static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx, bo
                 }
             }
 
-            buf_vbo[buf_vbo_len++] = u / tex_width[t];
-            buf_vbo[buf_vbo_len++] = v / tex_height[t];
+            buf_vbo[buf_vbo_len++] = tex_width_rcp[t] != 0.0f
+                ? u * tex_width_rcp[t] : u / tex_width[t];
+            buf_vbo[buf_vbo_len++] = tex_height_rcp[t] != 0.0f
+                ? v * tex_height_rcp[t] : v / tex_height[t];
 
             bool clampS = tm & (1 << 2 * t);
             bool clampT = tm & (1 << (2 * t + 1));
 
             if (clampS) {
-                buf_vbo[buf_vbo_len++] = (tex_width2[t] - 0.5f) / tex_width[t];
+                buf_vbo[buf_vbo_len++] = tex_clamp_s[t];
             }
             if (clampT) {
-                buf_vbo[buf_vbo_len++] = (tex_height2[t] - 0.5f) / tex_height[t];
+                buf_vbo[buf_vbo_len++] = tex_clamp_t[t];
             }
         }
 

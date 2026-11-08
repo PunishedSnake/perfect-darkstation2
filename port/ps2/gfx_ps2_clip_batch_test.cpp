@@ -114,7 +114,7 @@ void checkPattern(const std::vector<int> &kinds, unsigned int seed)
     const Result result = run(source);
 
     /* The source buffer is read-only for the batcher. */
-    assert(std::memcmp(source.data(), original.data(),
+    assert(source.empty() || std::memcmp(source.data(), original.data(),
         source.size() * sizeof(float)) == 0);
     assert(result.drawn.size() == expected.size());
     for (size_t i = 0u; i < expected.size(); ++i) {

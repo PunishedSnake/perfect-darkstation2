@@ -401,6 +401,17 @@ else()
     "PD_PS2_OPTIMIZATION must be Og or O2, got: ${PD_PS2_OPTIMIZATION}")
 endif()
 
+# Roadmap item 7: compile only the measured renderer/Fast3D hot path at -O2
+# while the rest of the game keeps the Og correctness baseline. Off by
+# default until a retail-hardware A/B on the same scene justifies it.
+option(PD_PS2_HOT_PATH_O2
+  "Compile the renderer and Fast3D hot path at -O2 on top of the Og profile" OFF
+)
+set(PD_PS2_OPTIMIZATION_LABEL "${PD_PS2_OPTIMIZATION}")
+if(PD_PS2_HOT_PATH_O2 AND PD_PS2_OPTIMIZATION STREQUAL "Og")
+  set(PD_PS2_OPTIMIZATION_LABEL "Og+hotO2")
+endif()
+
 option(PD_PS2_FILE_LOG_DEFAULT
   "Enable the blocking mass:/host: file logger by default in the full game" OFF
 )
@@ -430,7 +441,7 @@ set(PD_PS2_GAME_DEFINITIONS
   PAL=0
   VERSION=2
   VERSION_ROMID="${PD_PS2_ROMID}"
-  PD_PS2_OPTIMIZATION_PROFILE="${PD_PS2_OPTIMIZATION}"
+  PD_PS2_OPTIMIZATION_PROFILE="${PD_PS2_OPTIMIZATION_LABEL}"
   PD_PS2_FILE_LOG_DEFAULT=${PD_PS2_FILE_LOG_DEFAULT_VALUE}
 )
 
@@ -772,6 +783,27 @@ set(PD_PS2_GAME_RENDERER_SOURCES
   "${PD_PS2_VU1_TRANSFORM_PROGRAM_OBJECT}"
 )
 
+if(PD_PS2_HOT_PATH_O2 AND PD_PS2_OPTIMIZATION STREQUAL "Og")
+  # Source-level options follow the target options, so -O2 wins here only.
+  set_source_files_properties(
+    gfx_ps2.cpp
+    gs_clip.cpp
+    gs_core.cpp
+    gs_native_queue.cpp
+    gs_state_shadow.cpp
+    gs_texture_convert.cpp
+    gs_vu1_batch.cpp
+    gs_vu1_queue.cpp
+    gs_vu1_transform.cpp
+    "${PD_ROOT}/port/fast3d/gfx_cc.cpp"
+    "${PD_PS2_FAST3D_LIVE_CPP}"
+    "${PD_ROOT}/port/fast3d/rdp_tmem.cpp"
+    "${PD_ROOT}/port/fast3d/rdp_tmem_runtime.cpp"
+    "${PD_ROOT}/port/fast3d/rdp_tmem_live.cpp"
+    PROPERTIES COMPILE_OPTIONS "-O2"
+  )
+endif()
+
 add_executable(pd_ps2_game
   ${PD_PS2_GAME_RUNTIME_SOURCES}
   ${PD_PS2_GAME_RENDERER_SOURCES}
@@ -901,5 +933,5 @@ add_custom_command(TARGET pd_ps2_game POST_BUILD
 message(STATUS "Perfect Dark PS2 root: ${PD_ROOT}")
 message(STATUS "Perfect Dark PS2 gsKit: ${GSKIT}")
 message(STATUS "Perfect Dark PS2 commit: ${PD_PS2_GIT_COMMIT}")
-message(STATUS "Perfect Dark PS2 EE optimization: ${PD_PS2_OPTIMIZATION}")
+message(STATUS "Perfect Dark PS2 EE optimization: ${PD_PS2_OPTIMIZATION_LABEL}")
 message(STATUS "Perfect Dark PS2 default file logger: ${PD_PS2_FILE_LOG_DEFAULT}")

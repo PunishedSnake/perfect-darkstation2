@@ -99,6 +99,19 @@ cmake -S port/ps2 -B build-ps2-o2 -G Ninja \
 cmake --build build-ps2-o2 --target pd_ps2_game -j2
 ```
 
+A third profile keeps the Og baseline for game logic but compiles only the
+renderer and Fast3D hot path (`gfx_ps2.cpp`, `gs_*`, the generated Fast3D
+frontend, TMEM model) at `-O2` (roadmap item 7):
+
+```sh
+cmake -S port/ps2 -B build-ps2-hot-o2 -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE="$PWD/port/ps2/ps2dev-toolchain.cmake" \
+  -DPD_PS2_HOT_PATH_O2=ON
+```
+
+The build log reports the profile as `Og+hotO2`. CI publishes it only on a
+manual run with `build_hot_o2`.
+
 Never compare different optimization profiles, ROMs, logging modes or scenes and call the difference a performance result.
 
 ## Runtime test set
