@@ -130,5 +130,37 @@ int main(void)
     assert(copied_textured_suffix.value == textured_suffix.value);
     assert(copied_textured_suffix.reg == textured_suffix.reg);
 
+    /*
+     * The builder targets UCAB memory and no longer pre-clears it. Building
+     * over differently poisoned slots must yield identical planned bytes and
+     * leave everything after the planned chain untouched.
+     */
+    for (uint32_t record_count = 1u;
+         record_count <= PS2_GS_VU1_MAX_TEXTURED_VERTICES * 3u - 6u;
+         record_count += 61u) {
+        static uint32_t clean[PS2_GS_VU1_DMA_SLOT_QW * 4u];
+        static uint32_t poisoned[PS2_GS_VU1_DMA_SLOT_QW * 4u];
+        memset(clean, 0x00, sizeof(clean));
+        memset(poisoned, 0xa5, sizeof(poisoned));
+        struct Ps2GsVu1BatchLayout clean_layout = {};
+        assert(ps2GsVu1BuildAdBatchStream(
+            clean, PS2_GS_VU1_DMA_SLOT_QW, payload_address,
+            textured_prefix, 5u, textured_records, record_count,
+            &textured_suffix, 1u, &clean_layout));
+        assert(ps2GsVu1BuildAdBatchStream(
+            poisoned, PS2_GS_VU1_DMA_SLOT_QW, payload_address,
+            textured_prefix, 5u, textured_records, record_count,
+            &textured_suffix, 1u, NULL));
+        assert(memcmp(clean, poisoned,
+            (size_t)clean_layout.dma_chain_qw * 16u) == 0);
+        const uint8_t *tail = (const uint8_t *)poisoned +
+            (size_t)clean_layout.dma_chain_qw * 16u;
+        for (size_t i = 0u;
+             i < sizeof(poisoned) - (size_t)clean_layout.dma_chain_qw * 16u;
+             ++i) {
+            assert(tail[i] == 0xa5u);
+        }
+    }
+
     return 0;
 }

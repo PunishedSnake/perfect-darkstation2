@@ -17,7 +17,7 @@ Real hardware has confirmed through the 2026-09-15 no-file-log build:
 
 - system, filesystem and logger startup;
 - bounded loading of the NTSC-final ROM data segment;
-- GS presentation and the diagnostic renderer;
+- GS presentation and the native renderer;
 - DualShock 2 discovery and corrected stick extrema;
 - the legal screen followed by the Rare, Nintendo 64 and Perfect Dark logos;
 - the main menu and mission loading;
@@ -30,7 +30,7 @@ progress or GS presentation.
 
 ## Required files
 
-Put the following in one writable directory on the launch device:
+Put the following in one writable directory on a USB or HDD/PFS launch device:
 
 ```text
 pd-ps2-game.elf
@@ -47,14 +47,15 @@ pd.ini       runtime configuration
 eeprom.bin   emulated 16 Kbit cartridge EEPROM, exactly 2048 bytes
 ```
 
-`pdps2.log` is created only when `--file-log` is enabled or a dedicated
-file-logging build is used. `pdps2-gs-trace.bin` is created after a press of
+`pdps2.log` is created after the owned USB/HDD stack is ready only when
+`--file-log` is enabled or a file-logging build is used. `pdps2-gs-trace.bin` is created after a press of
 Select on controller 1 as described in
 [the trace guide](../../docs/PS2_RENDERER_TRACE.md).
 
 The ELF directory is the default base and save directory because PS2 launchers
-do not provide a reliable desktop-style working directory. Common PS2 device
-prefixes such as `mass:`, `host:`, `mc0:` and `pfs0:` are treated as absolute.
+do not provide a reliable desktop-style working directory. The owned IOP boot
+path supports USB and HDD/PFS. Memory-card modules are loaded only when a
+`mc0:` or `mc1:` file operation needs them; memory card is not a boot medium.
 
 ## Build
 
@@ -70,6 +71,7 @@ Outputs:
 
 ```text
 build-ps2/pd-ps2-game.elf
+build-ps2/pd-ps2-game-fmcb.elf
 build-ps2/pd-ps2-game.map
 ```
 
@@ -96,31 +98,17 @@ The map file is a required build artifact. It records actual archive members,
 section contributions and discarded sections after `--gc-sections`; source
 presence in CMake alone is not proof that code survives the final link.
 
-The default target builds the standalone diagnostic:
+The default target builds the owned-IOP game runtime:
 
 ```sh
 cmake --build build-ps2 -j2
-# build-ps2/pd-ps2-bootstrap.elf
+# build-ps2/pd-ps2-game.elf and pd-ps2-game-fmcb.elf
 ```
 
-Optional hardware diagnostics use separate build directories:
-
-```sh
-cmake -S port/ps2 -B build-ps2-alpha-diag -G Ninja \
-  -DPD_PS2_ALPHA_TRILERP_DIAGNOSTIC=ON
-cmake --build build-ps2-alpha-diag -j2
-
-cmake -S port/ps2 -B build-ps2-vu1-diag -G Ninja \
-  -DPD_PS2_VU1_COLOR_DIAGNOSTIC=ON
-cmake --build build-ps2-vu1-diag -j2
-```
-
-CI builds the ordinary standalone bootstrap as a compile gate and fully builds
-and inspects the normal `Og` game ELF. It runs backend-independent host tests,
-rejects undefined symbols, and publishes the game ELF with its linker map,
-section sizes and build metadata. `O2` is built and published only when the
-manual workflow input requests it. The specialized alpha/VU1 scene selectors
-remain local hardware diagnostics rather than routine CI artifacts.
+CI builds and inspects the normal `Og` game ELF. It runs host tests for active
+runtime paths, rejects undefined symbols, and publishes the game ELF with its
+linker map, section sizes and build metadata. `O2` is built only when the
+manual workflow input requests it.
 
 ## Runtime options useful during bring-up
 
@@ -214,5 +202,5 @@ baseline. Compare O2 only against the same scene and storage configuration.
 - [Modern optimization audit](../../docs/PS2_MODERN_OPTIMIZATION_AUDIT.md)
 - [Native renderer architecture](../../docs/PS2_NATIVE_RENDERER_ARCHITECTURE.md)
 - [N64 RDP/TMEM semantics](../../docs/N64_RDP_TMEM_SEMANTICS.md)
-- [Diagnostic test procedure](PROTOTYPE_TEST.md)
-- [VU1 diagnostic](VU1_COLOR_DIAGNOSTIC.md)
+- [Historical bootstrap hardware evidence](PROTOTYPE_TEST.md)
+- [Historical VU1 diagnostic evidence](VU1_COLOR_DIAGNOSTIC.md)

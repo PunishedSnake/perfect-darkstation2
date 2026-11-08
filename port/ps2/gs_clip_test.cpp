@@ -96,6 +96,26 @@ int main()
         }
     }
 
+    assert(ps2GsClipClassifyTriangle(visible, stride) == PS2_GS_CLIP_ACCEPT);
+    assert(ps2GsClipClassifyTriangle(outside, stride) == PS2_GS_CLIP_REJECT);
+    assert(ps2GsClipClassifyTriangle(near_crossing, stride) ==
+        PS2_GS_CLIP_PARTIAL);
+    assert(ps2GsClipClassifyTriangle(eye_crossing, stride) ==
+        PS2_GS_CLIP_PARTIAL);
+    float non_finite[3u * stride];
+    for (size_t i = 0u; i < 3u * stride; ++i) {
+        non_finite[i] = visible[i];
+    }
+    non_finite[stride + 3u] = INFINITY;
+    assert(ps2GsClipClassifyTriangle(non_finite, stride) ==
+        PS2_GS_CLIP_REJECT);
+    non_finite[stride + 3u] = NAN;
+    assert(ps2GsClipClassifyTriangle(non_finite, stride) ==
+        PS2_GS_CLIP_REJECT);
+    assert(ps2GsClipTriangle(non_finite, stride, output,
+        PS2_GS_CLIP_MAX_OUTPUT_VERTICES, &count));
+    assert(count == 0u);
+
     count = 999u;
     assert(!ps2GsClipTriangle(near_crossing, stride, output, 3u, &count));
     assert(count == 0u);
@@ -119,6 +139,17 @@ int main()
         }
         assert(ps2GsClipTriangle(triangle, stride, output,
             PS2_GS_CLIP_MAX_OUTPUT_VERTICES, &count));
+        /* Classification must predict the clipper's trivial outcomes. */
+        const enum Ps2GsClipClass clip_class =
+            ps2GsClipClassifyTriangle(triangle, stride);
+        if (clip_class == PS2_GS_CLIP_REJECT) {
+            assert(count == 0u);
+        } else if (clip_class == PS2_GS_CLIP_ACCEPT) {
+            assert(count == 3u);
+            for (size_t i = 0u; i < 3u * stride; ++i) {
+                assert(output[i] == triangle[i]);
+            }
+        }
         assert(count <= PS2_GS_CLIP_MAX_OUTPUT_VERTICES);
         assert(count % 3u == 0u);
         for (size_t vertex = 0u; vertex < count; ++vertex) {

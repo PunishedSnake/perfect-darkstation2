@@ -35,6 +35,54 @@ int main(void)
     assert(!ps2PathCanonicalizeUsbMassToLegacy(shortUsb, sizeof(shortUsb)));
     assert(!strcmp(shortUsb, "usb:"));
 
+
+    assert(ps2PathClassifyBootMedium("mass:/PDPS2/BOOT.ELF") ==
+        PS2_BOOT_MEDIUM_USB);
+    assert(ps2PathClassifyBootMedium("usb0:/PDPS2/BOOT.ELF") ==
+        PS2_BOOT_MEDIUM_USB);
+    assert(ps2PathClassifyBootMedium("hdd0:__common:pfs:/APPS/PD/BOOT.ELF") ==
+        PS2_BOOT_MEDIUM_HDD);
+    assert(ps2PathClassifyBootMedium("pfs0:/APPS/PD/BOOT.ELF") ==
+        PS2_BOOT_MEDIUM_HDD);
+    assert(ps2PathClassifyBootMedium("mc0:/BOOT/PD.ELF") ==
+        PS2_BOOT_MEDIUM_MC);
+    assert(ps2PathClassifyBootMedium("cdfs:/PD/BOOT.ELF") ==
+        PS2_BOOT_MEDIUM_CDVD);
+    assert(ps2PathClassifyBootMedium("host:pd.elf") ==
+        PS2_BOOT_MEDIUM_HOST);
+    assert(ps2PathClassifyBootMedium("smb0:/APPS/PD.ELF") ==
+        PS2_BOOT_MEDIUM_NETWORK);
+    assert(ps2PathClassifyBootMedium("./pd.elf") ==
+        PS2_BOOT_MEDIUM_UNKNOWN);
+
+    char partition[64];
+    char relative[128];
+    assert(ps2PathParseHddBootContext(
+        "hdd0:__common:pfs:/APPS/PD/BOOT.ELF",
+        partition, sizeof(partition), relative, sizeof(relative)));
+    assert(!strcmp(partition, "hdd0:__common"));
+    assert(!strcmp(relative, "/APPS/PD/BOOT.ELF"));
+
+    assert(ps2PathParseHddBootContext(
+        "hdd0:/+OPL/APPS/PD/BOOT.ELF",
+        partition, sizeof(partition), relative, sizeof(relative)));
+    assert(!strcmp(partition, "hdd0:+OPL"));
+    assert(!strcmp(relative, "/APPS/PD/BOOT.ELF"));
+
+    assert(!ps2PathParseHddBootContext(
+        "pfs0:/APPS/PD/BOOT.ELF",
+        partition, sizeof(partition), relative, sizeof(relative)));
+
+    char hddComposite[128] =
+        "hdd0:__common:pfs:/APPS/PD/BOOT.ELF";
+    assert(ps2PathCanonicalizeOwnedBootPath(
+        hddComposite, sizeof(hddComposite)));
+    assert(!strcmp(hddComposite, "pfs0:/APPS/PD/BOOT.ELF"));
+
+    char ownedUsb[64] = "usb0:/APPS/PD/BOOT.ELF";
+    assert(ps2PathCanonicalizeOwnedBootPath(ownedUsb, sizeof(ownedUsb)));
+    assert(!strcmp(ownedUsb, "mass:/APPS/PD/BOOT.ELF"));
+
     assert(ps2PathHasDevicePrefix("mass:PDPS2/pd.ntsc-final.z64"));
     assert(ps2PathHasDevicePrefix("mass0:/PDPS2/pd.ntsc-final.z64"));
     assert(ps2PathHasDevicePrefix("mc0:/BESLES-XXX/save"));

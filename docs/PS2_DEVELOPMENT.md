@@ -164,9 +164,10 @@ The capture is intentionally synchronous only for the selected diagnostic frame.
 
 Enable `--file-log` only for controlled startup/fatal-boundary diagnostics. Do not use it as a normal performance or gameplay logging mode.
 
-### 6. Narrow diagnostic ELF
+### 6. Hardware test ELF
 
-Use the bootstrap or VU1 diagnostics when the full runtime adds too many variables. See:
+Use the owned-IOP game ELF from the current PS2 CI run. Earlier bootstrap and
+VU1 color test results are historical records:
 
 - [Prototype test](../port/ps2/PROTOTYPE_TEST.md)
 - [VU1 colour diagnostic](../port/ps2/VU1_COLOR_DIAGNOSTIC.md)

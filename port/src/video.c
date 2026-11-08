@@ -85,7 +85,14 @@ s32 videoInit(void)
 	gfx_current_native_viewport.width = 320;
 	gfx_current_native_viewport.height = 220;
 	gfx_current_native_aspect = 320.f / 220.f;
+#ifdef PLATFORM_PS2
+	/* The PS2 Fast3D framebuffer API still has no copy/sample implementation.
+	 * Keep framebuffer-dependent game effects out of this backend until the
+	 * complete API is wired to gs_core render targets. */
+	gfx_framebuffers_enabled = false;
+#else
 	gfx_framebuffers_enabled = (bool)vidFramebuffers;
+#endif
 	gfx_detail_textures_enabled = (bool)texDetail;
 	gfx_msaa_level = vidMSAA;
 

@@ -1,5 +1,9 @@
 # VU1 PATH1 geometry diagnostic
 
+> Historical hardware record. The standalone color scene target and its source
+> were retired on the owned-IOP branch. The game still uses its shared GS/VU1
+> transport code.
+
 This diagnostic connects the native renderer to VIF1/VU1. Ordinary one-pass
 textured batches send raw clip-space vertices, STQ and color to a transform
 microprogram. Color and multipass draws retain the GS-ready A+D transport.

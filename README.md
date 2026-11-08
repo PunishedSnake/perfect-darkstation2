@@ -186,13 +186,8 @@ cmake -S port/ps2 -B build-ps2-o2 -G Ninja \
 cmake --build build-ps2-o2 --target pd_ps2_game -j2
 ```
 
-A separate standalone hardware diagnostic ELF can be built with:
-
-```sh
-cmake --build build-ps2 -j2
-```
-
-which produces `pd-ps2-bootstrap.elf`.
+The default build produces the game ELF only. Hardware diagnostics use the
+game's trace and checkpoint facilities.
 
 More detailed build, launch and diagnostic instructions live in [port/ps2/README.md](port/ps2/README.md).
 
@@ -238,7 +233,7 @@ The `ps2` branch has dedicated GitHub Actions CI using the PS2DEV container.
 
 CI currently:
 
-- builds the normal `Og` PS2 game ELF and a standalone diagnostic compile gate;
+- builds the normal `Og` PS2 game ELF;
 - builds the `O2` comparison ELF only when explicitly requested through a manual workflow run;
 - runs backend-independent Fast3D/TMEM tests;
 - runs GS state, clipping, allocator, combiner and renderer regression tests;

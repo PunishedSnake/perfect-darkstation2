@@ -14,6 +14,7 @@
 #include "gfx_ps2_combiner.h"
 #include "gfx_ps2_pass_graph.h"
 #include "gs_clip.h"
+#include "gfx_ps2_clip_batch.h"
 #include "gs_core.h"
 #include "gs_vu1_batch.h"
 #include "gs_vu1_transform.h"
@@ -112,6 +113,19 @@
 static_assert(PS2_GFX_TRANSLATE_VERTS >=
     PS2_GS_CLIP_MAX_OUTPUT_VERTICES,
     "one clipped triangle must fit in the translation batch");
+
+/*
+ * Shortest run of unclipped triangles drawn directly from the Fast3D VBO.
+ * Shorter runs are copied into the clip buffer and merged with neighbours,
+ * exactly as before, so accept/reject/clip interleavings do not fragment the
+ * stream into many small PATH1 kicks (each kick waits for GIF ownership and
+ * serialises through FLUSHA/MSCAL/FLUSH). Twelve triangles keeps every direct
+ * batch at 36+ vertices, well above the VU1 crossover.
+ */
+#define PS2_GFX_DIRECT_RUN_MIN_TRIS 12u
+static_assert(PS2_GFX_DIRECT_RUN_MIN_TRIS * 3u <=
+    PS2_GFX_TRANSLATE_VERTS - PS2_GS_CLIP_MAX_OUTPUT_VERTICES,
+    "a copied short run must leave room for one clipped triangle");
 
 /* GS packed-register IDs consumed by the packet-ready core boundary. */
 #define PS2_GS_REG_RGBAQ 0x01u
@@ -1403,6 +1417,66 @@ static int ps2_map_clip_depth(float z, float w)
     const int depth = 1 + (int)((1.0f - ranged) * 65534.0f);
     return gfxPs2ApplyDecalDepthBias(depth, s_depth_decal);
 }
+
+/*
+ * Shared EE screen mapping. Both the eager PATH3 packer and the deferred
+ * fallback below call exactly this code, so a VU1 rejection rebuilds
+ * bit-identical PATH3 vertices from the retained clip-space input.
+ */
+static inline float ps2_clip_inv_w(float clip_w)
+{
+    return clip_w != 0.0f ? 1.0f / clip_w : 0.0f;
+}
+
+static inline void ps2_project_screen(
+    float clip_x, float clip_y, float clip_z, float clip_w, float inv_w,
+    float *sx, float *sy, int *iz)
+{
+    const float ndc_x = clip_x * inv_w;
+    const float ndc_y = clip_y * inv_w;
+    *sx = (float)s_viewport.x +
+        (ndc_x * 0.5f + 0.5f) * (float)s_viewport.width;
+    *sy = (float)s_viewport.y +
+        (0.5f - ndc_y * 0.5f) * (float)s_viewport.height;
+    *iz = ps2_map_clip_depth(clip_z, clip_w);
+}
+
+static inline struct Ps2GsPackedReg ps2_pack_screen_position(
+    float clip_x, float clip_y, float clip_z, float clip_w, float inv_w,
+    bool fog, uint8_t fog_coefficient)
+{
+    float sx;
+    float sy;
+    int iz;
+    ps2_project_screen(clip_x, clip_y, clip_z, clip_w, inv_w, &sx, &sy, &iz);
+    return fog ? ps2_pack_xyzf2(sx, sy, iz, fog_coefficient)
+               : ps2_pack_xyz2(sx, sy, iz);
+}
+
+#if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
+/*
+ * PATH3 fallback for a plain textured batch whose EE packing was deferred
+ * because the VU1 transform path was expected to take it. The VU1 input keeps
+ * every value the eager packer consumed: clip XYZW, scaled ST, RGBA and the
+ * fog coefficient in xyz_control bits 4..11.
+ */
+static void ps2_pack_textured_from_vu1_input(
+    const struct Ps2GsVu1TransformVertex *in,
+    struct Ps2GsTexturedVertex *out, uint32_t count, bool fog)
+{
+    for (uint32_t i = 0u; i < count; ++i) {
+        const float inv_w = ps2_clip_inv_w(in[i].clip[3]);
+        out[i].rgbaq = ps2_pack_rgbaq(
+            (uint8_t)in[i].rgba[0], (uint8_t)in[i].rgba[1],
+            (uint8_t)in[i].rgba[2], (uint8_t)in[i].rgba[3], inv_w);
+        out[i].st = ps2_pack_st(
+            in[i].texcoord.s * inv_w, in[i].texcoord.t * inv_w);
+        out[i].xyz2 = ps2_pack_screen_position(
+            in[i].clip[0], in[i].clip[1], in[i].clip[2], in[i].clip[3],
+            inv_w, fog, (uint8_t)(in[i].texcoord.xyz_control >> 4));
+    }
+}
+#endif
 
 static size_t ps2_vbo_stride(const struct ShaderProgram *prg)
 {
@@ -3798,6 +3872,46 @@ static bool ps2_draw_alpha_trilerp(uint32_t vertex_count)
 static uint64_t ps2_trace_pack_float_pair(float a, float b);
 static uint64_t ps2_trace_pack_u32_pair(uint32_t a, uint32_t b);
 
+/*
+ * G_MODULATE_EXT (GL DST_COLOR, ZERO) for flat, opaque source colour:
+ * dst.rgb *= src.rgb / 255, dst.a *= 1. Perfect Dark issues this only for
+ * the night-vision, IR/horizon-scanner and film-interlace tint lines, each a
+ * G_CC_PRIMITIVE rectangle with alpha 0xff. The GS cannot multiply by Cs,
+ * but a constant factor per channel is (Cd - 0) * FIX + 0 under a channel
+ * FRAME mask. Returns false (nothing drawn) when the batch is not flat.
+ */
+static bool ps2_draw_constant_modulate(uint32_t vertex_count)
+{
+    if (vertex_count == 0u) {
+        return false;
+    }
+    const uint64_t first = s_color_vertices[0].rgbaq.value & 0xffffffffu;
+    if (((first >> 24) & 0xffu) != 0x80u) {
+        return false;
+    }
+    for (uint32_t i = 1u; i < vertex_count; ++i) {
+        if ((s_color_vertices[i].rgbaq.value & 0xffffffffu) != first) {
+            return false;
+        }
+    }
+
+    struct Ps2GsModulatePass passes[3];
+    const uint32_t pass_count = ps2GsPlanConstantModulate(
+        (uint8_t)first, (uint8_t)(first >> 8), (uint8_t)(first >> 16),
+        passes);
+    ps2GsCoreSetAlphaWrite(false);
+    for (uint32_t pass = 0u; pass < pass_count; ++pass) {
+        ps2GsCoreSetColorChannelWriteMask(passes[pass].channels);
+        ps2GsCoreSetAlphaBlendDestinationScale(passes[pass].fix);
+        ps2GsCoreDrawColorTriangles(s_color_vertices, vertex_count);
+    }
+    ps2GsCoreSetColorChannelWriteMask(PS2_GS_COLOR_WRITE_RGB);
+    ps2GsCoreSetAlphaWrite(true);
+    /* Restores the default source-over equation for the next draw. */
+    ps2GsCoreSetAlphaBlend(s_alpha_blend);
+    return true;
+}
+
 static void ps2_draw_triangles_unclipped(float buf_vbo[],
     size_t buf_vbo_len, size_t buf_vbo_num_tris)
 {
@@ -3946,6 +4060,15 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
         texture_coordinate_scale_s[t] = sampler->coordinate_scale_s;
         texture_coordinate_scale_t[t] = sampler->coordinate_scale_t;
     }
+#if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH) && \
+    !defined(PERFECT_DARK_PS2_GEOMETRY_BASELINE) && \
+    !defined(PERFECT_DARK_PS2_MATERIAL_BASELINE)
+    /* Same predicate order as the submission switch after translation. */
+    const bool plain_textured = s_shader->plan.textured &&
+        !independent_tex0_alpha && !interference && !texture_factor_lerp &&
+        !alpha_trilerp && !independent_alpha_trilerp && !opaque_trilerp &&
+        !opaque_input1_tex0_lerp;
+#endif
     size_t base_vertex = 0;
     while (base_vertex < vertex_count) {
         size_t batch_vertices = vertex_count - base_vertex;
@@ -3970,6 +4093,20 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
             s_depth_near, s_depth_far,
             transform_scale, transform_offset);
 #endif
+#if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH) && \
+    !defined(PERFECT_DARK_PS2_GEOMETRY_BASELINE) && \
+    !defined(PERFECT_DARK_PS2_MATERIAL_BASELINE)
+        /*
+         * Plain textured batches that VU1 is expected to transform skip the
+         * EE screen mapping and PATH3 packing. A VU1 rejection rebuilds the
+         * exact PATH3 vertices from s_vu1_transform_vertices afterwards.
+         */
+        const bool defer_textured_path3 = vu1_transform_eligible &&
+            plain_textured &&
+            ps2GsCoreVu1TexturedTransformCandidate((uint32_t)batch_vertices);
+#else
+        const bool defer_textured_path3 = false;
+#endif
 
         const bool trace_texture_coords = ps2RendererTraceIsCapturing();
         float trace_min_u[2] = { FLT_MAX, FLT_MAX };
@@ -3985,9 +4122,7 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
             const float clip_y = src[pos++];
             const float clip_z = src[pos++];
             const float clip_w = src[pos++];
-            const float inv_w = clip_w != 0.0f ? 1.0f / clip_w : 0.0f;
-            const float ndc_x = clip_x * inv_w;
-            const float ndc_y = clip_y * inv_w;
+            const float inv_w = ps2_clip_inv_w(clip_w);
 
             float tex_u[2] = { 0.0f, 0.0f };
             float tex_v[2] = { 0.0f, 0.0f };
@@ -4064,9 +4199,13 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
                 }
             }
 
-            const float sx = (float)s_viewport.x + (ndc_x * 0.5f + 0.5f) * (float)s_viewport.width;
-            const float sy = (float)s_viewport.y + (0.5f - ndc_y * 0.5f) * (float)s_viewport.height;
-            const int iz = ps2_map_clip_depth(clip_z, clip_w);
+            float sx = 0.0f;
+            float sy = 0.0f;
+            int iz = 0;
+            if (!defer_textured_path3) {
+                ps2_project_screen(clip_x, clip_y, clip_z, clip_w, inv_w,
+                    &sx, &sy, &iz);
+            }
 
             uint8_t cr = 0;
             uint8_t cg = 0;
@@ -4168,7 +4307,10 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
             }
 #endif
 #else
-            if (s_shader->features.opt_fog) {
+            if (defer_textured_path3) {
+                packed_position.value = 0u;
+                packed_position.reg = PS2_GS_REG_XYZ2;
+            } else if (s_shader->features.opt_fog) {
                 packed_position = ps2_pack_xyzf2(
                     sx, sy, iz, ps2_fog_coefficient(fog_factor));
             } else {
@@ -4395,11 +4537,13 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
                     ps2_pack_st(tex_u[0] * inv_w, tex_v[0] * inv_w);
                 s_stq_vertices[0][i].xyz2 = packed_position;
             } else if (s_shader->plan.textured) {
-                s_stq_vertices[0][i].rgbaq =
-                    ps2_pack_rgbaq(cr, cg, cb, ca, inv_w);
-                s_stq_vertices[0][i].st =
-                    ps2_pack_st(tex_u[0] * inv_w, tex_v[0] * inv_w);
-                s_stq_vertices[0][i].xyz2 = packed_position;
+                if (!defer_textured_path3) {
+                    s_stq_vertices[0][i].rgbaq =
+                        ps2_pack_rgbaq(cr, cg, cb, ca, inv_w);
+                    s_stq_vertices[0][i].st =
+                        ps2_pack_st(tex_u[0] * inv_w, tex_v[0] * inv_w);
+                    s_stq_vertices[0][i].xyz2 = packed_position;
+                }
 #if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
                 struct Ps2GsVu1TransformVertex *vu_vertex =
                     &s_vu1_transform_vertices[i];
@@ -4518,7 +4662,22 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
         } else if (s_shader->plan.textured) {
             ps2_apply_texture_clamp(0);
 #if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
-            if (vu1_transform_eligible) {
+            if (defer_textured_path3) {
+                const bool submitted = vu1_transform_eligible &&
+                    ps2GsCoreTryDrawTexturedTrianglesTransform(
+                        s_selected_texture[0], s_vu1_transform_vertices,
+                        (uint32_t)batch_vertices,
+                        transform_scale, transform_offset);
+                if (!submitted) {
+                    ps2_pack_textured_from_vu1_input(
+                        s_vu1_transform_vertices, s_stq_vertices[0],
+                        (uint32_t)batch_vertices,
+                        s_shader->features.opt_fog);
+                    ps2GsCoreDrawTexturedTriangles(
+                        s_selected_texture[0], s_stq_vertices[0],
+                        (uint32_t)batch_vertices);
+                }
+            } else if (vu1_transform_eligible) {
                 ps2GsCoreDrawTexturedTrianglesTransform(
                     s_selected_texture[0], s_stq_vertices[0],
                     s_vu1_transform_vertices,
@@ -4535,7 +4694,15 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
                 (uint32_t)batch_vertices);
 #endif
         } else {
-            ps2GsCoreDrawColorTriangles(s_color_vertices, (uint32_t)batch_vertices);
+            const bool constant_modulate = s_modulate && s_alpha_blend &&
+                !texture_edge && !invisible &&
+                !s_shader->features.opt_fog &&
+                s_shader->plan.color_recipe == PS2_COLOR_INPUT1 &&
+                ps2_draw_constant_modulate((uint32_t)batch_vertices);
+            if (!constant_modulate) {
+                ps2GsCoreDrawColorTriangles(
+                    s_color_vertices, (uint32_t)batch_vertices);
+            }
         }
 #endif
 
@@ -4827,49 +4994,28 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len,
         }
     }
 
-    size_t buffered_vertices = 0u;
-    size_t clipped_vertices_total = 0u;
     uint32_t trace_clip_chunk = 0u;
-    for (size_t triangle = 0u; triangle < buf_vbo_num_tris; ++triangle) {
-        if (PS2_GFX_TRANSLATE_VERTS - buffered_vertices <
-            PS2_GS_CLIP_MAX_OUTPUT_VERTICES) {
+    const size_t clipped_vertices_total = gfxPs2ClipAndBatchTriangles(
+        buf_vbo, buf_vbo_num_tris, stride,
+        s_clipped_vbo, PS2_GFX_TRANSLATE_VERTS,
+        PS2_GFX_DIRECT_RUN_MIN_TRIS,
+        [&](float *vertices, size_t count, bool direct) {
+            (void)direct;
             ps2_trace_draw_payload(
                 trace_draw_id, ++trace_clip_chunk, 2u,
-                s_clipped_vbo, (uint32_t)buffered_vertices,
-                (uint32_t)stride);
-            ps2_draw_triangles_unclipped(s_clipped_vbo,
-                buffered_vertices * stride, buffered_vertices / 3u);
-            buffered_vertices = 0u;
-        }
-
-        size_t clipped_vertices = 0u;
-        const bool clipped = ps2GsClipTriangle(
-            &buf_vbo[triangle * 3u * stride], stride,
-            &s_clipped_vbo[buffered_vertices * stride],
-            PS2_GFX_TRANSLATE_VERTS - buffered_vertices,
-            &clipped_vertices);
-        if (trace_clip_map) {
-            trace_clip_map[triangle] = clipped
-                ? (uint16_t)clipped_vertices : 0u;
-        }
-        if (!clipped) {
-            continue;
-        }
-        ps2_trace_clipped_triangle_bounds(
-            triangle, clipped_vertices,
-            &s_clipped_vbo[buffered_vertices * stride], stride);
-        buffered_vertices += clipped_vertices;
-        clipped_vertices_total += clipped_vertices;
-    }
-
-    if (buffered_vertices != 0u) {
-        ps2_trace_draw_payload(
-            trace_draw_id, ++trace_clip_chunk, 2u,
-            s_clipped_vbo, (uint32_t)buffered_vertices,
-            (uint32_t)stride);
-        ps2_draw_triangles_unclipped(s_clipped_vbo,
-            buffered_vertices * stride, buffered_vertices / 3u);
-    }
+                vertices, (uint32_t)count, (uint32_t)stride);
+            ps2_draw_triangles_unclipped(vertices, count * stride,
+                count / 3u);
+        },
+        [&](size_t triangle, size_t count, const float *vertices) {
+            if (trace_clip_map) {
+                trace_clip_map[triangle] = (uint16_t)count;
+            }
+            if (count != 0u) {
+                ps2_trace_clipped_triangle_bounds(
+                    triangle, count, vertices, stride);
+            }
+        });
     if (trace_draw_id != 0u) {
         const bool stored = trace_clip_map != NULL;
         const uint16_t flags = 3u |

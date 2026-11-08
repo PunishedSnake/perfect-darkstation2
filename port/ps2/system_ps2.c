@@ -46,6 +46,7 @@ static char logStageBuffer[LOG_STAGE_BUFFER_SIZE];
 static u32 logStageUsed;
 static u64 logLastDurableUsec;
 static bool logHasDurableCheckpoint;
+static bool logRequestedAfterStorage;
 
 extern char _end;
 /* PS2SDK's libc glue exports the allocator break through _sbrk directly. */
@@ -72,15 +73,15 @@ static void pathBaseFromArgv0(char *outPath, u32 outLen)
         strncpy(outPath, sysArgv[0], outLen - 1);
         outPath[outLen - 1] = '\0';
 
-#ifdef PD_PS2_FORCE_LEGACY_USB_ALIAS_DIAGNOSTIC
+#ifdef PD_PS2_OWNED_IOP_RUNTIME
         /*
-         * HIPOTEZA DO TESTU:
-         * R3Z can describe the USB target as usb:/..., usb0:/... or mass0:/...
-         * while our post-reset current PS2SDK USBHDFSD exposes the legacy
-         * mass: device. Canonicalise only argv[0]-derived executable/home
-         * paths; explicit user paths keep their exact semantics.
+         * R3Z may hand argv[0] to the ELF as usb:/..., usb0:/... or mass0:/...
+         * while the project-owned current PS2SDK USBHDFSD stack exposes the
+         * legacy mass: alias after our clean IOP reboot. Canonicalise only
+         * argv[0]-derived executable/home paths; explicit user paths retain
+         * their caller-supplied device semantics.
          */
-        (void)ps2PathCanonicalizeUsbMassToLegacy(outPath, outLen);
+        (void)ps2PathCanonicalizeOwnedBootPath(outPath, outLen);
 #endif
 
         char *lastSlash = strrchr(outPath, '/');
@@ -165,41 +166,15 @@ void ps2LogCloseFileSink(void)
     logHasDurableCheckpoint = false;
 }
 
-int ps2LogOpenPostStorageFile(const char *path)
-{
-    if (!path || !path[0]) {
-        return 0;
-    }
-
-    /*
-     * Never preserve a fileio descriptor across an IOP reboot. The dedicated
-     * launcher diagnostic calls this only after USBD/USBHDFSD have been rebuilt.
-     */
-    if (logFile) {
-        FILE *closing = logFile;
-        logFile = NULL;
-        fclose(closing);
-    }
-
-    logStageUsed = 0;
-    logLastDurableUsec = 0;
-    logHasDurableCheckpoint = false;
-
-    strncpy(logPath, path, sizeof(logPath) - 1);
-    logPath[sizeof(logPath) - 1] = '\0';
-
-    logFile = fopen(logPath, "wb");
-    if (!logFile) {
-        logPath[0] = '\0';
-        return 0;
-    }
-
-    return 1;
-}
-
 static void ps2LogCheckpointInternal(bool force)
 {
     char reopenPath[sizeof(logPath)];
+
+    /* With no file sink, there is no durability work to perform. Warnings and
+     * fatal errors already flush their console stream in sysLogPrintf(). */
+    if (!logFile || !logPath[0]) {
+        return;
+    }
 
     /*
      * CURRENT PS2SDK: fsync() returns ENOSYS. More importantly for mass:, a
@@ -212,10 +187,6 @@ static void ps2LogCheckpointInternal(bool force)
      * explicit runtime snapshot or fatal path to force durability.
      */
     ps2LogFlush();
-
-    if (!logFile || !logPath[0]) {
-        return;
-    }
 
     const u64 now = sysGetMicroseconds();
     if (!ps2LogCheckpointShouldClose(
@@ -274,6 +245,25 @@ static void sysLogSetPath(const char *fname)
     }
 }
 
+void ps2LogOpenAfterStorage(void)
+{
+    if (!logRequestedAfterStorage) {
+        return;
+    }
+
+    /* The selected USB/HDD service is now owned by this runtime. No file
+     * descriptor or RPC binding is carried across the IOP reset. */
+    logRequestedAfterStorage = false;
+    sysLogSetPath(LOG_FNAME);
+    if (!logFile) {
+        sysLogPrintf(LOG_WARNING, "LOGGER: could not open post-reset file sink");
+        return;
+    }
+
+    sysLogPrintf(LOG_NOTE, "LOGGER: post-reset file sink opened at %s", logPath);
+    ps2LogCheckpointForce();
+}
+
 static void sysLogStageLine(const char *line, u32 length)
 {
     if (!logFile || !line || length == 0) {
@@ -319,20 +309,27 @@ void sysInit(void)
     /*
      * Retail hardware proves that synchronous stdio against mass: can stop
      * frame progress. Keep the file sink opt-in; console output stays active.
-     * The compile-time default exists only for the dedicated CI A/B artifact.
+     * Defer an opt-in file sink until the owned boot medium is restored.
      */
     const bool fileLogRequested =
         PD_PS2_FILE_LOG_DEFAULT || sysArgCheck("--file-log");
 
     if (fileLogRequested && !sysArgCheck("--no-log")) {
+#ifdef PD_PS2_OWNED_IOP_RUNTIME
+        logRequestedAfterStorage = true;
+#else
         sysLogSetPath(LOG_FNAME);
+#endif
     }
 
     sysLogPrintf(LOG_NOTE, "Perfect DarkStation 2 logger online");
     sysLogPrintf(LOG_NOTE, "build commit: %s optimization=%s",
         PD_PS2_GIT_COMMIT, PD_PS2_OPTIMIZATION_PROFILE);
     sysLogPrintf(LOG_NOTE, "compiler: %s", __VERSION__);
-    sysLogPrintf(LOG_NOTE, "file sink: %s", logFile ? logPath : "unavailable/disabled; console only");
+    sysLogPrintf(LOG_NOTE, "file sink: %s",
+        logFile ? logPath :
+        (logRequestedAfterStorage ? "deferred until owned storage is ready" :
+                                    "unavailable/disabled; console only"));
     sysLogPrintf(LOG_NOTE,
         "file checkpoint policy: ordinary close/reopen interval=%llu us; runtime snapshots forced",
         (unsigned long long)PS2_LOG_DURABLE_INTERVAL_USEC);

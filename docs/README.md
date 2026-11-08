@@ -46,14 +46,15 @@ These remain useful, but dated observations inside them are evidence from a part
 
 Historical sections should normally be preserved when they explain why a design decision exists. Add a current-status note rather than deleting useful hardware evidence.
 
-## Diagnostic documents
+## Historical diagnostic documents
 
-Hardware-isolation procedures live beside the PS2 backend:
+Earlier hardware-isolation records live beside the PS2 backend:
 
 - [Prototype / bootstrap hardware test](../port/ps2/PROTOTYPE_TEST.md)
 - [VU1 colour diagnostic](../port/ps2/VU1_COLOR_DIAGNOSTIC.md)
 
-These describe deliberately narrow diagnostic executables. They are not the normal game runtime.
+Their color-scene executables have been retired. The owned-IOP game ELF is the
+current hardware test artifact.
 
 ## Documentation rules
 

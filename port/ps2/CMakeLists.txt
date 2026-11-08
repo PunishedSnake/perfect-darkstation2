@@ -7,16 +7,8 @@ if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
       CACHE FILEPATH "PS2SDK-compatible EE CMake toolchain" FORCE)
 endif()
 
-project(pd_ps2_bootstrap C CXX)
+project(pd_ps2_game C CXX)
 
-option(PD_PS2_ALPHA_TRILERP_DIAGNOSTIC
-  "Start the PS2 bootstrap on the hardware-validated alpha-trilerp A/B scene"
-  OFF
-)
-option(PD_PS2_VU1_COLOR_DIAGNOSTIC
-  "Enable VU1 textured transforms, A+D transport and runtime hardware A/B"
-  OFF
-)
 option(PD_PS2_GAME_VU1
   "Use the VU1/PATH1 transform path in the full game"
   ON
@@ -65,42 +57,6 @@ option(PD_PS2_DISABLE_DEPTH_DIAGNOSTIC
   "Disable GS depth testing and writes in the full game"
   OFF
 )
-option(PD_PS2_FMCB_STARTUP_DIAGNOSTIC
-  "Show direct GS BGCOLOR markers through full-game startup"
-  OFF
-)
-option(PD_PS2_CLEAN_IOP_STARTUP_DIAGNOSTIC
-  "Discard inherited IOP state before PS2 runtime service bootstrap"
-  OFF
-)
-option(PD_PS2_CURRENT_PAD_IRX_DIAGNOSTIC
-  "Use embedded current-PS2SDK sio2man/padman instead of ROM X modules"
-  OFF
-)
-option(PD_PS2_FORCE_LEGACY_USB_ALIAS_DIAGNOSTIC
-  "Rewrite argv[0]-derived usb:/usb0:/mass0: paths to legacy mass:"
-  OFF
-)
-option(PD_PS2_POST_STORAGE_USB_LOG_DIAGNOSTIC
-  "Open mass:/pdps2-r3z.log after clean IOP/storage recovery, without GS color markers"
-  OFF
-)
-if(PD_PS2_CURRENT_PAD_IRX_DIAGNOSTIC AND NOT PD_PS2_CLEAN_IOP_STARTUP_DIAGNOSTIC)
-  message(FATAL_ERROR
-    "PD_PS2_CURRENT_PAD_IRX_DIAGNOSTIC requires clean-IOP startup diagnostic")
-endif()
-if(PD_PS2_FORCE_LEGACY_USB_ALIAS_DIAGNOSTIC AND NOT PD_PS2_CURRENT_PAD_IRX_DIAGNOSTIC)
-  message(FATAL_ERROR
-    "PD_PS2_FORCE_LEGACY_USB_ALIAS_DIAGNOSTIC requires current-PAD diagnostic")
-endif()
-if(PD_PS2_POST_STORAGE_USB_LOG_DIAGNOSTIC AND NOT PD_PS2_CLEAN_IOP_STARTUP_DIAGNOSTIC)
-  message(FATAL_ERROR
-    "PD_PS2_POST_STORAGE_USB_LOG_DIAGNOSTIC requires clean-IOP recovery")
-endif()
-if(PD_PS2_ALPHA_TRILERP_DIAGNOSTIC AND PD_PS2_VU1_COLOR_DIAGNOSTIC)
-  message(FATAL_ERROR "Select one hardware diagnostic per build directory")
-endif()
-
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_EXTENSIONS OFF)
 set(CMAKE_CXX_STANDARD 20)
@@ -180,14 +136,6 @@ set_source_files_properties(
   PROPERTIES GENERATED TRUE EXTERNAL_OBJECT TRUE
 )
 
-set(PD_PS2_BOOTSTRAP_VU1_OBJECTS "")
-if(PD_PS2_VU1_COLOR_DIAGNOSTIC)
-  list(APPEND PD_PS2_BOOTSTRAP_VU1_OBJECTS
-    "${PD_PS2_VU1_PROGRAM_OBJECT}"
-    "${PD_PS2_VU1_TRANSFORM_PROGRAM_OBJECT}"
-  )
-endif()
-
 set(PD_PS2_AUDSRV_IRX "$ENV{PS2SDK}/iop/irx/audsrv.irx")
 if(NOT EXISTS "${PD_PS2_AUDSRV_IRX}")
   message(FATAL_ERROR
@@ -202,9 +150,22 @@ set(PD_PS2_USBD_IRX "$ENV{PS2SDK}/iop/irx/usbd.irx")
 set(PD_PS2_USBHDFSD_IRX "$ENV{PS2SDK}/iop/irx/usbhdfsd.irx")
 set(PD_PS2_SIO2MAN_IRX "$ENV{PS2SDK}/iop/irx/sio2man.irx")
 set(PD_PS2_PADMAN_IRX "$ENV{PS2SDK}/iop/irx/padman.irx")
+set(PD_PS2_MCMAN_IRX "$ENV{PS2SDK}/iop/irx/mcman.irx")
+set(PD_PS2_MCSERV_IRX "$ENV{PS2SDK}/iop/irx/mcserv.irx")
+set(PD_PS2_IOMANX_IRX "$ENV{PS2SDK}/iop/irx/iomanX.irx")
+set(PD_PS2_FILEXIO_IRX "$ENV{PS2SDK}/iop/irx/fileXio.irx")
+set(PD_PS2_POWEROFF_IRX "$ENV{PS2SDK}/iop/irx/poweroff.irx")
+set(PD_PS2_DEV9_IRX "$ENV{PS2SDK}/iop/irx/ps2dev9.irx")
+set(PD_PS2_ATAD_IRX "$ENV{PS2SDK}/iop/irx/ps2atad.irx")
+set(PD_PS2_HDD_IRX "$ENV{PS2SDK}/iop/irx/ps2hdd.irx")
+set(PD_PS2_PFS_IRX "$ENV{PS2SDK}/iop/irx/ps2fs.irx")
 foreach(PD_PS2_STORAGE_IRX IN ITEMS
     "${PD_PS2_USBD_IRX}" "${PD_PS2_USBHDFSD_IRX}"
-    "${PD_PS2_SIO2MAN_IRX}" "${PD_PS2_PADMAN_IRX}")
+    "${PD_PS2_SIO2MAN_IRX}" "${PD_PS2_PADMAN_IRX}"
+    "${PD_PS2_MCMAN_IRX}" "${PD_PS2_MCSERV_IRX}"
+    "${PD_PS2_IOMANX_IRX}" "${PD_PS2_FILEXIO_IRX}"
+    "${PD_PS2_POWEROFF_IRX}" "${PD_PS2_DEV9_IRX}" "${PD_PS2_ATAD_IRX}"
+    "${PD_PS2_HDD_IRX}" "${PD_PS2_PFS_IRX}")
   if(NOT EXISTS "${PD_PS2_STORAGE_IRX}")
     message(FATAL_ERROR
       "Current PS2SDK storage IRX not found: ${PD_PS2_STORAGE_IRX}")
@@ -222,6 +183,33 @@ set(PD_PS2_SIO2MAN_IRX_C
 )
 set(PD_PS2_PADMAN_IRX_C
   "${CMAKE_CURRENT_BINARY_DIR}/generated/padman_irx.c"
+)
+set(PD_PS2_MCMAN_IRX_C
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/mcman_irx.c"
+)
+set(PD_PS2_MCSERV_IRX_C
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/mcserv_irx.c"
+)
+set(PD_PS2_IOMANX_IRX_C
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/iomanX_irx.c"
+)
+set(PD_PS2_FILEXIO_IRX_C
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/fileXio_irx.c"
+)
+set(PD_PS2_POWEROFF_IRX_C
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/poweroff_irx.c"
+)
+set(PD_PS2_DEV9_IRX_C
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/ps2dev9_irx.c"
+)
+set(PD_PS2_ATAD_IRX_C
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/ps2atad_irx.c"
+)
+set(PD_PS2_HDD_IRX_C
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/ps2hdd_irx.c"
+)
+set(PD_PS2_PFS_IRX_C
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/ps2fs_irx.c"
 )
 add_custom_command(
   OUTPUT "${PD_PS2_AUDSRV_IRX_C}"
@@ -278,11 +266,111 @@ add_custom_command(
   COMMENT "Embedding current PS2SDK padman.irx for PAD A/B"
   VERBATIM
 )
+add_custom_command(
+  OUTPUT "${PD_PS2_MCMAN_IRX_C}"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  COMMAND "${PD_PS2_BIN2C}"
+    "${PD_PS2_MCMAN_IRX}" "${PD_PS2_MCMAN_IRX_C}" mcman_irx
+  DEPENDS "${PD_PS2_MCMAN_IRX}"
+  COMMENT "Embedding current PS2SDK mcman.irx for lazy memory-card profiles"
+  VERBATIM
+)
+add_custom_command(
+  OUTPUT "${PD_PS2_MCSERV_IRX_C}"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  COMMAND "${PD_PS2_BIN2C}"
+    "${PD_PS2_MCSERV_IRX}" "${PD_PS2_MCSERV_IRX_C}" mcserv_irx
+  DEPENDS "${PD_PS2_MCSERV_IRX}"
+  COMMENT "Embedding current PS2SDK mcserv.irx for lazy memory-card profiles"
+  VERBATIM
+)
+add_custom_command(
+  OUTPUT "${PD_PS2_IOMANX_IRX_C}"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  COMMAND "${PD_PS2_BIN2C}"
+    "${PD_PS2_IOMANX_IRX}" "${PD_PS2_IOMANX_IRX_C}" iomanX_irx
+  DEPENDS "${PD_PS2_IOMANX_IRX}"
+  COMMENT "Embedding PS2SDK iomanX.irx for HDD/PFS boot"
+  VERBATIM
+)
+add_custom_command(
+  OUTPUT "${PD_PS2_FILEXIO_IRX_C}"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  COMMAND "${PD_PS2_BIN2C}"
+    "${PD_PS2_FILEXIO_IRX}" "${PD_PS2_FILEXIO_IRX_C}" fileXio_irx
+  DEPENDS "${PD_PS2_FILEXIO_IRX}"
+  COMMENT "Embedding PS2SDK fileXio.irx for HDD/PFS boot"
+  VERBATIM
+)
+add_custom_command(
+  OUTPUT "${PD_PS2_POWEROFF_IRX_C}"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  COMMAND "${PD_PS2_BIN2C}"
+    "${PD_PS2_POWEROFF_IRX}" "${PD_PS2_POWEROFF_IRX_C}" poweroff_irx
+  DEPENDS "${PD_PS2_POWEROFF_IRX}"
+  COMMENT "Embedding PS2SDK poweroff.irx for DEV9 dependency"
+  VERBATIM
+)
+add_custom_command(
+  OUTPUT "${PD_PS2_DEV9_IRX_C}"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  COMMAND "${PD_PS2_BIN2C}"
+    "${PD_PS2_DEV9_IRX}" "${PD_PS2_DEV9_IRX_C}" ps2dev9_irx
+  DEPENDS "${PD_PS2_DEV9_IRX}"
+  COMMENT "Embedding PS2SDK ps2dev9.irx for HDD boot"
+  VERBATIM
+)
+add_custom_command(
+  OUTPUT "${PD_PS2_ATAD_IRX_C}"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  COMMAND "${PD_PS2_BIN2C}"
+    "${PD_PS2_ATAD_IRX}" "${PD_PS2_ATAD_IRX_C}" ps2atad_irx
+  DEPENDS "${PD_PS2_ATAD_IRX}"
+  COMMENT "Embedding PS2SDK ps2atad.irx for HDD boot"
+  VERBATIM
+)
+add_custom_command(
+  OUTPUT "${PD_PS2_HDD_IRX_C}"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  COMMAND "${PD_PS2_BIN2C}"
+    "${PD_PS2_HDD_IRX}" "${PD_PS2_HDD_IRX_C}" ps2hdd_irx
+  DEPENDS "${PD_PS2_HDD_IRX}"
+  COMMENT "Embedding PS2SDK ps2hdd.irx for APA boot"
+  VERBATIM
+)
+add_custom_command(
+  OUTPUT "${PD_PS2_PFS_IRX_C}"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  COMMAND "${PD_PS2_BIN2C}"
+    "${PD_PS2_PFS_IRX}" "${PD_PS2_PFS_IRX_C}" ps2fs_irx
+  DEPENDS "${PD_PS2_PFS_IRX}"
+  COMMENT "Embedding PS2SDK ps2fs.irx for PFS boot"
+  VERBATIM
+)
+
 set_source_files_properties(
   "${PD_PS2_USBD_IRX_C}"
   "${PD_PS2_USBHDFSD_IRX_C}"
   "${PD_PS2_SIO2MAN_IRX_C}"
   "${PD_PS2_PADMAN_IRX_C}"
+  "${PD_PS2_MCMAN_IRX_C}"
+  "${PD_PS2_MCSERV_IRX_C}"
+  "${PD_PS2_IOMANX_IRX_C}"
+  "${PD_PS2_FILEXIO_IRX_C}"
+  "${PD_PS2_POWEROFF_IRX_C}"
+  "${PD_PS2_DEV9_IRX_C}"
+  "${PD_PS2_ATAD_IRX_C}"
+  "${PD_PS2_HDD_IRX_C}"
+  "${PD_PS2_PFS_IRX_C}"
   PROPERTIES GENERATED TRUE
 )
 
@@ -423,109 +511,6 @@ set_source_files_properties(
       "gfx_start_frame=gfx_start_frame_ps2_impl;gfx_run=gfx_run_ps2_impl;TEXTURE_CACHE_MAX_SIZE=64"
 )
 
-add_executable(pd_ps2_bootstrap
-  bootstrap.c
-  system_ps2.c
-  audio_ps2.c
-  audio_ps2_queue.c
-  "${PD_PS2_AUDSRV_IRX_C}"
-  video_diag.c
-  gs_alpha_equation.cpp
-  gs_frame_mask.cpp
-  gs_command_budget.cpp
-  gs_clip.cpp
-  gs_core.cpp
-  gs_native_queue.cpp
-  gs_render_target_layout.cpp
-  gs_state_shadow.cpp
-  gs_texture_convert.cpp
-  gs_vu1_batch.cpp
-  gs_vu1_queue.cpp
-  gs_vu1_transform.cpp
-  gs_vu1_wait.cpp
-  gs_vram_allocator.cpp
-  ps2_renderer_stats.cpp
-  renderer_trace.cpp
-  gfx_api_scene.c
-  gfx_frame_ps2.c
-  gfx_run_tmem_ps2.cpp
-  gfx_ps2.cpp
-  gfx_ps2_combiner.cpp
-  gfx_ps2_pass_graph.cpp
-  gfx_window_ps2.c
-  pad_axis_ps2.c
-  pad_ps2.c
-  controls_ps2.c
-  rom_probe.c
-  "${PD_ROOT}/port/src/romsource.c"
-  "${PD_ROOT}/port/fast3d/gfx_cc.cpp"
-  "${PD_PS2_FAST3D_LIVE_CPP}"
-  "${PD_ROOT}/port/fast3d/rdp_tmem.cpp"
-  "${PD_ROOT}/port/fast3d/rdp_tmem_runtime.cpp"
-  "${PD_ROOT}/port/fast3d/rdp_tmem_live.cpp"
-  "${PD_ROOT}/port/fast3d/rdp_tmem_trace.cpp"
-  ${PD_PS2_BOOTSTRAP_VU1_OBJECTS}
-)
-
-if(PD_PS2_ALPHA_TRILERP_DIAGNOSTIC)
-  target_compile_definitions(pd_ps2_bootstrap PRIVATE
-    PERFECT_DARK_PS2_ALPHA_TRILERP_DIAGNOSTIC=1
-  )
-endif()
-if(PD_PS2_ALPHA_SPARSE_SHUFFLE)
-  target_compile_definitions(pd_ps2_bootstrap PRIVATE
-    PERFECT_DARK_PS2_ALPHA_SPARSE_SHUFFLE=1
-  )
-endif()
-if(PD_PS2_ALPHA_SAME_SAMPLE_FASTPATH)
-  target_compile_definitions(pd_ps2_bootstrap PRIVATE
-    PERFECT_DARK_PS2_ALPHA_SAME_SAMPLE_FASTPATH=1
-  )
-endif()
-if(PD_PS2_INDEPENDENT_ALPHA_MASK)
-  target_compile_definitions(pd_ps2_bootstrap PRIVATE
-    PERFECT_DARK_PS2_INDEPENDENT_ALPHA_MASK=1
-  )
-endif()
-if(PD_PS2_INDEPENDENT_ALPHA_DIRECT)
-  target_compile_definitions(pd_ps2_bootstrap PRIVATE
-    PERFECT_DARK_PS2_INDEPENDENT_ALPHA_DIRECT=1
-  )
-endif()
-
-if(PD_PS2_VU1_COLOR_DIAGNOSTIC)
-  target_compile_definitions(pd_ps2_bootstrap PRIVATE
-    PERFECT_DARK_PS2_VU1_COLOR_BATCH=1
-    PERFECT_DARK_PS2_VU1_AD_TRANSPORT=1
-  )
-endif()
-
-target_include_directories(pd_ps2_bootstrap PRIVATE
-  ${PD_PS2_COMMON_INCLUDE_DIRS}
-  "${GSKIT}/include"
-)
-
-# Bootstrap is a correctness target. Current PS2SDK injects -O2 globally,
-# while the Perfect Dark port currently carries known -O2 issues.
-# The target-local -Og deliberately wins here until correctness is established.
-target_compile_options(pd_ps2_bootstrap PRIVATE
-  ${PD_PS2_CORRECTNESS_FLAGS}
-  $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>
-  $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>
-)
-
-target_compile_definitions(pd_ps2_bootstrap PRIVATE
-  PLATFORM_PS2=1
-  PD_PS2_GIT_COMMIT="${PD_PS2_GIT_COMMIT}"
-)
-target_link_directories(pd_ps2_bootstrap PRIVATE "${GSKIT}/lib")
-
-# Current ps2sdk-ports installs EE zlib into PS2SDK/ports. Keep it behind the
-# bootstrap only until the full build has a platform dependency layer.
-# libpadx matches the ROM XPADMAN module used by the current PS2SDK padx sample.
-target_link_libraries(pd_ps2_bootstrap PRIVATE
-  gskit dmakit padx z audsrv -ldebug patches kernel)
-
 # Standalone hardware probe for the EE -> SIF/RPC -> audsrv -> SPU2 path.
 # It deliberately has no renderer or game-mixer dependency, so an audible
 # 440 Hz tone proves that silence in the full game originates above audsrv.
@@ -554,92 +539,7 @@ set_target_properties(pd_ps2_audio_diag PROPERTIES
   SUFFIX ".elf"
 )
 
-# FMCB/ExecPS2 loader probes. These deliberately avoid the game runtime so a
-# black-screen launch can be separated into loader, CRT and load-image-size
-# failures on real hardware.
-set(PD_PS2_LOADER_PROBE_RAW_OBJ
-  "${CMAKE_CURRENT_BINARY_DIR}/loader-probe-raw.o")
-set(PD_PS2_LOADER_PROBE_RAW_ELF
-  "${CMAKE_CURRENT_BINARY_DIR}/pd-ps2-loader-probe-raw.elf")
-set(PD_PS2_LOADER_PROBE_LARGE_OBJ
-  "${CMAKE_CURRENT_BINARY_DIR}/loader-probe-large.o")
-set(PD_PS2_LOADER_PROBE_LARGE_ELF
-  "${CMAKE_CURRENT_BINARY_DIR}/pd-ps2-loader-probe-large.elf")
-
-add_custom_command(
-  OUTPUT "${PD_PS2_LOADER_PROBE_RAW_OBJ}"
-  COMMAND "${CMAKE_C_COMPILER}" -c -x assembler-with-cpp -G0
-    "${CMAKE_CURRENT_LIST_DIR}/loader_probe_raw.S"
-    -o "${PD_PS2_LOADER_PROBE_RAW_OBJ}"
-  DEPENDS "${CMAKE_CURRENT_LIST_DIR}/loader_probe_raw.S"
-  VERBATIM
-)
-add_custom_command(
-  OUTPUT "${PD_PS2_LOADER_PROBE_RAW_ELF}"
-  COMMAND "${CMAKE_C_COMPILER}"
-    -nostdlib -nostartfiles -nodefaultlibs -G0
-    -Wl,-zmax-page-size=128
-    "-Wl,-T,${CMAKE_CURRENT_LIST_DIR}/loader_probe.ld"
-    -Wl,-e,_start
-    "${PD_PS2_LOADER_PROBE_RAW_OBJ}"
-    -o "${PD_PS2_LOADER_PROBE_RAW_ELF}"
-  DEPENDS "${PD_PS2_LOADER_PROBE_RAW_OBJ}"
-    "${CMAKE_CURRENT_LIST_DIR}/loader_probe.ld"
-  VERBATIM
-)
-
-add_custom_command(
-  OUTPUT "${PD_PS2_LOADER_PROBE_LARGE_OBJ}"
-  COMMAND "${CMAKE_C_COMPILER}" -c -x assembler-with-cpp -G0
-    "${CMAKE_CURRENT_LIST_DIR}/loader_probe_large.S"
-    -o "${PD_PS2_LOADER_PROBE_LARGE_OBJ}"
-  DEPENDS "${CMAKE_CURRENT_LIST_DIR}/loader_probe_large.S"
-  VERBATIM
-)
-add_custom_command(
-  OUTPUT "${PD_PS2_LOADER_PROBE_LARGE_ELF}"
-  COMMAND "${CMAKE_C_COMPILER}"
-    -nostdlib -nostartfiles -nodefaultlibs -G0
-    -Wl,-zmax-page-size=128
-    "-Wl,-T,${CMAKE_CURRENT_LIST_DIR}/loader_probe.ld"
-    -Wl,-e,_start
-    "${PD_PS2_LOADER_PROBE_LARGE_OBJ}"
-    -o "${PD_PS2_LOADER_PROBE_LARGE_ELF}"
-  DEPENDS "${PD_PS2_LOADER_PROBE_LARGE_OBJ}"
-    "${CMAKE_CURRENT_LIST_DIR}/loader_probe.ld"
-  VERBATIM
-)
-
-add_executable(pd_ps2_loader_probe_crt EXCLUDE_FROM_ALL
-  loader_probe_crt.c
-)
-target_compile_options(pd_ps2_loader_probe_crt PRIVATE -Og -G0)
-set_target_properties(pd_ps2_loader_probe_crt PROPERTIES
-  OUTPUT_NAME "pd-ps2-loader-probe-crt"
-  SUFFIX ".elf"
-)
-
-add_custom_target(pd_ps2_loader_probes
-  DEPENDS
-    "${PD_PS2_LOADER_PROBE_RAW_ELF}"
-    "${PD_PS2_LOADER_PROBE_LARGE_ELF}"
-    pd_ps2_loader_probe_crt
-)
-
-if(PD_PS2_ALPHA_TRILERP_DIAGNOSTIC)
-  set(PD_PS2_BOOTSTRAP_OUTPUT_NAME "pd-ps2-alpha-trilerp-diag")
-elseif(PD_PS2_VU1_COLOR_DIAGNOSTIC)
-  set(PD_PS2_BOOTSTRAP_OUTPUT_NAME "pd-ps2-vu1-color-diag")
-else()
-  set(PD_PS2_BOOTSTRAP_OUTPUT_NAME "pd-ps2-bootstrap")
-endif()
-
-set_target_properties(pd_ps2_bootstrap PROPERTIES
-  OUTPUT_NAME "${PD_PS2_BOOTSTRAP_OUTPUT_NAME}"
-  SUFFIX ".elf"
-)
-
-# Compile real game/render producers next to the renderer bootstrap.
+# Compile the real game/render producers for the full runtime.
 #
 # This stays an OBJECT target for now: the migration frontier exposes EE
 # compiler/platform-contract breakage without hiding it behind unresolved
@@ -648,7 +548,7 @@ set_target_properties(pd_ps2_bootstrap PROPERTIES
 # finally videoSubmitCommands -> shared Fast3D -> the PS2 GS backend. The shared
 # options menu is also compiled here so console video/input APIs cannot silently
 # drift away from the game-facing settings contract.
-add_library(pd_ps2_game_bridge OBJECT
+add_library(pd_ps2_game_bridge OBJECT EXCLUDE_FROM_ALL
   "${PD_ROOT}/port/src/main.c"
   "${PD_ROOT}/port/src/config.c"
   "${PD_ROOT}/port/src/fs.c"
@@ -814,6 +714,7 @@ set(PD_PS2_GAME_RUNTIME_SOURCES
   ${PD_PS2_PREPROCESS_SOURCES}
   system_ps2.c
   storage_ps2.c
+  memory_card_ps2.c
   fast_math_ps2.c
   audio_ps2.c
   audio_ps2_queue.c
@@ -822,6 +723,15 @@ set(PD_PS2_GAME_RUNTIME_SOURCES
   "${PD_PS2_USBHDFSD_IRX_C}"
   "${PD_PS2_SIO2MAN_IRX_C}"
   "${PD_PS2_PADMAN_IRX_C}"
+  "${PD_PS2_MCMAN_IRX_C}"
+  "${PD_PS2_MCSERV_IRX_C}"
+  "${PD_PS2_IOMANX_IRX_C}"
+  "${PD_PS2_FILEXIO_IRX_C}"
+  "${PD_PS2_POWEROFF_IRX_C}"
+  "${PD_PS2_DEV9_IRX_C}"
+  "${PD_PS2_ATAD_IRX_C}"
+  "${PD_PS2_HDD_IRX_C}"
+  "${PD_PS2_PFS_IRX_C}"
   video_ps2.c
   input_ps2.c
   input_ps2_map.c
@@ -862,7 +772,7 @@ set(PD_PS2_GAME_RENDERER_SOURCES
   "${PD_PS2_VU1_TRANSFORM_PROGRAM_OBJECT}"
 )
 
-add_executable(pd_ps2_game EXCLUDE_FROM_ALL
+add_executable(pd_ps2_game
   ${PD_PS2_GAME_RUNTIME_SOURCES}
   ${PD_PS2_GAME_RENDERER_SOURCES}
   $<TARGET_OBJECTS:pd_ps2_game_compile_all>
@@ -883,6 +793,7 @@ target_compile_options(pd_ps2_game PRIVATE
 target_compile_definitions(pd_ps2_game PRIVATE
   ${PD_PS2_GAME_DEFINITIONS}
   PD_PS2_GIT_COMMIT="${PD_PS2_GIT_COMMIT}"
+  PD_PS2_OWNED_IOP_RUNTIME=1
 )
 if(PD_PS2_GAME_VU1)
   target_compile_definitions(pd_ps2_game PRIVATE
@@ -946,31 +857,6 @@ if(PD_PS2_DISABLE_DEPTH_DIAGNOSTIC)
     PERFECT_DARK_PS2_DISABLE_DEPTH=1
   )
 endif()
-if(PD_PS2_FMCB_STARTUP_DIAGNOSTIC)
-  target_compile_definitions(pd_ps2_game PRIVATE
-    PD_PS2_FMCB_STARTUP_DIAGNOSTIC=1
-  )
-endif()
-if(PD_PS2_CLEAN_IOP_STARTUP_DIAGNOSTIC)
-  target_compile_definitions(pd_ps2_game PRIVATE
-    PD_PS2_CLEAN_IOP_STARTUP_DIAGNOSTIC=1
-  )
-endif()
-if(PD_PS2_CURRENT_PAD_IRX_DIAGNOSTIC)
-  target_compile_definitions(pd_ps2_game PRIVATE
-    PD_PS2_CURRENT_PAD_IRX_DIAGNOSTIC=1
-  )
-endif()
-if(PD_PS2_FORCE_LEGACY_USB_ALIAS_DIAGNOSTIC)
-  target_compile_definitions(pd_ps2_game PRIVATE
-    PD_PS2_FORCE_LEGACY_USB_ALIAS_DIAGNOSTIC=1
-  )
-endif()
-if(PD_PS2_POST_STORAGE_USB_LOG_DIAGNOSTIC)
-  target_compile_definitions(pd_ps2_game PRIVATE
-    PD_PS2_POST_STORAGE_USB_LOG_DIAGNOSTIC=1
-  )
-endif()
 target_link_directories(pd_ps2_game PRIVATE "${GSKIT}/lib")
 set(PD_PS2_GAME_LINK_MAP "${CMAKE_CURRENT_BINARY_DIR}/pd-ps2-game.map")
 target_link_options(pd_ps2_game PRIVATE
@@ -978,41 +864,11 @@ target_link_options(pd_ps2_game PRIVATE
   "-Wl,-Map,${PD_PS2_GAME_LINK_MAP}"
 )
 target_link_libraries(pd_ps2_game PRIVATE
-  gskit dmakit padx z audsrv -ldebug patches kernel m)
-if(PD_PS2_POST_STORAGE_USB_LOG_DIAGNOSTIC)
-  target_link_libraries(pd_ps2_game PRIVATE fileXio)
-endif()
-if(PD_PS2_POST_STORAGE_USB_LOG_DIAGNOSTIC)
-  set_target_properties(pd_ps2_game PROPERTIES
-    OUTPUT_NAME "pd-ps2-game-fmcb-usb-log"
-    SUFFIX ".elf"
-  )
-elseif(PD_PS2_FORCE_LEGACY_USB_ALIAS_DIAGNOSTIC)
-  set_target_properties(pd_ps2_game PROPERTIES
-    OUTPUT_NAME "pd-ps2-game-fmcb-usb-alias"
-    SUFFIX ".elf"
-  )
-elseif(PD_PS2_CURRENT_PAD_IRX_DIAGNOSTIC)
-  set_target_properties(pd_ps2_game PROPERTIES
-    OUTPUT_NAME "pd-ps2-game-fmcb-current-pad"
-    SUFFIX ".elf"
-  )
-elseif(PD_PS2_CLEAN_IOP_STARTUP_DIAGNOSTIC)
-  set_target_properties(pd_ps2_game PROPERTIES
-    OUTPUT_NAME "pd-ps2-game-fmcb-clean-iop"
-    SUFFIX ".elf"
-  )
-elseif(PD_PS2_FMCB_STARTUP_DIAGNOSTIC)
-  set_target_properties(pd_ps2_game PROPERTIES
-    OUTPUT_NAME "pd-ps2-game-fmcb-startup"
-    SUFFIX ".elf"
-  )
-else()
-  set_target_properties(pd_ps2_game PROPERTIES
-    OUTPUT_NAME "pd-ps2-game"
-    SUFFIX ".elf"
-  )
-endif()
+  gskit dmakit padx z audsrv mc fileXio -ldebug patches kernel m)
+set_target_properties(pd_ps2_game PROPERTIES
+  OUTPUT_NAME "pd-ps2-game"
+  SUFFIX ".elf"
+)
 
 # Preserve the symbol-rich ELF for post-mortem work and emit a launcher-facing
 # copy stripped only of non-loadable debug/symbol baggage.  CI verifies that
@@ -1033,8 +889,7 @@ add_custom_command(TARGET pd_ps2_game POST_BUILD
 )
 
 # The real Fast3D translator remains linked as the compatibility frontend.
-# gfx_api_scene.c is the current lower-level correctness baseline while GS
-# ownership is moved below gfx_ps2 into gs_core. DualShock 2 input is a separate
+# GS ownership is moving below gfx_ps2 into gs_core. DualShock 2 input is a separate
 # physical backend plus semantic shooter mapping. gs_native_queue is the first
 # project-owned PATH3 transport layer and is compiled before taking over the
 # active renderer so packet correctness can be gated independently.
@@ -1043,8 +898,8 @@ add_custom_command(TARGET pd_ps2_game POST_BUILD
 # authoritative link/runtime frontier and must never resolve missing services by
 # silently discarding or weakening their contracts.
 
-message(STATUS "Perfect Dark PS2 bootstrap root: ${PD_ROOT}")
-message(STATUS "Perfect Dark PS2 bootstrap gsKit: ${GSKIT}")
-message(STATUS "Perfect Dark PS2 bootstrap commit: ${PD_PS2_GIT_COMMIT}")
+message(STATUS "Perfect Dark PS2 root: ${PD_ROOT}")
+message(STATUS "Perfect Dark PS2 gsKit: ${GSKIT}")
+message(STATUS "Perfect Dark PS2 commit: ${PD_PS2_GIT_COMMIT}")
 message(STATUS "Perfect Dark PS2 EE optimization: ${PD_PS2_OPTIMIZATION}")
 message(STATUS "Perfect Dark PS2 default file logger: ${PD_PS2_FILE_LOG_DEFAULT}")
