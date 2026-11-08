@@ -97,6 +97,12 @@ jobs:
             -o /tmp/gfx_primitive_depth_test
           /tmp/gfx_primitive_depth_test
 
+          g++ -std=c++20 -Wall -Wextra -Werror -frounding-math \
+            -Iport/fast3d \
+            port/fast3d/tests/gfx_exact_div_test.cpp \
+            -o /tmp/gfx_exact_div_test
+          /tmp/gfx_exact_div_test
+
           g++ -std=c++20 -Wall -Wextra -Werror \
             -Iport/fast3d \
             port/fast3d/rdp_tmem.cpp \
