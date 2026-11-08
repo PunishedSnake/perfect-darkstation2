@@ -1418,6 +1418,66 @@ static int ps2_map_clip_depth(float z, float w)
     return gfxPs2ApplyDecalDepthBias(depth, s_depth_decal);
 }
 
+/*
+ * Shared EE screen mapping. Both the eager PATH3 packer and the deferred
+ * fallback below call exactly this code, so a VU1 rejection rebuilds
+ * bit-identical PATH3 vertices from the retained clip-space input.
+ */
+static inline float ps2_clip_inv_w(float clip_w)
+{
+    return clip_w != 0.0f ? 1.0f / clip_w : 0.0f;
+}
+
+static inline void ps2_project_screen(
+    float clip_x, float clip_y, float clip_z, float clip_w, float inv_w,
+    float *sx, float *sy, int *iz)
+{
+    const float ndc_x = clip_x * inv_w;
+    const float ndc_y = clip_y * inv_w;
+    *sx = (float)s_viewport.x +
+        (ndc_x * 0.5f + 0.5f) * (float)s_viewport.width;
+    *sy = (float)s_viewport.y +
+        (0.5f - ndc_y * 0.5f) * (float)s_viewport.height;
+    *iz = ps2_map_clip_depth(clip_z, clip_w);
+}
+
+static inline struct Ps2GsPackedReg ps2_pack_screen_position(
+    float clip_x, float clip_y, float clip_z, float clip_w, float inv_w,
+    bool fog, uint8_t fog_coefficient)
+{
+    float sx;
+    float sy;
+    int iz;
+    ps2_project_screen(clip_x, clip_y, clip_z, clip_w, inv_w, &sx, &sy, &iz);
+    return fog ? ps2_pack_xyzf2(sx, sy, iz, fog_coefficient)
+               : ps2_pack_xyz2(sx, sy, iz);
+}
+
+#if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
+/*
+ * PATH3 fallback for a plain textured batch whose EE packing was deferred
+ * because the VU1 transform path was expected to take it. The VU1 input keeps
+ * every value the eager packer consumed: clip XYZW, scaled ST, RGBA and the
+ * fog coefficient in xyz_control bits 4..11.
+ */
+static void ps2_pack_textured_from_vu1_input(
+    const struct Ps2GsVu1TransformVertex *in,
+    struct Ps2GsTexturedVertex *out, uint32_t count, bool fog)
+{
+    for (uint32_t i = 0u; i < count; ++i) {
+        const float inv_w = ps2_clip_inv_w(in[i].clip[3]);
+        out[i].rgbaq = ps2_pack_rgbaq(
+            (uint8_t)in[i].rgba[0], (uint8_t)in[i].rgba[1],
+            (uint8_t)in[i].rgba[2], (uint8_t)in[i].rgba[3], inv_w);
+        out[i].st = ps2_pack_st(
+            in[i].texcoord.s * inv_w, in[i].texcoord.t * inv_w);
+        out[i].xyz2 = ps2_pack_screen_position(
+            in[i].clip[0], in[i].clip[1], in[i].clip[2], in[i].clip[3],
+            inv_w, fog, (uint8_t)(in[i].texcoord.xyz_control >> 4));
+    }
+}
+#endif
+
 static size_t ps2_vbo_stride(const struct ShaderProgram *prg)
 {
     if (!prg) {
@@ -3960,6 +4020,15 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
         texture_coordinate_scale_s[t] = sampler->coordinate_scale_s;
         texture_coordinate_scale_t[t] = sampler->coordinate_scale_t;
     }
+#if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH) && \
+    !defined(PERFECT_DARK_PS2_GEOMETRY_BASELINE) && \
+    !defined(PERFECT_DARK_PS2_MATERIAL_BASELINE)
+    /* Same predicate order as the submission switch after translation. */
+    const bool plain_textured = s_shader->plan.textured &&
+        !independent_tex0_alpha && !interference && !texture_factor_lerp &&
+        !alpha_trilerp && !independent_alpha_trilerp && !opaque_trilerp &&
+        !opaque_input1_tex0_lerp;
+#endif
     size_t base_vertex = 0;
     while (base_vertex < vertex_count) {
         size_t batch_vertices = vertex_count - base_vertex;
@@ -3984,6 +4053,20 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
             s_depth_near, s_depth_far,
             transform_scale, transform_offset);
 #endif
+#if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH) && \
+    !defined(PERFECT_DARK_PS2_GEOMETRY_BASELINE) && \
+    !defined(PERFECT_DARK_PS2_MATERIAL_BASELINE)
+        /*
+         * Plain textured batches that VU1 is expected to transform skip the
+         * EE screen mapping and PATH3 packing. A VU1 rejection rebuilds the
+         * exact PATH3 vertices from s_vu1_transform_vertices afterwards.
+         */
+        const bool defer_textured_path3 = vu1_transform_eligible &&
+            plain_textured &&
+            ps2GsCoreVu1TexturedTransformCandidate((uint32_t)batch_vertices);
+#else
+        const bool defer_textured_path3 = false;
+#endif
 
         const bool trace_texture_coords = ps2RendererTraceIsCapturing();
         float trace_min_u[2] = { FLT_MAX, FLT_MAX };
@@ -3999,9 +4082,7 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
             const float clip_y = src[pos++];
             const float clip_z = src[pos++];
             const float clip_w = src[pos++];
-            const float inv_w = clip_w != 0.0f ? 1.0f / clip_w : 0.0f;
-            const float ndc_x = clip_x * inv_w;
-            const float ndc_y = clip_y * inv_w;
+            const float inv_w = ps2_clip_inv_w(clip_w);
 
             float tex_u[2] = { 0.0f, 0.0f };
             float tex_v[2] = { 0.0f, 0.0f };
@@ -4078,9 +4159,13 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
                 }
             }
 
-            const float sx = (float)s_viewport.x + (ndc_x * 0.5f + 0.5f) * (float)s_viewport.width;
-            const float sy = (float)s_viewport.y + (0.5f - ndc_y * 0.5f) * (float)s_viewport.height;
-            const int iz = ps2_map_clip_depth(clip_z, clip_w);
+            float sx = 0.0f;
+            float sy = 0.0f;
+            int iz = 0;
+            if (!defer_textured_path3) {
+                ps2_project_screen(clip_x, clip_y, clip_z, clip_w, inv_w,
+                    &sx, &sy, &iz);
+            }
 
             uint8_t cr = 0;
             uint8_t cg = 0;
@@ -4182,7 +4267,10 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
             }
 #endif
 #else
-            if (s_shader->features.opt_fog) {
+            if (defer_textured_path3) {
+                packed_position.value = 0u;
+                packed_position.reg = PS2_GS_REG_XYZ2;
+            } else if (s_shader->features.opt_fog) {
                 packed_position = ps2_pack_xyzf2(
                     sx, sy, iz, ps2_fog_coefficient(fog_factor));
             } else {
@@ -4409,11 +4497,13 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
                     ps2_pack_st(tex_u[0] * inv_w, tex_v[0] * inv_w);
                 s_stq_vertices[0][i].xyz2 = packed_position;
             } else if (s_shader->plan.textured) {
-                s_stq_vertices[0][i].rgbaq =
-                    ps2_pack_rgbaq(cr, cg, cb, ca, inv_w);
-                s_stq_vertices[0][i].st =
-                    ps2_pack_st(tex_u[0] * inv_w, tex_v[0] * inv_w);
-                s_stq_vertices[0][i].xyz2 = packed_position;
+                if (!defer_textured_path3) {
+                    s_stq_vertices[0][i].rgbaq =
+                        ps2_pack_rgbaq(cr, cg, cb, ca, inv_w);
+                    s_stq_vertices[0][i].st =
+                        ps2_pack_st(tex_u[0] * inv_w, tex_v[0] * inv_w);
+                    s_stq_vertices[0][i].xyz2 = packed_position;
+                }
 #if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
                 struct Ps2GsVu1TransformVertex *vu_vertex =
                     &s_vu1_transform_vertices[i];
@@ -4532,7 +4622,22 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
         } else if (s_shader->plan.textured) {
             ps2_apply_texture_clamp(0);
 #if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
-            if (vu1_transform_eligible) {
+            if (defer_textured_path3) {
+                const bool submitted = vu1_transform_eligible &&
+                    ps2GsCoreTryDrawTexturedTrianglesTransform(
+                        s_selected_texture[0], s_vu1_transform_vertices,
+                        (uint32_t)batch_vertices,
+                        transform_scale, transform_offset);
+                if (!submitted) {
+                    ps2_pack_textured_from_vu1_input(
+                        s_vu1_transform_vertices, s_stq_vertices[0],
+                        (uint32_t)batch_vertices,
+                        s_shader->features.opt_fog);
+                    ps2GsCoreDrawTexturedTriangles(
+                        s_selected_texture[0], s_stq_vertices[0],
+                        (uint32_t)batch_vertices);
+                }
+            } else if (vu1_transform_eligible) {
                 ps2GsCoreDrawTexturedTrianglesTransform(
                     s_selected_texture[0], s_stq_vertices[0],
                     s_vu1_transform_vertices,

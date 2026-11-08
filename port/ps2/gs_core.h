@@ -244,6 +244,21 @@ void ps2GsCoreDrawTexturedTrianglesTransform(Ps2GsTextureHandle texture,
     const struct Ps2GsTexturedVertex *fallback_vertices,
     const struct Ps2GsVu1TransformVertex *transform_vertices,
     uint32_t vertex_count, const float scale[4], const float offset[4]);
+/*
+ * True when a textured batch of this size would currently be offered to the
+ * VU1 transform path. Callers may then defer building the PATH3 fallback
+ * vertices until ps2GsCoreTryDrawTexturedTrianglesTransform() reports that
+ * VU1 rejected the batch.
+ */
+bool ps2GsCoreVu1TexturedTransformCandidate(uint32_t vertex_count);
+/*
+ * VU1-only submission. Returns false without emitting anything when the
+ * batch is not accepted by the VU1 queue; the caller then owns the PATH3
+ * fallback (normally ps2GsCoreDrawTexturedTriangles()).
+ */
+bool ps2GsCoreTryDrawTexturedTrianglesTransform(Ps2GsTextureHandle texture,
+    const struct Ps2GsVu1TransformVertex *transform_vertices,
+    uint32_t vertex_count, const float scale[4], const float offset[4]);
 
 #ifdef __cplusplus
 }
