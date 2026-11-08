@@ -124,6 +124,13 @@ jobs:
           /tmp/gs_clip_test
 
           g++ -std=c++20 -Wall -Wextra -Werror \
+            -Iport/ps2 \
+            port/ps2/gs_clip.cpp \
+            port/ps2/gfx_ps2_clip_batch_test.cpp \
+            -o /tmp/gfx_ps2_clip_batch_test
+          /tmp/gfx_ps2_clip_batch_test
+
+          g++ -std=c++20 -Wall -Wextra -Werror \
             -Iport/ps2 port/ps2/gs_dma_policy_test.cpp \
             -o /tmp/gs_dma_policy_test
           /tmp/gs_dma_policy_test

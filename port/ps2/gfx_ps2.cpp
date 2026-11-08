@@ -14,6 +14,7 @@
 #include "gfx_ps2_combiner.h"
 #include "gfx_ps2_pass_graph.h"
 #include "gs_clip.h"
+#include "gfx_ps2_clip_batch.h"
 #include "gs_core.h"
 #include "gs_vu1_batch.h"
 #include "gs_vu1_transform.h"
@@ -112,6 +113,19 @@
 static_assert(PS2_GFX_TRANSLATE_VERTS >=
     PS2_GS_CLIP_MAX_OUTPUT_VERTICES,
     "one clipped triangle must fit in the translation batch");
+
+/*
+ * Shortest run of unclipped triangles drawn directly from the Fast3D VBO.
+ * Shorter runs are copied into the clip buffer and merged with neighbours,
+ * exactly as before, so accept/reject/clip interleavings do not fragment the
+ * stream into many small PATH1 kicks (each kick waits for GIF ownership and
+ * serialises through FLUSHA/MSCAL/FLUSH). Twelve triangles keeps every direct
+ * batch at 36+ vertices, well above the VU1 crossover.
+ */
+#define PS2_GFX_DIRECT_RUN_MIN_TRIS 12u
+static_assert(PS2_GFX_DIRECT_RUN_MIN_TRIS * 3u <=
+    PS2_GFX_TRANSLATE_VERTS - PS2_GS_CLIP_MAX_OUTPUT_VERTICES,
+    "a copied short run must leave room for one clipped triangle");
 
 /* GS packed-register IDs consumed by the packet-ready core boundary. */
 #define PS2_GS_REG_RGBAQ 0x01u
@@ -4827,49 +4841,28 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len,
         }
     }
 
-    size_t buffered_vertices = 0u;
-    size_t clipped_vertices_total = 0u;
     uint32_t trace_clip_chunk = 0u;
-    for (size_t triangle = 0u; triangle < buf_vbo_num_tris; ++triangle) {
-        if (PS2_GFX_TRANSLATE_VERTS - buffered_vertices <
-            PS2_GS_CLIP_MAX_OUTPUT_VERTICES) {
+    const size_t clipped_vertices_total = gfxPs2ClipAndBatchTriangles(
+        buf_vbo, buf_vbo_num_tris, stride,
+        s_clipped_vbo, PS2_GFX_TRANSLATE_VERTS,
+        PS2_GFX_DIRECT_RUN_MIN_TRIS,
+        [&](float *vertices, size_t count, bool direct) {
+            (void)direct;
             ps2_trace_draw_payload(
                 trace_draw_id, ++trace_clip_chunk, 2u,
-                s_clipped_vbo, (uint32_t)buffered_vertices,
-                (uint32_t)stride);
-            ps2_draw_triangles_unclipped(s_clipped_vbo,
-                buffered_vertices * stride, buffered_vertices / 3u);
-            buffered_vertices = 0u;
-        }
-
-        size_t clipped_vertices = 0u;
-        const bool clipped = ps2GsClipTriangle(
-            &buf_vbo[triangle * 3u * stride], stride,
-            &s_clipped_vbo[buffered_vertices * stride],
-            PS2_GFX_TRANSLATE_VERTS - buffered_vertices,
-            &clipped_vertices);
-        if (trace_clip_map) {
-            trace_clip_map[triangle] = clipped
-                ? (uint16_t)clipped_vertices : 0u;
-        }
-        if (!clipped) {
-            continue;
-        }
-        ps2_trace_clipped_triangle_bounds(
-            triangle, clipped_vertices,
-            &s_clipped_vbo[buffered_vertices * stride], stride);
-        buffered_vertices += clipped_vertices;
-        clipped_vertices_total += clipped_vertices;
-    }
-
-    if (buffered_vertices != 0u) {
-        ps2_trace_draw_payload(
-            trace_draw_id, ++trace_clip_chunk, 2u,
-            s_clipped_vbo, (uint32_t)buffered_vertices,
-            (uint32_t)stride);
-        ps2_draw_triangles_unclipped(s_clipped_vbo,
-            buffered_vertices * stride, buffered_vertices / 3u);
-    }
+                vertices, (uint32_t)count, (uint32_t)stride);
+            ps2_draw_triangles_unclipped(vertices, count * stride,
+                count / 3u);
+        },
+        [&](size_t triangle, size_t count, const float *vertices) {
+            if (trace_clip_map) {
+                trace_clip_map[triangle] = (uint16_t)count;
+            }
+            if (count != 0u) {
+                ps2_trace_clipped_triangle_bounds(
+                    triangle, count, vertices, stride);
+            }
+        });
     if (trace_draw_id != 0u) {
         const bool stored = trace_clip_map != NULL;
         const uint16_t flags = 3u |
