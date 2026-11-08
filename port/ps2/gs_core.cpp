@@ -1604,6 +1604,21 @@ extern "C" void ps2GsCoreSetAlphaBlendEquation(
     }
 }
 
+extern "C" void ps2GsCoreSetAlphaBlendDestinationScale(uint8_t fix)
+{
+    if (!s_gs) {
+        return;
+    }
+
+    const struct Ps2GsAlphaBlendFactors factors =
+        ps2GsDestinationScaleBlend(fix);
+    s_gs->PrimAlpha = GS_SETREG_ALPHA(
+        factors.a, factors.b, factors.c, factors.d, factors.fix);
+    if (s_frame_building && s_gs->PrimAlphaEnable) {
+        ps2GsCoreEmitAlpha();
+    }
+}
+
 extern "C" void ps2GsCoreSetAlphaWrite(bool enable)
 {
     if (!s_gs || s_alpha_write == enable) {

@@ -251,6 +251,8 @@ void ps2GsCoreDrawTexturedTrianglesTransform(Ps2GsTextureHandle texture,
  * VU1 rejected the batch.
  */
 bool ps2GsCoreVu1TexturedTransformCandidate(uint32_t vertex_count);
+/* Blend as (Cd - 0) * fix / 128 + 0. Alpha blending must already be on. */
+void ps2GsCoreSetAlphaBlendDestinationScale(uint8_t fix);
 /*
  * VU1-only submission. Returns false without emitting anything when the
  * batch is not accepted by the VU1 queue; the caller then owns the PATH3

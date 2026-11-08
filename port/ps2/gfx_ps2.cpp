@@ -3872,6 +3872,46 @@ static bool ps2_draw_alpha_trilerp(uint32_t vertex_count)
 static uint64_t ps2_trace_pack_float_pair(float a, float b);
 static uint64_t ps2_trace_pack_u32_pair(uint32_t a, uint32_t b);
 
+/*
+ * G_MODULATE_EXT (GL DST_COLOR, ZERO) for flat, opaque source colour:
+ * dst.rgb *= src.rgb / 255, dst.a *= 1. Perfect Dark issues this only for
+ * the night-vision, IR/horizon-scanner and film-interlace tint lines, each a
+ * G_CC_PRIMITIVE rectangle with alpha 0xff. The GS cannot multiply by Cs,
+ * but a constant factor per channel is (Cd - 0) * FIX + 0 under a channel
+ * FRAME mask. Returns false (nothing drawn) when the batch is not flat.
+ */
+static bool ps2_draw_constant_modulate(uint32_t vertex_count)
+{
+    if (vertex_count == 0u) {
+        return false;
+    }
+    const uint64_t first = s_color_vertices[0].rgbaq.value & 0xffffffffu;
+    if (((first >> 24) & 0xffu) != 0x80u) {
+        return false;
+    }
+    for (uint32_t i = 1u; i < vertex_count; ++i) {
+        if ((s_color_vertices[i].rgbaq.value & 0xffffffffu) != first) {
+            return false;
+        }
+    }
+
+    struct Ps2GsModulatePass passes[3];
+    const uint32_t pass_count = ps2GsPlanConstantModulate(
+        (uint8_t)first, (uint8_t)(first >> 8), (uint8_t)(first >> 16),
+        passes);
+    ps2GsCoreSetAlphaWrite(false);
+    for (uint32_t pass = 0u; pass < pass_count; ++pass) {
+        ps2GsCoreSetColorChannelWriteMask(passes[pass].channels);
+        ps2GsCoreSetAlphaBlendDestinationScale(passes[pass].fix);
+        ps2GsCoreDrawColorTriangles(s_color_vertices, vertex_count);
+    }
+    ps2GsCoreSetColorChannelWriteMask(PS2_GS_COLOR_WRITE_RGB);
+    ps2GsCoreSetAlphaWrite(true);
+    /* Restores the default source-over equation for the next draw. */
+    ps2GsCoreSetAlphaBlend(s_alpha_blend);
+    return true;
+}
+
 static void ps2_draw_triangles_unclipped(float buf_vbo[],
     size_t buf_vbo_len, size_t buf_vbo_num_tris)
 {
@@ -4654,7 +4694,15 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
                 (uint32_t)batch_vertices);
 #endif
         } else {
-            ps2GsCoreDrawColorTriangles(s_color_vertices, (uint32_t)batch_vertices);
+            const bool constant_modulate = s_modulate && s_alpha_blend &&
+                !texture_edge && !invisible &&
+                !s_shader->features.opt_fog &&
+                s_shader->plan.color_recipe == PS2_COLOR_INPUT1 &&
+                ps2_draw_constant_modulate((uint32_t)batch_vertices);
+            if (!constant_modulate) {
+                ps2GsCoreDrawColorTriangles(
+                    s_color_vertices, (uint32_t)batch_vertices);
+            }
         }
 #endif
 
