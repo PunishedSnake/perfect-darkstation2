@@ -94,7 +94,7 @@
 #else
 #define PS2_GFX_TRANSLATE_VERTS 96
 #endif
-#define PS2_GFX_TEXTURE_STATE_SLOTS 65
+#define PS2_GFX_TEXTURE_STATE_SLOTS 513
 /* Fast3D threshold is 8/256. GS alpha unity is 0x80, hence reference 4. */
 #define PS2_GFX_ALPHA_THRESHOLD 4u
 /* Portable texture-edge threshold is >0.19; quantized GS alpha accepts >=25. */
@@ -490,6 +490,12 @@ static void ps2_clear_shaders(void)
 {
     memset(s_shaders, 0, sizeof(s_shaders));
     s_shader = NULL;
+}
+
+extern "C" bool gfxPs2TextureResident(uint32_t texture_id)
+{
+    return texture_id > UINT16_MAX ||
+        !ps2GsCoreTextureEvicted((Ps2GsTextureHandle)texture_id);
 }
 
 static uint32_t ps2_new_texture(void)

@@ -86,16 +86,18 @@ struct TextureCacheValue {
 
 #if defined(PLATFORM_PS2)
 /*
- * The PS2 cache has a fixed 64-entry budget.  Keeping its nodes contiguous
- * avoids libstdc++'s unordered_map/list allocation graph and gives the R5900 a
- * small, predictable working set.  The portable desktop backend retains its
- * existing unbounded STL representation below.
+ * The PS2 cache has a fixed node budget.  Keeping its nodes contiguous avoids
+ * libstdc++'s unordered_map/list allocation graph and gives the R5900 a small,
+ * predictable working set.  Hits are found through a fixed bucket index
+ * (`hash_next` chains, 1-based, 0 = end) instead of scanning every node.  The
+ * portable desktop backend retains its existing unbounded STL representation.
  */
 struct TextureCacheNode {
     TextureCacheKey first;
     TextureCacheValue second;
     uint64_t lru_stamp;
     bool occupied;
+    uint16_t hash_next;
 };
 #else
 typedef std::unordered_map<TextureCacheKey, struct TextureCacheValue, TextureCacheKey::Hasher> TextureCacheMap;

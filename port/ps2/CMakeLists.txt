@@ -550,7 +550,7 @@ set_source_files_properties(
   PROPERTIES
     GENERATED TRUE
     COMPILE_DEFINITIONS
-      "gfx_start_frame=gfx_start_frame_ps2_impl;gfx_run=gfx_run_ps2_impl;TEXTURE_CACHE_MAX_SIZE=64"
+      "gfx_start_frame=gfx_start_frame_ps2_impl;gfx_run=gfx_run_ps2_impl;TEXTURE_CACHE_MAX_SIZE=512"
 )
 
 # Standalone hardware probe for the EE -> SIF/RPC -> audsrv -> SPU2 path.
