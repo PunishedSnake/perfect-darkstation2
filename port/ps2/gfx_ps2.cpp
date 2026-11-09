@@ -775,6 +775,11 @@ extern "C" void gfxPs2SetTextureUploadMirror(uint8_t cms, uint8_t cmt)
     s_upload_mirror_t = (cmt & 1u) != 0u;
 }
 
+extern "C" bool gfxPs2TraceTmemTextureViewWanted(void)
+{
+    return ps2RendererTraceIsCapturing();
+}
+
 extern "C" void gfxPs2TraceTmemTextureView(uint32_t texture_id,
     const struct GfxRdpTmemLiveTextureView *view,
     uint8_t format, uint8_t size, uint32_t palette_format)

@@ -209,6 +209,7 @@ bool gfxPs2UploadTmemTexture(const struct GfxRdpTmemLiveTextureView *view,
  * already-resident GS texture. This is trace-only and does no work unless a
  * one-frame renderer capture is active.
  */
+bool gfxPs2TraceTmemTextureViewWanted(void);
 void gfxPs2TraceTmemTextureView(uint32_t texture_id,
     const struct GfxRdpTmemLiveTextureView *view,
     uint8_t format, uint8_t size, uint32_t palette_format);

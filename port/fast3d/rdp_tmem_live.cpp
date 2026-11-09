@@ -52,10 +52,70 @@ static void gfxRdpTmemLiveRecordLoad(enum GfxRdpTmemLoadResult result,
     }
 }
 
+/*
+ * Content identity hash. Two 32-bit Murmur3-style lanes packed into one
+ * uint64_t state: the R5900 has no 64-bit multiplier, so the previous
+ * byte-wise 64-bit FNV-1a cost two libgcc __muldi3 calls per TMEM byte and
+ * dominated texture lookups. This consumes a whole 64-bit TMEM word per step
+ * with native 32-bit multiplies. Only equality of identities matters; the
+ * values are never persisted.
+ */
+static inline uint32_t gfxRdpTmemLiveRotl32(uint32_t x, unsigned r)
+{
+    return (x << r) | (x >> (32u - r));
+}
+
+static inline void gfxRdpTmemLiveHashMix(uint64_t *hash,
+    uint32_t a, uint32_t b)
+{
+    uint32_t h1 = (uint32_t)(*hash >> 32);
+    uint32_t h2 = (uint32_t)*hash;
+
+    a *= 0xcc9e2d51u;
+    a = gfxRdpTmemLiveRotl32(a, 15);
+    a *= 0x1b873593u;
+    h1 ^= a;
+    h1 = gfxRdpTmemLiveRotl32(h1, 13);
+    h1 = h1 * 5u + 0xe6546b64u;
+
+    b *= 0x85ebca6bu;
+    b = gfxRdpTmemLiveRotl32(b, 16);
+    b *= 0xc2b2ae35u;
+    h2 ^= b;
+    h2 = gfxRdpTmemLiveRotl32(h2, 17);
+    h2 = h2 * 5u + 0x52dce729u;
+
+    h1 += h2;
+    h2 += h1;
+    *hash = ((uint64_t)h1 << 32) | h2;
+}
+
 static void gfxRdpTmemLiveHashByte(uint64_t *hash, uint8_t value)
 {
-    *hash ^= value;
-    *hash *= UINT64_C(1099511628211);
+    gfxRdpTmemLiveHashMix(hash, 0x6b000000u | value, 0x94ffffffu ^ value);
+}
+
+static inline uint32_t gfxRdpTmemLiveFmix32(uint32_t h)
+{
+    h ^= h >> 16;
+    h *= 0x85ebca6bu;
+    h ^= h >> 13;
+    h *= 0xc2b2ae35u;
+    h ^= h >> 16;
+    return h;
+}
+
+static uint64_t gfxRdpTmemLiveHashFinish(uint64_t hash)
+{
+    uint32_t h1 = (uint32_t)(hash >> 32);
+    uint32_t h2 = (uint32_t)hash;
+    h1 += h2;
+    h2 += h1;
+    h1 = gfxRdpTmemLiveFmix32(h1);
+    h2 = gfxRdpTmemLiveFmix32(h2);
+    h1 += h2;
+    h2 += h1;
+    return ((uint64_t)h1 << 32) | h2;
 }
 
 static bool gfxRdpTmemLiveHashWords(const struct GfxRdpTmem *tmem,
@@ -68,26 +128,49 @@ static bool gfxRdpTmemLiveHashWords(const struct GfxRdpTmem *tmem,
         return false;
     }
 
-    for (uint32_t word = 0; word < word_count; ++word) {
-        const uint32_t base =
-            (first_word + word) * GFX_RDP_TMEM_WORD_BYTES;
-        for (uint32_t lane = 0; lane < GFX_RDP_TMEM_WORD_BYTES; ++lane) {
-            const uint32_t offset = base + lane;
-            const bool valid = tmem->byte_valid[offset] != 0u;
+    const uint8_t *bytes = &tmem->bytes[first_word * GFX_RDP_TMEM_WORD_BYTES];
+    const uint8_t *valid = &tmem->byte_valid[first_word * GFX_RDP_TMEM_WORD_BYTES];
+    uint32_t counted = 0u;
 
-            /*
-             * Invalid bytes hash as an explicit marker, never as their stale
-             * backing value. Conservative invalidation therefore cannot become
-             * an accidental cache hit just because old bytes remain in storage.
-             */
-            gfxRdpTmemLiveHashByte(hash, valid ? 0xa5u : 0x5au);
-            if (valid) {
-                gfxRdpTmemLiveHashByte(hash, tmem->bytes[offset]);
-                ++*valid_bytes;
+    for (uint32_t word = 0; word < word_count; ++word,
+            bytes += GFX_RDP_TMEM_WORD_BYTES, valid += GFX_RDP_TMEM_WORD_BYTES) {
+        uint32_t lo, hi;
+        uint64_t valid64;
+        memcpy(&valid64, valid, sizeof(valid64));
+
+        /* exact "no zero byte" test: every lane of this word is valid */
+        if (((valid64 - UINT64_C(0x0101010101010101)) & ~valid64 &
+                UINT64_C(0x8080808080808080)) == 0u) {
+            memcpy(&lo, bytes, 4);
+            memcpy(&hi, bytes + 4, 4);
+            gfxRdpTmemLiveHashMix(hash, lo, hi);
+            counted += GFX_RDP_TMEM_WORD_BYTES;
+            continue;
+        }
+
+        /*
+         * Invalid bytes hash as an explicit marker, never as their stale
+         * backing value. Conservative invalidation therefore cannot become
+         * an accidental cache hit just because old bytes remain in storage.
+         */
+        uint8_t masked[GFX_RDP_TMEM_WORD_BYTES];
+        uint32_t mask = 0u;
+        for (uint32_t lane = 0; lane < GFX_RDP_TMEM_WORD_BYTES; ++lane) {
+            if (valid[lane] != 0u) {
+                masked[lane] = bytes[lane];
+                mask |= 1u << lane;
+                ++counted;
+            } else {
+                masked[lane] = 0u;
             }
         }
+        memcpy(&lo, masked, 4);
+        memcpy(&hi, masked + 4, 4);
+        gfxRdpTmemLiveHashMix(hash, lo, hi);
+        gfxRdpTmemLiveHashMix(hash, 0x5a5a5a00u | mask, 0xa5a5a5a5u);
     }
 
+    *valid_bytes += counted;
     return true;
 }
 
@@ -295,12 +378,12 @@ extern "C" bool gfxRdpTmemLiveTextureFingerprint(uint8_t tile_index,
     gfxRdpTmemLiveHashByte(&hash, render_siz);
     gfxRdpTmemLiveHashByte(&hash, palette_index);
 
-    *fingerprint = hash;
+    *fingerprint = gfxRdpTmemLiveHashFinish(hash);
     ++s_live.stats.fingerprint_exact;
     return true;
 }
 
-extern "C" bool gfxRdpTmemLiveMaterializeTexture(uint8_t tile_index,
+extern "C" bool gfxRdpTmemLiveIdentifyTexture(uint8_t tile_index,
     uint32_t loaded_line_size_bytes, uint32_t loaded_size_bytes,
     uint8_t render_fmt, uint8_t render_siz, uint8_t palette_index,
     struct GfxRdpTmemLiveTextureView *view)
@@ -326,7 +409,6 @@ extern "C" bool gfxRdpTmemLiveMaterializeTexture(uint8_t tile_index,
 
     const struct GfxRdpTmemRuntimeTile *tile =
         &s_live.runtime.tiles[tile_index];
-    const struct GfxRdpTmem *tmem = &s_live.runtime.tmem;
     const bool split_rgba32 =
         tile->fmt == G_IM_FMT_RGBA && tile->siz == G_IM_SIZ_32b;
     const uint32_t render_line_size_bytes =
@@ -334,6 +416,50 @@ extern "C" bool gfxRdpTmemLiveMaterializeTexture(uint8_t tile_index,
     const uint32_t logical_line_size_bytes =
         loaded_line_size_bytes < render_line_size_bytes
             ? loaded_line_size_bytes : render_line_size_bytes;
+
+    uint16_t palette_first = 0u;
+    uint16_t palette_count = 0u;
+    if (render_fmt == G_IM_FMT_CI) {
+        if (render_siz == G_IM_SIZ_4b && palette_index < 16u) {
+            palette_first = (uint16_t)((uint16_t)palette_index * 16u);
+            palette_count = 16u;
+        } else if (render_siz == G_IM_SIZ_8b) {
+            palette_count = 256u;
+        } else {
+            ++s_live.stats.materialize_fallback;
+            return false;
+        }
+    }
+
+    view->texels = NULL;
+    view->size_bytes = loaded_size_bytes;
+    view->line_size_bytes = logical_line_size_bytes;
+    view->palette = NULL;
+    view->palette_first = palette_first;
+    view->palette_count = palette_count;
+    view->content_identity = content_identity;
+    return true;
+}
+
+extern "C" bool gfxRdpTmemLiveFillTextureView(uint8_t tile_index,
+    struct GfxRdpTmemLiveTextureView *view)
+{
+    gfxRdpTmemLiveEnsureInitialized();
+
+    if (!view || tile_index >= GFX_RDP_TMEM_RUNTIME_TILES ||
+        view->size_bytes == 0u ||
+        view->size_bytes > sizeof(s_live.materialized_texels)) {
+        ++s_live.stats.materialize_fallback;
+        return false;
+    }
+
+    const struct GfxRdpTmemRuntimeTile *tile =
+        &s_live.runtime.tiles[tile_index];
+    const struct GfxRdpTmem *tmem = &s_live.runtime.tmem;
+    const bool split_rgba32 =
+        tile->fmt == G_IM_FMT_RGBA && tile->siz == G_IM_SIZ_32b;
+    const uint32_t logical_line_size_bytes = view->line_size_bytes;
+    const uint32_t loaded_size_bytes = view->size_bytes;
 
     bool exact;
     if (split_rgba32) {
@@ -356,38 +482,37 @@ extern "C" bool gfxRdpTmemLiveMaterializeTexture(uint8_t tile_index,
         return false;
     }
 
-    uint16_t palette_first = 0u;
-    uint16_t palette_count = 0u;
-    if (render_fmt == G_IM_FMT_CI) {
-        uint32_t first_palette_word;
-        if (render_siz == G_IM_SIZ_4b && palette_index < 16u) {
-            palette_first = (uint16_t)((uint16_t)palette_index * 16u);
-            palette_count = 16u;
-            first_palette_word =
-                GFX_RDP_TMEM_HALF_WORDS + palette_first;
-        } else if (render_siz == G_IM_SIZ_8b) {
-            palette_count = 256u;
-            first_palette_word = GFX_RDP_TMEM_HALF_WORDS;
-        } else {
-            ++s_live.stats.materialize_fallback;
-            return false;
-        }
-
+    if (view->palette_count != 0u) {
+        const uint32_t first_palette_word = view->palette_count == 16u
+            ? GFX_RDP_TMEM_HALF_WORDS + view->palette_first
+            : GFX_RDP_TMEM_HALF_WORDS;
         if (!gfxRdpTmemReadTlut(tmem, first_palette_word,
-                s_live.materialized_palette, palette_count)) {
+                s_live.materialized_palette, view->palette_count)) {
             ++s_live.stats.materialize_fallback;
             return false;
         }
     }
 
     view->texels = s_live.materialized_texels;
-    view->size_bytes = loaded_size_bytes;
-    view->line_size_bytes = logical_line_size_bytes;
     view->palette = s_live.materialized_palette;
-    view->palette_first = palette_first;
-    view->palette_count = palette_count;
-    view->content_identity = content_identity;
     ++s_live.stats.materialize_exact;
+    return true;
+}
+
+extern "C" bool gfxRdpTmemLiveMaterializeTexture(uint8_t tile_index,
+    uint32_t loaded_line_size_bytes, uint32_t loaded_size_bytes,
+    uint8_t render_fmt, uint8_t render_siz, uint8_t palette_index,
+    struct GfxRdpTmemLiveTextureView *view)
+{
+    if (!gfxRdpTmemLiveIdentifyTexture(tile_index,
+            loaded_line_size_bytes, loaded_size_bytes,
+            render_fmt, render_siz, palette_index, view)) {
+        return false;
+    }
+    if (!gfxRdpTmemLiveFillTextureView(tile_index, view)) {
+        memset(view, 0, sizeof(*view));
+        return false;
+    }
     return true;
 }
 

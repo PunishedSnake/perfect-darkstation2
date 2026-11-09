@@ -89,6 +89,20 @@ bool gfxRdpTmemLiveMaterializeTexture(uint8_t tile,
     uint8_t render_fmt, uint8_t render_siz, uint8_t palette_index,
     struct GfxRdpTmemLiveTextureView *view);
 
+/*
+ * Split form of gfxRdpTmemLiveMaterializeTexture for cache-first callers.
+ * Identify validates the footprint and fills every view field except texels
+ * and palette (left NULL); Fill then copies the logical texels/TLUT into the
+ * shared storage. Materialize == Identify followed by Fill. A texture cache
+ * hit only needs the identity, so the copy can be skipped entirely.
+ */
+bool gfxRdpTmemLiveIdentifyTexture(uint8_t tile,
+    uint32_t loaded_line_size_bytes, uint32_t loaded_size_bytes,
+    uint8_t render_fmt, uint8_t render_siz, uint8_t palette_index,
+    struct GfxRdpTmemLiveTextureView *view);
+bool gfxRdpTmemLiveFillTextureView(uint8_t tile,
+    struct GfxRdpTmemLiveTextureView *view);
+
 const struct GfxRdpTmem *gfxRdpTmemLiveState(void);
 void gfxRdpTmemLiveGetStats(struct GfxRdpTmemLiveStats *stats);
 
