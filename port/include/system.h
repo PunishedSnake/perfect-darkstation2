@@ -56,4 +56,11 @@ void crashShutdown(void);
 }
 #endif
 
+#ifdef PLATFORM_PS2
+// per-frame phase accumulators reported by the PS2 frame runtime log
+extern u64 g_Ps2PhaseAudioUs;
+extern u64 g_Ps2PhaseGfxUs;
+extern u64 g_Ps2PhaseFlipWaitUs; // EE idle waiting for the previous scanout flip
+#endif
+
 #endif

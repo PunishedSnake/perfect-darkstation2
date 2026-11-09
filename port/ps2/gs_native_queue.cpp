@@ -867,8 +867,13 @@ static bool ps2GsNativeQueueEnsureFlipHandler(void)
 
 extern "C" void ps2GsNativeQueueWaitPendingFlip(void)
 {
+    if (!s_flip_pending) {
+        return;
+    }
+    const uint64_t start = sysGetMicroseconds();
     while (s_flip_pending) {
     }
+    g_Ps2PhaseFlipWaitUs += sysGetMicroseconds() - start;
 }
 
 extern "C" bool ps2GsNativeQueuePresent(GSGLOBAL *gs)

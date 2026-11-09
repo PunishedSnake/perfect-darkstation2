@@ -181,10 +181,15 @@ void videoStartFrame(void)
     }
 }
 
+u64 g_Ps2PhaseGfxUs;
+u64 g_Ps2PhaseFlipWaitUs;
+
 void videoSubmitCommands(Gfx *cmds)
 {
     if (s_init_done && cmds) {
+        const u64 start = sysGetMicroseconds();
         gfx_run(cmds);
+        g_Ps2PhaseGfxUs += sysGetMicroseconds() - start;
     }
 }
 

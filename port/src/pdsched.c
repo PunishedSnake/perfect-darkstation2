@@ -22,6 +22,7 @@
 #include "types.h"
 
 #include "video.h"
+#include "system.h"
 #include "audio.h"
 #include "input.h"
 #include "mixer.h"
@@ -246,6 +247,10 @@ void schedStartFrame(OSSched *sc)
 	videoStartFrame();
 }
 
+#ifdef PLATFORM_PS2
+u64 g_Ps2PhaseAudioUs;
+#endif
+
 void schedAudioFrame(OSSched *sc)
 {
 	s32 i;
@@ -255,10 +260,16 @@ void schedAudioFrame(OSSched *sc)
 #ifdef PLATFORM_PS2
 		frames = audioFrameBudget(frames);
 #endif
+#ifdef PLATFORM_PS2
+		const u64 audio_start = sysGetMicroseconds();
+#endif
 		for (i = 0; i < frames; i++) {
 			amgrFrame();
 			audioEndFrame();
 		}
+#ifdef PLATFORM_PS2
+		g_Ps2PhaseAudioUs += sysGetMicroseconds() - audio_start;
+#endif
 	}
 }
 
