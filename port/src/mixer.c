@@ -551,10 +551,17 @@ void aEnvMixerImpl(uint8_t flags, ENVMIX_STATE state, int16_t rvol) {
     #define XOR 1
     #endif
 
-    for (int i = 0; i < nsamples; ++i) {
-        int16_t gain[4];
+    int16_t *outs[4] = {dry[0], dry[1], wet[0], wet[1]};
+    int16_t gain[4] = {0, 0, 0, 0};
+    int i = 0;
+
+    // Per-sample envelope while either side is still ramping. Once both rates
+    // are zero the envelope is frozen (t is either at its target or above a
+    // target it can never be clamped down to), so the remaining samples share
+    // one set of gains and can be mixed linearly. The switch happens on an
+    // even sample so the XOR-swizzled index set stays identical.
+    for (; i < nsamples; ++i) {
         int16_t vol[2];
-        int16_t *outptr[4];
 
         for (int j = 0; j < 2; ++j) {
             t[j] += rate[j];
@@ -565,19 +572,35 @@ void aEnvMixerImpl(uint8_t flags, ENVMIX_STATE state, int16_t rvol) {
             vol[j] = t[j] >> 16;
         }
 
-        outptr[0] = dry[0] + (i^XOR);
-        outptr[1] = dry[1] + (i^XOR);
-        outptr[2] = wet[0] + (i^XOR);
-        outptr[3] = wet[1] + (i^XOR);
-
         gain[0] = clamp16((vol[0] * voldry + 0x4000) >> 15);
         gain[1] = clamp16((vol[1] * voldry + 0x4000) >> 15);
         gain[2] = clamp16((vol[0] * volwet + 0x4000) >> 15);
         gain[3] = clamp16((vol[1] * volwet + 0x4000) >> 15);
 
-        const int16_t insamp = in[i^XOR];
+        const int idx = i ^ XOR;
+        const int32_t insamp = in[idx];
         for (int j = 0; j < 4; ++j) {
-            *outptr[j] = clamp16(*outptr[j] + ((insamp * gain[j]) >> 15));
+            // a zero gain adds exactly zero to an already clamped sample
+            if (gain[j] != 0) {
+                outs[j][idx] = clamp16(outs[j][idx] + ((insamp * gain[j]) >> 15));
+            }
+        }
+
+        if (rate[0] == 0 && rate[1] == 0 && ((i + 1) & 1) == 0) {
+            ++i;
+            break;
+        }
+    }
+
+    if (i < nsamples) {
+        for (int j = 0; j < 4; ++j) {
+            const int32_t g = gain[j];
+            if (g != 0) {
+                int16_t *out = outs[j];
+                for (int k = i; k < nsamples; ++k) {
+                    out[k] = clamp16(out[k] + ((in[k] * g) >> 15));
+                }
+            }
         }
     }
 
