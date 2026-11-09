@@ -1,6 +1,7 @@
 #define NEWLIB_PORT_AWARE
 
 #include "storage_ps2.h"
+#include "iop_registry_ps2.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -124,6 +125,7 @@ s32 ps2StorageResetIopForCleanBoot(void)
 
     sceSifInitRpc(0);
     SifLoadFileInit();
+    ps2IopRegistryReset();
 
     sysLogPrintf(LOG_NOTE,
         "IOP: clean reboot complete; inherited modules/RPC discarded");
@@ -142,6 +144,7 @@ static int ps2StorageExecEmbeddedModule(
         image, image_size, args_len, args, &module_result);
 
     if (result >= 0) {
+        (void)ps2IopRegistryRecord(name, result);
         sysLogPrintf(LOG_NOTE,
             "STORAGE: executed embedded %s id=%d start_result=%d bytes=%u",
             name, result, module_result, image_size);
@@ -321,6 +324,18 @@ s32 ps2StoragePrepareBootMedium(const char *boot_path)
         case PS2_BOOT_MEDIUM_HDD:
             return ps2StorageEnsureHdd(boot_path);
 
+#if PD_PS2_ALLOW_HOST_BOOT
+        /*
+         * Emulator-only: PCSX2 serves host: from its HLE file layer through
+         * the ROM FILEIO stack that the clean IOP reboot already provides.
+         * Never enabled in hardware builds.
+         */
+        case PS2_BOOT_MEDIUM_HOST:
+            sysLogPrintf(LOG_WARNING,
+                "STORAGE: debug host: boot accepted (PD_PS2_ALLOW_HOST_BOOT)");
+            return 0;
+#endif
+
         /*
          * The full game boots from USB or HDD. Memory-card services are
          * requested only by explicit mc0:/mc1: file access. Reject other
@@ -328,7 +343,9 @@ s32 ps2StoragePrepareBootMedium(const char *boot_path)
          */
         case PS2_BOOT_MEDIUM_MC:
         case PS2_BOOT_MEDIUM_CDVD:
+#if !PD_PS2_ALLOW_HOST_BOOT
         case PS2_BOOT_MEDIUM_HOST:
+#endif
         case PS2_BOOT_MEDIUM_NETWORK:
         case PS2_BOOT_MEDIUM_ROM:
         case PS2_BOOT_MEDIUM_UNKNOWN:

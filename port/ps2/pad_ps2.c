@@ -8,6 +8,7 @@
 #include <sifrpc.h>
 
 #include "log_ps2.h"
+#include "iop_registry_ps2.h"
 #include "pad_axis_ps2.h"
 #include "pad_ps2.h"
 #include "system.h"
@@ -61,12 +62,13 @@ static int ps2PadExecCurrentModule(
     const char *name, unsigned char *image, unsigned int image_size)
 {
     /*
-     * An optional service such as memory-card support may have already loaded
-     * the same project-owned current module. After our clean IOP reboot there
-     * is no launcher-owned module to preserve, so a resident exact-name match
-     * is safe to reuse and avoids a duplicate module-start attempt.
+     * The memory-card service may already have started the same embedded
+     * module since the clean IOP reboot. Ask the project registry, not
+     * SifSearchModuleByName(): the boot-ROM LOADFILE answers 0 ("resident")
+     * for modules that were never loaded, which skipped SIO2MAN/PADMAN and
+     * left padInit() waiting on an RPC server that did not exist.
      */
-    const int existing = SifSearchModuleByName(name);
+    const int existing = ps2IopRegistryFind(name);
     if (existing >= 0) {
         sysLogPrintf(LOG_NOTE,
             "PAD: reuse project-owned current %s id=%d", name, existing);
@@ -78,17 +80,17 @@ static int ps2PadExecCurrentModule(
         image, image_size, 0, NULL, &module_result);
 
     if (result >= 0) {
+        (void)ps2IopRegistryRecord(name, result);
         sysLogPrintf(LOG_NOTE,
             "PAD: executed embedded current %s id=%d start_result=%d bytes=%u",
             name, result, module_result, image_size);
         return result;
     }
 
-    const int resident = SifSearchModuleByName(name);
-    sysLogPrintf(resident >= 0 ? LOG_WARNING : LOG_ERROR,
-        "PAD: embedded current %s load result=%d start_result=%d resident=%d",
-        name, result, module_result, resident);
-    return resident >= 0 ? resident : result;
+    sysLogPrintf(LOG_ERROR,
+        "PAD: embedded current %s load result=%d start_result=%d",
+        name, result, module_result);
+    return result;
 }
 #endif
 
