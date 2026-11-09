@@ -63,6 +63,15 @@ bool ps2GsBuildN64IntensityAlphaMaskClut(
     enum Ps2GsN64IntensityEncoding encoding,
     uint32_t *destination, uint32_t entry_count);
 
+/*
+ * CSM1-ordered CT32 alpha-mask view of an N64 CI palette: RGB is GS MODULATE
+ * unity (0x80) and alpha equals what the colour CLUT yields for the same
+ * index. Sampling the same indexed texels through it gives exact TEXEL0.a
+ * with neutral RGB in one pass.
+ */
+bool ps2GsBuildN64PaletteAlphaMaskClut(const uint16_t *palette, bool ia16,
+    uint32_t *destination, uint32_t entry_count);
+
 /* CSM1-ordered i -> RGBA(i,i,i,i) mapping for GS channel views. */
 bool ps2GsBuildIdentityRgba8Clut(uint32_t *destination,
     uint32_t entry_count);

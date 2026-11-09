@@ -317,9 +317,8 @@ static bool ps2GsCoreEvictTextureForVram(void)
     if (!victim) {
         return false;
     }
-    if (victim->clut_vram_bytes != 0u &&
-        s_loaded_clut_vram == victim->texture.VramClut &&
-        s_loaded_clut_psm == victim->texture.ClutPSM) {
+    if (victim->clut_vram_bytes != 0u) {
+        /* Either the colour or the alpha-mask CLUT may be the loaded one. */
         ps2GsCoreInvalidateClutCache();
     }
     if (!ps2GsCoreEnsureRetireCapacity(ps2GsCoreResidentBlockCount(victim))) {
@@ -2452,8 +2451,16 @@ extern "C" bool ps2GsCoreUploadTextureN64Ci(Ps2GsTextureHandle handle,
     const uint32_t texture_bytes =
         gsKit_texture_size(
             (int)physical_width, (int)physical_height, texture_psm);
-    const uint32_t clut_bytes = gsKit_texture_size(
-        (int)clut_width, (int)clut_height, clut_psm);
+    const uint32_t color_clut_bytes = (gsKit_texture_size(
+        (int)clut_width, (int)clut_height, clut_psm) + 255u) & ~255u;
+    /*
+     * A CT32 alpha-mask CLUT (RGB 0x80, alpha as the colour CLUT) follows the
+     * colour CLUT in the same block, so independent TEXEL0-alpha materials
+     * draw in one exact pass instead of the tiled render-target composite.
+     */
+    const uint32_t mask_clut_bytes = (gsKit_texture_size(
+        (int)clut_width, (int)clut_height, GS_PSM_CT32) + 255u) & ~255u;
+    const uint32_t clut_bytes = color_clut_bytes + mask_clut_bytes;
     /*
      * Two retirement records cover either the old residency on success or
      * the new texture/CLUT pair if the second upload cannot be fenced safely.
@@ -2515,9 +2522,23 @@ extern "C" bool ps2GsCoreUploadTextureN64Ci(Ps2GsTextureHandle handle,
         palette_encoding == PS2_GS_N64_PALETTE_RGBA16
             ? PS2_GS_NATIVE_UPLOAD_N64_RGBA16_CLUT
             : PS2_GS_NATIVE_UPLOAD_N64_IA16_CLUT;
-    const bool clut_submitted = texture_submitted &&
+    bool clut_submitted = texture_submitted &&
         ps2GsNativeQueueUploadTexture(s_gs, &clut,
             clut_encoding);
+
+    GSTEXTURE mask_clut;
+    memset(&mask_clut, 0, sizeof(mask_clut));
+    mask_clut.Width = clut_width;
+    mask_clut.Height = clut_height;
+    mask_clut.PSM = GS_PSM_CT32;
+    mask_clut.Vram = clut_vram + color_clut_bytes;
+    mask_clut.Mem = (u32 *)(uintptr_t)s_shared_clut_staging;
+    clut_submitted = clut_submitted &&
+        ps2GsBuildN64PaletteAlphaMaskClut(palette,
+            palette_encoding == PS2_GS_N64_PALETTE_IA16,
+            s_shared_clut_staging, palette_count) &&
+        ps2GsNativeQueueUploadTexture(s_gs, &mask_clut,
+            PS2_GS_NATIVE_UPLOAD_RGBA32);
 
     if (!clut_submitted) {
         if (texture_submitted) {
@@ -2553,7 +2574,7 @@ extern "C" bool ps2GsCoreUploadTextureN64Ci(Ps2GsTextureHandle handle,
     slot->evicted = false;
     slot->uploaded = true;
     slot->alpha_opaque = alpha_opaque;
-    slot->alpha_mask_clut_vram = 0u;
+    slot->alpha_mask_clut_vram = clut_vram + color_clut_bytes;
     slot->vram_bytes = texture_bytes;
     slot->clut_vram_bytes = clut_bytes;
     ps2RendererTraceRecord(PS2_TRACE_RESOURCE_OP, 4u,
@@ -2714,9 +2735,8 @@ extern "C" void ps2GsCoreReleaseTexture(Ps2GsTextureHandle handle)
 {
     struct Ps2GsTextureSlot *slot = ps2GsCoreTextureSlot(handle);
     if (slot) {
-        if (slot->resident && slot->clut_vram_bytes != 0u &&
-            s_loaded_clut_vram == slot->texture.VramClut &&
-            s_loaded_clut_psm == slot->texture.ClutPSM) {
+        if (slot->resident && slot->clut_vram_bytes != 0u) {
+            /* Either the colour or the alpha-mask CLUT may be loaded. */
             ps2GsCoreInvalidateClutCache();
         }
         if (slot->resident) {
