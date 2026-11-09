@@ -39,5 +39,21 @@ int main(void)
     assert(ps2AudioPlanSubmit(0, 8192, 4, 0) ==
         PS2_AUDIO_DROP_LATENCY_LIMIT);
 
+    /* Full speed: one or zero ticks are never altered. */
+    assert(ps2AudioFrameBudget(0, 0, 368, 4096, 4) == 0);
+    assert(ps2AudioFrameBudget(-3, 0, 368, 4096, 4) == 0);
+    assert(ps2AudioFrameBudget(1, 9000, 368, 4096, 4) == 1);
+    /* Normal 30/20 fps catch-up fits. */
+    assert(ps2AudioFrameBudget(2, 1000, 368, 4096, 4) == 2);
+    assert(ps2AudioFrameBudget(3, 0, 368, 4096, 4) == 3);
+    /* Death-spiral frame is capped by the per-tick maximum. */
+    assert(ps2AudioFrameBudget(39, 0, 368, 4096, 4) == 4);
+    /* ...and by the ring space, rounding the last partial frame up. */
+    assert(ps2AudioFrameBudget(39, 3500, 368, 4096, 4) == 2);
+    assert(ps2AudioFrameBudget(39, 4096, 368, 4096, 4) == 1);
+    assert(ps2AudioFrameBudget(39, 5000, 368, 4096, 4) == 1);
+    /* No per-tick cap: only the ring bounds the work. */
+    assert(ps2AudioFrameBudget(39, 0, 368, 4096, 0) == 12);
+
     return 0;
 }

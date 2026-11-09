@@ -53,3 +53,32 @@ enum Ps2AudioSubmitPlan ps2AudioPlanSubmit(
         ? PS2_AUDIO_SUBMIT_NOW
         : PS2_AUDIO_SUBMIT_AFTER_WAIT;
 }
+
+int32_t ps2AudioFrameBudget(
+    int32_t requested_frames,
+    uint32_t buffered_samples,
+    uint32_t frame_samples,
+    uint32_t queue_limit_samples,
+    int32_t max_frames)
+{
+    if (requested_frames <= 1) {
+        return requested_frames < 0 ? 0 : requested_frames;
+    }
+
+    int32_t budget = requested_frames;
+    if (max_frames > 0 && budget > max_frames) {
+        budget = max_frames;
+    }
+
+    if (frame_samples != 0) {
+        const uint32_t space = buffered_samples >= queue_limit_samples
+            ? 0u
+            : queue_limit_samples - buffered_samples;
+        const uint32_t fit = (space + frame_samples - 1u) / frame_samples;
+        if ((uint32_t)budget > fit) {
+            budget = (int32_t)fit;
+        }
+    }
+
+    return budget < 1 ? 1 : budget;
+}

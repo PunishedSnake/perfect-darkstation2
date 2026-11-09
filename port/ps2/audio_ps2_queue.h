@@ -42,6 +42,25 @@ bool ps2AudioDeriveQueued(
     uint32_t *queued_bytes,
     uint32_t *available_bytes);
 
+/*
+ * The game synthesizes one audio manager frame (~368 samples) for every 60 Hz
+ * tick that elapsed since the previous game frame. When the EE falls behind,
+ * that turns into a death spiral: a 650 ms frame asks for ~39 audio frames,
+ * almost all of which would be dropped by the latency limit anyway, and the
+ * synthesis itself makes the next frame slower still. Bound the work to what
+ * the SPU2 ring can accept and to a fixed number of frames per game tick.
+ * At least one frame is always rendered so steady full-speed behaviour is
+ * unchanged.
+ */
+#define PS2_AUDIO_MAX_FRAMES_PER_TICK 4
+
+int32_t ps2AudioFrameBudget(
+    int32_t requested_frames,
+    uint32_t buffered_samples,
+    uint32_t frame_samples,
+    uint32_t queue_limit_samples,
+    int32_t max_frames);
+
 #ifdef __cplusplus
 }
 #endif
