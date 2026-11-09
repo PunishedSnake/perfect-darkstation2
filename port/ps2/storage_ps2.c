@@ -163,6 +163,47 @@ static int ps2StorageExecEmbeddedModuleNoArgs(
     return ps2StorageExecEmbeddedModule(name, image, image_size, 0, NULL);
 }
 
+/*
+ * Extended I/O manager + FILEXIO RPC, then route newlib file I/O through it.
+ *
+ * After the owned clean reboot the only file RPC server is the boot-ROM
+ * FILEIO, which moves data in small pieces: on retail hardware the 6.3 MiB
+ * "animations" ROM segment took over a minute from USB (~100 KiB/s).
+ * fileXio transfers in large blocks. IOMANX must start before any device
+ * driver (USBHDFSD, PFS) so their devices register with it.
+ */
+static s32 ps2StorageEnsureFileXio(void)
+{
+    if (ps2IopRegistryFind("fileXio") >= 0) {
+        return 0;
+    }
+
+    sbv_patch_enable_lmb();
+
+    int result = ps2StorageExecEmbeddedModuleNoArgs(
+        "iomanX", iomanX_irx, size_iomanX_irx);
+    if (result < 0) {
+        return result;
+    }
+
+    result = ps2StorageExecEmbeddedModuleNoArgs(
+        "fileXio", fileXio_irx, size_fileXio_irx);
+    if (result < 0) {
+        return result;
+    }
+
+    result = fileXioInit();
+    if (result < 0) {
+        sysLogPrintf(LOG_ERROR,
+            "STORAGE: fileXioInit failed result=%d", result);
+        return result;
+    }
+
+    sysLogPrintf(LOG_NOTE,
+        "STORAGE: IOMANX/FILEXIO ready; newlib file I/O uses fileXio");
+    return 0;
+}
+
 s32 ps2StorageEnsureMass(const char *boot_path)
 {
     sceSifInitRpc(0);
@@ -176,9 +217,12 @@ s32 ps2StorageEnsureMass(const char *boot_path)
     }
 
     sysLogPrintf(LOG_NOTE,
-        "STORAGE: boot medium USB; loading only USBD/USBHDFSD boot stack");
+        "STORAGE: boot medium USB; loading IOMANX/FILEXIO + USBD/USBHDFSD");
 
-    sbv_patch_enable_lmb();
+    const s32 filexio = ps2StorageEnsureFileXio();
+    if (filexio < 0) {
+        return filexio;
+    }
 
     const int usbd = ps2StorageExecEmbeddedModuleNoArgs(
         "USB_driver", usbd_irx, size_usbd_irx);
@@ -219,29 +263,13 @@ static s32 ps2StorageEnsureHdd(const char *boot_path)
         partition, relative);
 
     /*
-     * HDD/PFS uses the extended I/O manager and FILEXIO RPC stack. Keep these
-     * modules strictly inside the HDD path so USB boots do not pay the IOP RAM
-     * or startup-time cost.
+     * HDD/PFS needs the extended I/O manager and FILEXIO RPC stack, which
+     * USB boots now share for throughput (ps2StorageEnsureFileXio()).
      */
-    sbv_patch_enable_lmb();
     sbv_patch_disable_prefix_check();
 
-    int result = ps2StorageExecEmbeddedModuleNoArgs(
-        "iomanX", iomanX_irx, size_iomanX_irx);
+    int result = ps2StorageEnsureFileXio();
     if (result < 0) {
-        return result;
-    }
-
-    result = ps2StorageExecEmbeddedModuleNoArgs(
-        "fileXio", fileXio_irx, size_fileXio_irx);
-    if (result < 0) {
-        return result;
-    }
-
-    result = fileXioInit();
-    if (result < 0) {
-        sysLogPrintf(LOG_ERROR,
-            "STORAGE: fileXioInit failed result=%d", result);
         return result;
     }
 
@@ -333,7 +361,8 @@ s32 ps2StoragePrepareBootMedium(const char *boot_path)
         case PS2_BOOT_MEDIUM_HOST:
             sysLogPrintf(LOG_WARNING,
                 "STORAGE: debug host: boot accepted (PD_PS2_ALLOW_HOST_BOOT)");
-            return 0;
+            /* Exercise the same fileXio file path as USB/HDD boots. */
+            return ps2StorageEnsureFileXio();
 #endif
 
         /*

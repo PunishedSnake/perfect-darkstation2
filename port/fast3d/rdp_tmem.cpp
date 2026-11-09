@@ -24,16 +24,48 @@ static bool gfxRdpTmemRangeValid(uint32_t byte_offset, uint32_t size_bytes)
            size_bytes <= GFX_RDP_TMEM_BYTES - byte_offset;
 }
 
+static const uint64_t k_gfx_rdp_tmem_ones = UINT64_C(0x0101010101010101);
+
+static inline uint64_t gfxRdpTmemLoad64(const uint8_t *p)
+{
+    uint64_t v;
+    memcpy(&v, p, sizeof(v));
+    return v;
+}
+
+/* True when none of the eight bytes of v is zero (exact, branch-free). */
+static inline bool gfxRdpTmemAllBytesNonZero(uint64_t v)
+{
+    return ((v - k_gfx_rdp_tmem_ones) & ~v & UINT64_C(0x8080808080808080)) == 0u;
+}
+
 static void gfxRdpTmemRefreshWordValid(struct GfxRdpTmem *tmem, uint32_t word)
 {
     const uint32_t first_byte = word * GFX_RDP_TMEM_WORD_BYTES;
-    uint8_t valid = 1u;
+    tmem->word_valid[word] = gfxRdpTmemAllBytesNonZero(
+        gfxRdpTmemLoad64(&tmem->byte_valid[first_byte])) ? 1u : 0u;
+}
 
-    for (uint32_t i = 0; i < GFX_RDP_TMEM_WORD_BYTES; ++i) {
-        valid &= tmem->byte_valid[first_byte + i] ? 1u : 0u;
+/*
+ * Store one complete 64-bit TMEM word. Equivalent to eight
+ * gfxRdpTmemWriteMappedByte calls (mapped = swap ? i ^ 4 : i) followed by
+ * gfxRdpTmemMarkOneWord, without the per-byte bookkeeping.
+ */
+static inline void gfxRdpTmemStoreFullWord(struct GfxRdpTmem *tmem,
+    uint32_t dst_word, const uint8_t *src, bool swap_halves,
+    uint32_t generation)
+{
+    uint8_t *dst = &tmem->bytes[dst_word * GFX_RDP_TMEM_WORD_BYTES];
+    if (swap_halves) {
+        memcpy(dst, src + 4, 4);
+        memcpy(dst + 4, src, 4);
+    } else {
+        memcpy(dst, src, 8);
     }
-
-    tmem->word_valid[word] = valid;
+    memcpy(&tmem->byte_valid[dst_word * GFX_RDP_TMEM_WORD_BYTES],
+        &k_gfx_rdp_tmem_ones, sizeof(k_gfx_rdp_tmem_ones));
+    tmem->word_valid[dst_word] = 1u;
+    tmem->word_generation[dst_word] = generation;
 }
 
 static void gfxRdpTmemSetByteValidity(struct GfxRdpTmem *tmem,
@@ -234,6 +266,12 @@ extern "C" bool gfxRdpTmemLoadTileLinear(struct GfxRdpTmem *tmem,
             const uint32_t dst_byte = dst_word * GFX_RDP_TMEM_WORD_BYTES;
             const uint8_t *src = src_row + src_offset;
 
+            if (copy_bytes == GFX_RDP_TMEM_WORD_BYTES) {
+                gfxRdpTmemStoreFullWord(tmem, dst_word, src,
+                    (row & 1u) != 0u, generation);
+                continue;
+            }
+
             gfxRdpTmemPreparePartialWord(tmem, dst_word, copy_bytes);
             for (uint32_t i = 0; i < copy_bytes; ++i) {
                 const uint32_t mapped = (row & 1u) ? (i ^ 4u) : i;
@@ -344,6 +382,13 @@ extern "C" bool gfxRdpTmemLoadBlockLinear(struct GfxRdpTmem *tmem,
         const uint32_t dst_word = first_tmem_word + word;
         const uint32_t dst_byte = dst_word * GFX_RDP_TMEM_WORD_BYTES;
         const uint8_t *src = source + src_offset;
+
+        if (copy_bytes == GFX_RDP_TMEM_WORD_BYTES) {
+            gfxRdpTmemStoreFullWord(tmem, dst_word, src,
+                dxt != 0u && (line & 1u), generation);
+            t_accum += dxt;
+            continue;
+        }
 
         gfxRdpTmemPreparePartialWord(tmem, dst_word, copy_bytes);
         for (uint32_t i = 0; i < copy_bytes; ++i) {
@@ -462,6 +507,19 @@ extern "C" bool gfxRdpTmemReadTileLinear(const struct GfxRdpTmem *tmem,
 
             const uint32_t src_byte =
                 (src_row_word + word) * GFX_RDP_TMEM_WORD_BYTES;
+            if (copy_bytes == GFX_RDP_TMEM_WORD_BYTES) {
+                if (!gfxRdpTmemAllBytesNonZero(
+                        gfxRdpTmemLoad64(&tmem->byte_valid[src_byte]))) {
+                    return false;
+                }
+                if (row & 1u) {
+                    memcpy(&dst_row[dst_offset], &tmem->bytes[src_byte + 4u], 4);
+                    memcpy(&dst_row[dst_offset + 4u], &tmem->bytes[src_byte], 4);
+                } else {
+                    memcpy(&dst_row[dst_offset], &tmem->bytes[src_byte], 8);
+                }
+                continue;
+            }
             for (uint32_t i = 0; i < copy_bytes; ++i) {
                 const uint32_t mapped = (row & 1u) ? (i ^ 4u) : i;
                 if (!tmem->byte_valid[src_byte + mapped]) {
@@ -523,6 +581,19 @@ extern "C" bool gfxRdpTmemReadTileLinearBytes(
 
             const uint32_t src_byte =
                 (src_row_word + word) * GFX_RDP_TMEM_WORD_BYTES;
+            if (copy_bytes == GFX_RDP_TMEM_WORD_BYTES) {
+                if (!gfxRdpTmemAllBytesNonZero(
+                        gfxRdpTmemLoad64(&tmem->byte_valid[src_byte]))) {
+                    return false;
+                }
+                if (row & 1u) {
+                    memcpy(&dst[dst_offset], &tmem->bytes[src_byte + 4u], 4);
+                    memcpy(&dst[dst_offset + 4u], &tmem->bytes[src_byte], 4);
+                } else {
+                    memcpy(&dst[dst_offset], &tmem->bytes[src_byte], 8);
+                }
+                continue;
+            }
             for (uint32_t i = 0; i < copy_bytes; ++i) {
                 const uint32_t mapped = (row & 1u) ? (i ^ 4u) : i;
                 if (!tmem->byte_valid[src_byte + mapped]) {

@@ -100,6 +100,10 @@ uint32_t ps2GsNativeQueueUsedQwords(void);
 uint32_t ps2GsNativeQueueCapacityQwords(void);
 bool ps2GsNativeQueueOverflowed(void);
 
+/* Block until the scanout flip queued by the last Present has latched. Any
+ * DMA kick that can write the draw framebuffer must call this first. */
+void ps2GsNativeQueueWaitPendingFlip(void);
+
 #ifdef __cplusplus
 }
 #endif

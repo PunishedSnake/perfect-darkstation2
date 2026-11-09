@@ -747,6 +747,7 @@ static bool ps2GsNativeQueueSubmitInternal(bool *vif_idle_after_submit)
      * and intentionally pays this cost so the host decoder sees the exact
      * ordered PATH3 stream consumed by GIF. */
     ps2RendererTraceRecordPath3Qwords(arena->ucab, arena->used_qw);
+    ps2GsNativeQueueWaitPendingFlip();
     dmaKit_send_ucab(DMA_CHANNEL_GIF, arena->ucab, arena->used_qw);
     s_build_arena ^= 1u;
     return true;
@@ -825,6 +826,51 @@ extern "C" bool ps2GsNativeQueueWaitGs(void)
     return true;
 }
 
+/*
+ * Asynchronous scanout flip. Present used to spin on CSR.VSINT for up to a
+ * whole field after every frame, which on a frame that just misses vblank
+ * wastes ~16 ms of EE time. Instead the new DISPFB2 is latched by a VBLANK
+ * start interrupt and the EE goes straight on to the next game tick. The only
+ * hazard is drawing into the old front buffer before PCRTC has left it, so
+ * every framebuffer-writing DMA kick waits for the pending flip first
+ * (ps2GsNativeQueueWaitPendingFlip); by then the game tick has usually
+ * already covered the remaining part of the field.
+ */
+static volatile uint32_t s_flip_pending;
+static volatile uint64_t s_flip_dispfb2;
+static int s_flip_handler_id = -1;
+
+static int ps2GsNativeQueueVblankHandler(int cause)
+{
+    (void)cause;
+    if (s_flip_pending) {
+        *GS_DISPFB2 = s_flip_dispfb2;
+        s_flip_pending = 0u;
+    }
+    ExitHandler();
+    return 0;
+}
+
+static bool ps2GsNativeQueueEnsureFlipHandler(void)
+{
+    if (s_flip_handler_id >= 0) {
+        return true;
+    }
+    s_flip_handler_id = AddIntcHandler(INTC_VBLANK_S,
+        ps2GsNativeQueueVblankHandler, 0);
+    if (s_flip_handler_id < 0) {
+        return false;
+    }
+    EnableIntc(INTC_VBLANK_S);
+    return true;
+}
+
+extern "C" void ps2GsNativeQueueWaitPendingFlip(void)
+{
+    while (s_flip_pending) {
+    }
+}
+
 extern "C" bool ps2GsNativeQueuePresent(GSGLOBAL *gs)
 {
     if (!s_initialized || !s_present_ucab || !gs ||
@@ -838,19 +884,30 @@ extern "C" bool ps2GsNativeQueuePresent(GSGLOBAL *gs)
         return false;
     }
 
-    /* CSR.VSINT is write-one-to-clear. Wait for the next scanout boundary. */
-    *GS_CSR = *GS_CSR & 8u;
-    while (!(*GS_CSR & 8u)) {
-    }
+    /* At most one flip may be outstanding. */
+    ps2GsNativeQueueWaitPendingFlip();
 
-    if (gs->DoubleBuffering == GS_SETTING_ON) {
-        GS_SET_DISPFB2(
-            gs->ScreenBuffer[gs->ActiveBuffer & 1u] / 8192u,
-            gs->Width / 64u,
-            gs->PSM,
-            0,
-            0);
+    const uint64_t dispfb2 =
+        ((uint64_t)(gs->ScreenBuffer[gs->ActiveBuffer & 1u] / 8192u) << 0) |
+        ((uint64_t)(gs->Width / 64u) << 9) |
+        ((uint64_t)gs->PSM << 15);
+
+    if (gs->DoubleBuffering == GS_SETTING_ON &&
+            ps2GsNativeQueueEnsureFlipHandler()) {
+        s_flip_dispfb2 = dispfb2;
+        asm volatile("sync.l" ::: "memory");
+        s_flip_pending = 1u;
         gs->ActiveBuffer ^= 1u;
+    } else {
+        /* CSR.VSINT is write-one-to-clear. Wait for the next scanout boundary. */
+        *GS_CSR = *GS_CSR & 8u;
+        while (!(*GS_CSR & 8u)) {
+        }
+
+        if (gs->DoubleBuffering == GS_SETTING_ON) {
+            *GS_DISPFB2 = dispfb2;
+            gs->ActiveBuffer ^= 1u;
+        }
     }
 
     uint64_t *p = s_present_ucab;

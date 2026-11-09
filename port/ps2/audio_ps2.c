@@ -16,6 +16,8 @@
 
 #define PS2_AUDIO_FREQUENCY 22050
 #define PS2_AUDIO_QUEUE_LIMIT_SAMPLES 4096u
+
+static u32 s_audio_skipped_ticks;
 #define PS2_AUDIO_RPC_BIND_TIMEOUT_USEC 500000u
 #define PS2_AUDIO_RPC_BIND_RETRY_USEC 1000u
 
@@ -235,6 +237,17 @@ s32 audioGetBytesBuffered(void)
 s32 audioGetSamplesBuffered(void)
 {
     return audioGetBytesBuffered() / (s32)PS2_AUDIO_STEREO_FRAME_BYTES;
+}
+
+s32 audioFrameBudget(s32 requested)
+{
+    const s32 budget = ps2AudioFrameBudget(requested,
+        (uint32_t)audioGetSamplesBuffered(),
+        368u, PS2_AUDIO_QUEUE_LIMIT_SAMPLES, PS2_AUDIO_MAX_FRAMES_PER_TICK);
+    if (budget < requested) {
+        s_audio_skipped_ticks += (u32)(requested - budget);
+    }
+    return budget;
 }
 
 void audioSetNextBuffer(const s16 *buf, u32 len)

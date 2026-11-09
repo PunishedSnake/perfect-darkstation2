@@ -475,12 +475,16 @@ static inline void romdataInitSegment(struct romfile *seg)
 			"ROM segment read begin: %s offset=%08x size=%u pointer=%p",
 			seg->name, seg->romoffset, seg->size, newData);
 		ROMDATA_CHECKPOINT();
+		const u64 readStart = sysGetMicroseconds();
 		if (!romSourceReadAt(&romSource, seg->romoffset, newData, seg->size)) {
 			sysMemFree(newData);
 			newData = NULL;
 		} else {
+			const u64 readUs = sysGetMicroseconds() - readStart;
 			sysLogPrintf(LOG_NOTE,
-				"ROM segment read end: %s pointer=%p", seg->name, newData);
+				"ROM segment read end: %s %u ms %u KiB/s",
+				seg->name, (u32)(readUs / 1000u),
+				readUs ? (u32)((u64)seg->size * 1000000u / 1024u / readUs) : 0u);
 			ROMDATA_CHECKPOINT();
 		}
 

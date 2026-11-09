@@ -402,10 +402,11 @@ else()
 endif()
 
 # Roadmap item 7: compile only the measured renderer/Fast3D hot path at -O2
-# while the rest of the game keeps the Og correctness baseline. Off by
-# default until a retail-hardware A/B on the same scene justifies it.
+# while the rest of the game keeps the Og correctness baseline. On by default:
+# the Og-only build was unplayable on retail hardware (title intro measured
+# at 450-800 ms per frame in PCSX2) and every file here has host tests.
 option(PD_PS2_HOT_PATH_O2
-  "Compile the renderer and Fast3D hot path at -O2 on top of the Og profile" OFF
+  "Compile the renderer, Fast3D, TMEM and audio mixer hot path at -O2 on top of the Og profile" ON
 )
 set(PD_PS2_OPTIMIZATION_LABEL "${PD_PS2_OPTIMIZATION}")
 if(PD_PS2_HOT_PATH_O2 AND PD_PS2_OPTIMIZATION STREQUAL "Og")
@@ -831,6 +832,7 @@ if(PD_PS2_HOT_PATH_O2 AND PD_PS2_OPTIMIZATION STREQUAL "Og")
     "${PD_ROOT}/port/fast3d/rdp_tmem.cpp"
     "${PD_ROOT}/port/fast3d/rdp_tmem_runtime.cpp"
     "${PD_ROOT}/port/fast3d/rdp_tmem_live.cpp"
+    "${PD_ROOT}/port/src/mixer.c"
     PROPERTIES COMPILE_OPTIONS "-O2"
   )
 endif()

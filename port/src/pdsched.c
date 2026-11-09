@@ -251,7 +251,11 @@ void schedAudioFrame(OSSched *sc)
 	s32 i;
 
 	if (!g_SndDisabled) {
-		for (i = 0; i < g_Vars.diffframe60; i++) {
+		s32 frames = g_Vars.diffframe60;
+#ifdef PLATFORM_PS2
+		frames = audioFrameBudget(frames);
+#endif
+		for (i = 0; i < frames; i++) {
 			amgrFrame();
 			audioEndFrame();
 		}
