@@ -279,6 +279,31 @@ extern "C" bool ps2GsBuildN64IntensityAlphaMaskClut(
     return true;
 }
 
+extern "C" bool ps2GsBuildN64PaletteAlphaMaskClut(
+    const uint16_t *palette, bool ia16, uint32_t *destination,
+    uint32_t entry_count)
+{
+    if (!palette || !destination ||
+        (entry_count != 16u && entry_count != 256u)) {
+        return false;
+    }
+
+    for (uint32_t i = 0u; i < entry_count; ++i) {
+        /*
+         * Alpha exactly as the colour CLUT delivers it to the GS:
+         * RGBA16 -> CT16 bit expanded by TEXA (TA0=0x00, TA1=0xff),
+         * IA16 -> CT32 alpha byte (ps2GsConvertN64Ia16PaletteToGsCt32).
+         */
+        const uint8_t alpha = ia16
+            ? (uint8_t)(palette[i] >> 8u)
+            : ((palette[i] & 1u) != 0u ? 0xffu : 0x00u);
+        destination[i] =
+            UINT32_C(0x00808080) | ((uint32_t)alpha << 24u);
+    }
+    ps2GsPermuteCsm1(destination, 4u, entry_count);
+    return true;
+}
+
 extern "C" bool ps2GsBuildIdentityRgba8Clut(
     uint32_t *destination, uint32_t entry_count)
 {

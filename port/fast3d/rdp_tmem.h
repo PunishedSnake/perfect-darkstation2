@@ -26,13 +26,40 @@ extern "C" {
  * cases). Known texel bytes remain usable while unknown padding cannot
  * accidentally become an authoritative cache input.
  */
+/*
+ * Content hash of one recent load that wrote only complete, fully valid
+ * 64-bit words [first_word, first_word + word_count) with one generation.
+ * While every word in that range still carries `generation`, the bytes are
+ * exactly what the load wrote, so consumers can reuse `hash` instead of
+ * re-reading TMEM. word_count == 0 marks an empty record.
+ */
+struct GfxRdpTmemLoadRecord {
+    uint32_t first_word;
+    uint32_t word_count;
+    uint32_t generation;
+    uint64_t hash;
+};
+
+#define GFX_RDP_TMEM_LOAD_RECORDS 8u
+
 struct GfxRdpTmem {
     uint8_t bytes[GFX_RDP_TMEM_BYTES];
     uint8_t byte_valid[GFX_RDP_TMEM_BYTES];
     uint32_t generation;
     uint32_t word_generation[GFX_RDP_TMEM_WORDS];
     uint8_t word_valid[GFX_RDP_TMEM_WORDS];
+    struct GfxRdpTmemLoadRecord load_records[GFX_RDP_TMEM_LOAD_RECORDS];
+    uint32_t load_record_next;
 };
+
+/*
+ * Find a load record whose range contains [first_word, +word_count) and whose
+ * words in that sub-range are all still intact. The sub-range bytes are then
+ * fully determined by (record->hash, offset, word_count). Returns NULL if no
+ * record qualifies.
+ */
+const struct GfxRdpTmemLoadRecord *gfxRdpTmemFindIntactLoad(
+    const struct GfxRdpTmem *tmem, uint32_t first_word, uint32_t word_count);
 
 void gfxRdpTmemReset(struct GfxRdpTmem *tmem);
 

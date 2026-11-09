@@ -550,6 +550,7 @@ void mainLoop(void)
 		const u64 firstframewaitstart = sysGetMicroseconds();
 		bool firstframewaitreported = false;
 		u64 frameTimingReport = 0;
+		u64 frameTimingTick = 0, frameTimingEnd = 0, frameTimingFrames = 0;
 		sysLogPrintf(LOG_NOTE,
 			"runtime: frame gate stage=%d next=%d logic=%d mininc60=%d count=%u start=%u",
 			g_StageNum, g_MainChangeToStageNum, g_MainGameLogicEnabled,
@@ -580,13 +581,33 @@ void mainLoop(void)
 				schedEndFrame(&g_Sched);
 #ifdef PLATFORM_PS2
 				const u64 frameEnd = sysGetMicroseconds();
+				frameTimingTick += tickEnd - frameStart;
+				frameTimingEnd += frameEnd - tickEnd;
+				frameTimingFrames++;
+				if (frameEnd >= 60000000ULL) {
+					ps2EeProfilerStart();
+				}
+				ps2EeProfilerPoll();
 				if (frameEnd - frameTimingReport >= 5000000ULL) {
+					/* Averages over the report window. audio and gfx are
+					 * subsets of tick; logic is the remainder of tick. */
+					const u64 n = frameTimingFrames;
+					const u64 audio = g_Ps2PhaseAudioUs / n;
+					const u64 gfx = g_Ps2PhaseGfxUs / n;
+					const u64 tick = frameTimingTick / n;
+					const u64 logic = tick > audio + gfx ? tick - audio - gfx : 0;
+					const u64 flipwait = g_Ps2PhaseFlipWaitUs / n;
 					sysLogPrintf(LOG_NOTE,
-						"PS2 frame runtime: tick_us=%u end_us=%u total_us=%u",
-						(unsigned int)(tickEnd - frameStart),
-						(unsigned int)(frameEnd - tickEnd),
-						(unsigned int)(frameEnd - frameStart));
+						"PS2 frame runtime: frames=%u avg tick_us=%u (logic=%u audio=%u gfx=%u vsync_wait=%u) end_us=%u total_us=%u",
+						(unsigned int)n, (unsigned int)tick,
+						(unsigned int)logic, (unsigned int)audio, (unsigned int)gfx,
+						(unsigned int)flipwait,
+						(unsigned int)(frameTimingEnd / n),
+						(unsigned int)((frameTimingTick + frameTimingEnd) / n));
 					frameTimingReport = frameEnd;
+					frameTimingTick = frameTimingEnd = 0;
+					frameTimingFrames = 0;
+					g_Ps2PhaseAudioUs = g_Ps2PhaseGfxUs = g_Ps2PhaseFlipWaitUs = 0;
 				}
 				if (g_Ps2TraceFirstFrame) {
 					mainRuntimeCheckpoint("first frame: present complete");

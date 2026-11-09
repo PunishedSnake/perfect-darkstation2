@@ -26,7 +26,7 @@
 #include "renderer_trace.h"
 #include "system.h"
 
-#define PS2_GS_MAX_TEXTURES 64
+#define PS2_GS_MAX_TEXTURES 512
 #define PS2_GS_MAX_RENDER_TARGETS 4
 #define PS2_GS_MAX_RETIRED_BLOCKS (PS2_GS_MAX_TEXTURES * 2)
 #define PS2_GS_NATIVE_QUEUE_QW 16384u
@@ -45,6 +45,8 @@ struct Ps2GsTextureSlot {
     bool used;
     bool resident;
     bool uploaded;
+    bool evicted;          /* VRAM dropped under pressure; frontend must re-import */
+    uint32_t last_use_frame;
     bool alpha_opaque;
     uint32_t alpha_mask_clut_vram;
     uint32_t vram_bytes;
@@ -94,6 +96,8 @@ static struct Ps2GsRetiredVramBlock
 static struct Ps2GsSharedClut s_shared_cluts[PS2_GS_SHARED_CLUT_COUNT];
 static uint32_t s_shared_clut_staging[256] __attribute__((aligned(64)));
 static uint32_t s_retired_vram_count;
+static uint32_t s_texture_use_frame = 1u;
+static uint32_t s_texture_evictions;
 static bool s_frame_building;
 static bool s_depth_update = true;
 static uint8_t s_color_write_channels = PS2_GS_COLOR_WRITE_RGB;
@@ -185,7 +189,13 @@ static struct Ps2GsTextureSlot *ps2GsCoreTextureSlot(Ps2GsTextureHandle handle)
     }
 
     struct Ps2GsTextureSlot *slot = &s_textures[handle - 1];
-    return slot->used ? slot : NULL;
+    if (!slot->used) {
+        return NULL;
+    }
+    /* Any access this frame (bind, draw, upload) pins the slot against
+     * VRAM-pressure eviction until the next frame begins. */
+    slot->last_use_frame = s_texture_use_frame;
+    return slot;
 }
 
 static struct Ps2GsRenderTargetSlot *ps2GsCoreRenderTargetSlot(
@@ -277,6 +287,52 @@ static bool ps2GsCoreDrainAndFence(void)
         return false;
     }
     return ps2GsCoreReclaimRetiredVram();
+}
+
+static void ps2GsCoreRetireTextureBlocks(const struct Ps2GsTextureSlot *slot);
+static uint32_t ps2GsCoreResidentBlockCount(
+    const struct Ps2GsTextureSlot *slot);
+static void ps2GsCoreInvalidateClutCache(void);
+static bool ps2GsCoreEnsureRetireCapacity(uint32_t required);
+
+/*
+ * VRAM pressure fallback: drop the GS residency of the least recently used
+ * texture that has not been touched this frame. The frontend keeps the handle
+ * and re-imports it on its next lookup (gfxPs2TextureResident). Returns true
+ * once a block was released and reclaimed, false if nothing is evictable.
+ */
+static bool ps2GsCoreEvictTextureForVram(void)
+{
+    struct Ps2GsTextureSlot *victim = NULL;
+    for (uint32_t i = 0u; i < PS2_GS_MAX_TEXTURES; ++i) {
+        struct Ps2GsTextureSlot *slot = &s_textures[i];
+        if (!slot->used || !slot->resident ||
+            slot->last_use_frame == s_texture_use_frame) {
+            continue;
+        }
+        if (!victim || slot->last_use_frame < victim->last_use_frame) {
+            victim = slot;
+        }
+    }
+    if (!victim) {
+        return false;
+    }
+    if (victim->clut_vram_bytes != 0u) {
+        /* Either the colour or the alpha-mask CLUT may be the loaded one. */
+        ps2GsCoreInvalidateClutCache();
+    }
+    if (!ps2GsCoreEnsureRetireCapacity(ps2GsCoreResidentBlockCount(victim))) {
+        return false;
+    }
+    ps2GsCoreRetireTextureBlocks(victim);
+    victim->resident = false;
+    victim->uploaded = false;
+    victim->evicted = true;
+    victim->vram_bytes = 0u;
+    victim->clut_vram_bytes = 0u;
+    victim->alpha_mask_clut_vram = 0u;
+    ++s_texture_evictions;
+    return ps2GsCoreDrainAndFence();
 }
 
 static bool ps2GsCoreEnsureRetireCapacity(uint32_t required)
@@ -1356,6 +1412,7 @@ extern "C" void ps2GsCoreBeginFrame(void)
 
     ps2GsNativeQueueBeginFrame();
     s_frame_building = true;
+    ++s_texture_use_frame;
 
     /* Materialize persistent state into the new command arena. */
     ps2GsCoreSetFullScissor();
@@ -1926,6 +1983,17 @@ extern "C" Ps2GsTextureHandle ps2GsCoreCreateTexture(void)
     return PS2_GS_TEXTURE_INVALID;
 }
 
+extern "C" bool ps2GsCoreTextureEvicted(Ps2GsTextureHandle handle)
+{
+    struct Ps2GsTextureSlot *slot = ps2GsCoreTextureSlot(handle);
+    return slot && slot->evicted;
+}
+
+extern "C" uint32_t ps2GsCoreTextureEvictionCount(void)
+{
+    return s_texture_evictions;
+}
+
 extern "C" bool ps2GsCoreTextureExists(Ps2GsTextureHandle handle)
 {
     return ps2GsCoreTextureSlot(handle) != NULL;
@@ -2074,7 +2142,12 @@ static bool ps2GsCoreUploadTexture(Ps2GsTextureHandle handle,
             return false;
         }
 
-        if (!ps2GsVramAllocatorAlloc(&s_vram_allocator, bytes, &new_vram)) {
+        bool allocated;
+        while (!(allocated = ps2GsVramAllocatorAlloc(
+                     &s_vram_allocator, bytes, &new_vram)) &&
+               ps2GsCoreEvictTextureForVram()) {
+        }
+        if (!allocated) {
             if (!slot->resident || slot->clut_vram_bytes != 0u) {
                 ps2GsCoreLogVramAllocationFailure(handle, bytes, width, height);
                 return false;
@@ -2136,6 +2209,7 @@ static bool ps2GsCoreUploadTexture(Ps2GsTextureHandle handle,
     }
     slot->texture = candidate;
     slot->resident = true;
+    slot->evicted = false;
     slot->uploaded = true;
     slot->alpha_opaque = alpha_opaque;
     slot->alpha_mask_clut_vram = 0u;
@@ -2223,9 +2297,14 @@ static bool ps2GsCoreUploadSharedCt32Clut(
     uint32_t clut_vram = 0u;
     if (!ps2GsVramAllocatorAlloc(
             &s_vram_allocator, clut_bytes, &clut_vram)) {
-        if (!ps2GsCoreDrainAndFence() ||
-            !ps2GsVramAllocatorAlloc(
-                &s_vram_allocator, clut_bytes, &clut_vram)) {
+        bool allocated = ps2GsCoreDrainAndFence();
+        while (allocated &&
+               !(allocated = ps2GsVramAllocatorAlloc(
+                     &s_vram_allocator, clut_bytes, &clut_vram)) &&
+               ps2GsCoreEvictTextureForVram()) {
+            allocated = true;
+        }
+        if (!allocated) {
             ps2GsCoreLogVramAllocationFailure(
                 PS2_GS_TEXTURE_INVALID, clut_bytes,
                 clut_width, clut_height);
@@ -2372,8 +2451,16 @@ extern "C" bool ps2GsCoreUploadTextureN64Ci(Ps2GsTextureHandle handle,
     const uint32_t texture_bytes =
         gsKit_texture_size(
             (int)physical_width, (int)physical_height, texture_psm);
-    const uint32_t clut_bytes = gsKit_texture_size(
-        (int)clut_width, (int)clut_height, clut_psm);
+    const uint32_t color_clut_bytes = (gsKit_texture_size(
+        (int)clut_width, (int)clut_height, clut_psm) + 255u) & ~255u;
+    /*
+     * A CT32 alpha-mask CLUT (RGB 0x80, alpha as the colour CLUT) follows the
+     * colour CLUT in the same block, so independent TEXEL0-alpha materials
+     * draw in one exact pass instead of the tiled render-target composite.
+     */
+    const uint32_t mask_clut_bytes = (gsKit_texture_size(
+        (int)clut_width, (int)clut_height, GS_PSM_CT32) + 255u) & ~255u;
+    const uint32_t clut_bytes = color_clut_bytes + mask_clut_bytes;
     /*
      * Two retirement records cover either the old residency on success or
      * the new texture/CLUT pair if the second upload cannot be fenced safely.
@@ -2390,9 +2477,14 @@ extern "C" bool ps2GsCoreUploadTextureN64Ci(Ps2GsTextureHandle handle,
     uint32_t clut_vram = 0u;
     if (!ps2GsCoreAllocIndexedBlocks(texture_bytes, clut_bytes,
             &texture_vram, &clut_vram)) {
-        if (!ps2GsCoreDrainAndFence() ||
-            !ps2GsCoreAllocIndexedBlocks(texture_bytes, clut_bytes,
-                &texture_vram, &clut_vram)) {
+        bool allocated = ps2GsCoreDrainAndFence();
+        while (allocated &&
+               !(allocated = ps2GsCoreAllocIndexedBlocks(texture_bytes,
+                     clut_bytes, &texture_vram, &clut_vram)) &&
+               ps2GsCoreEvictTextureForVram()) {
+            allocated = true;
+        }
+        if (!allocated) {
             ps2GsCoreLogVramAllocationFailure(
                 handle, texture_bytes + clut_bytes, width, height);
             return false;
@@ -2430,9 +2522,23 @@ extern "C" bool ps2GsCoreUploadTextureN64Ci(Ps2GsTextureHandle handle,
         palette_encoding == PS2_GS_N64_PALETTE_RGBA16
             ? PS2_GS_NATIVE_UPLOAD_N64_RGBA16_CLUT
             : PS2_GS_NATIVE_UPLOAD_N64_IA16_CLUT;
-    const bool clut_submitted = texture_submitted &&
+    bool clut_submitted = texture_submitted &&
         ps2GsNativeQueueUploadTexture(s_gs, &clut,
             clut_encoding);
+
+    GSTEXTURE mask_clut;
+    memset(&mask_clut, 0, sizeof(mask_clut));
+    mask_clut.Width = clut_width;
+    mask_clut.Height = clut_height;
+    mask_clut.PSM = GS_PSM_CT32;
+    mask_clut.Vram = clut_vram + color_clut_bytes;
+    mask_clut.Mem = (u32 *)(uintptr_t)s_shared_clut_staging;
+    clut_submitted = clut_submitted &&
+        ps2GsBuildN64PaletteAlphaMaskClut(palette,
+            palette_encoding == PS2_GS_N64_PALETTE_IA16,
+            s_shared_clut_staging, palette_count) &&
+        ps2GsNativeQueueUploadTexture(s_gs, &mask_clut,
+            PS2_GS_NATIVE_UPLOAD_RGBA32);
 
     if (!clut_submitted) {
         if (texture_submitted) {
@@ -2465,9 +2571,10 @@ extern "C" bool ps2GsCoreUploadTextureN64Ci(Ps2GsTextureHandle handle,
     ps2GsCoreInvalidateClutCache();
     slot->texture = candidate;
     slot->resident = true;
+    slot->evicted = false;
     slot->uploaded = true;
     slot->alpha_opaque = alpha_opaque;
-    slot->alpha_mask_clut_vram = 0u;
+    slot->alpha_mask_clut_vram = clut_vram + color_clut_bytes;
     slot->vram_bytes = texture_bytes;
     slot->clut_vram_bytes = clut_bytes;
     ps2RendererTraceRecord(PS2_TRACE_RESOURCE_OP, 4u,
@@ -2538,8 +2645,12 @@ extern "C" bool ps2GsCoreUploadTextureN64Intensity(
                 handle, texture_bytes, width, height);
             return false;
         }
-        if (!ps2GsVramAllocatorAlloc(
-                &s_vram_allocator, texture_bytes, &texture_vram)) {
+        bool allocated;
+        while (!(allocated = ps2GsVramAllocatorAlloc(
+                     &s_vram_allocator, texture_bytes, &texture_vram)) &&
+               ps2GsCoreEvictTextureForVram()) {
+        }
+        if (!allocated) {
             if (!slot->resident || slot->clut_vram_bytes != 0u) {
                 ps2GsCoreLogVramAllocationFailure(
                     handle, texture_bytes, width, height);
@@ -2596,6 +2707,7 @@ extern "C" bool ps2GsCoreUploadTextureN64Intensity(
     }
     slot->texture = candidate;
     slot->resident = true;
+    slot->evicted = false;
     slot->uploaded = true;
     slot->alpha_opaque = alpha_opaque;
     slot->alpha_mask_clut_vram = alpha_mask->vram;
@@ -2623,9 +2735,8 @@ extern "C" void ps2GsCoreReleaseTexture(Ps2GsTextureHandle handle)
 {
     struct Ps2GsTextureSlot *slot = ps2GsCoreTextureSlot(handle);
     if (slot) {
-        if (slot->resident && slot->clut_vram_bytes != 0u &&
-            s_loaded_clut_vram == slot->texture.VramClut &&
-            s_loaded_clut_psm == slot->texture.ClutPSM) {
+        if (slot->resident && slot->clut_vram_bytes != 0u) {
+            /* Either the colour or the alpha-mask CLUT may be loaded. */
             ps2GsCoreInvalidateClutCache();
         }
         if (slot->resident) {

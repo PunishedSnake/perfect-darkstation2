@@ -203,6 +203,9 @@ bool ps2GsCoreBlitRenderTargetRedToActiveAlpha(
  * reclaimable VRAM pool. Allocation, upload and retirement are transactional.
  */
 Ps2GsTextureHandle ps2GsCoreCreateTexture(void);
+/* True after the GS residency was dropped under VRAM pressure. */
+bool ps2GsCoreTextureEvicted(Ps2GsTextureHandle handle);
+uint32_t ps2GsCoreTextureEvictionCount(void);
 bool ps2GsCoreTextureExists(Ps2GsTextureHandle handle);
 bool ps2GsCoreTextureReady(Ps2GsTextureHandle handle);
 /* True only when every logically addressable source texel is fully opaque. */

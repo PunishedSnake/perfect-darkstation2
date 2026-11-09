@@ -46,4 +46,8 @@ void ps2LogCheckpointForce(void);
 }
 #endif
 
+/* Debug EE PC sampler (no-ops unless PD_PS2_EE_PROFILER=ON). */
+void ps2EeProfilerStart(void);
+void ps2EeProfilerPoll(void);
+
 #endif

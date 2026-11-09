@@ -444,6 +444,35 @@ static void test_identity_rgba8_clut(void)
     assert(!ps2GsBuildIdentityRgba8Clut(NULL, 256u));
 }
 
+static void test_n64_palette_alpha_mask_cluts(void)
+{
+    uint16_t pal16[16];
+    uint32_t out[256];
+    for (uint32_t i = 0; i < 16u; ++i) {
+        pal16[i] = (uint16_t)((i * 0x1357u) & 0xfffeu) | (uint16_t)(i & 1u);
+    }
+    /* RGBA16: alpha bit through TEXA TA0=0x00 / TA1=0xff, RGB = unity. */
+    assert(ps2GsBuildN64PaletteAlphaMaskClut(pal16, false, out, 16u));
+    for (uint32_t i = 0; i < 16u; ++i) {
+        assert(out[i] == (0x00808080u | ((i & 1u) ? 0xff000000u : 0u)));
+    }
+    /* IA16: alpha byte exactly as the colour CLUT converter emits it. */
+    uint16_t pal256[256];
+    uint32_t colour[256];
+    for (uint32_t i = 0; i < 256u; ++i) {
+        pal256[i] = (uint16_t)((i * 0x9e37u) ^ (i << 8));
+    }
+    assert(ps2GsBuildN64PaletteAlphaMaskClut(pal256, true, out, 256u));
+    assert(ps2GsConvertN64Ia16PaletteToGsCt32(pal256, colour, 256u));
+    for (uint32_t i = 0; i < 256u; ++i) {
+        /* identical CSM1 permutation, identical alpha, neutral RGB */
+        assert((out[i] & 0xff000000u) == (colour[i] & 0xff000000u));
+        assert((out[i] & 0x00ffffffu) == 0x00808080u);
+    }
+    assert(!ps2GsBuildN64PaletteAlphaMaskClut(pal16, false, out, 8u));
+    assert(!ps2GsBuildN64PaletteAlphaMaskClut(NULL, false, out, 16u));
+}
+
 int main(void)
 {
     test_primary_colors_and_alpha();
@@ -462,6 +491,7 @@ int main(void)
     test_n64_intensity_cluts();
     test_n64_intensity_alpha_mask_cluts();
     test_identity_rgba8_clut();
+    test_n64_palette_alpha_mask_cluts();
     puts("gs_texture_convert tests passed");
     return 0;
 }

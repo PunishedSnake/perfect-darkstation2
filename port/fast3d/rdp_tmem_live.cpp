@@ -1,4 +1,5 @@
 #include "rdp_tmem_live.h"
+#include "rdp_tmem_hash.h"
 
 #include <stddef.h>
 #include <string.h>
@@ -52,42 +53,10 @@ static void gfxRdpTmemLiveRecordLoad(enum GfxRdpTmemLoadResult result,
     }
 }
 
-/*
- * Content identity hash. Two 32-bit Murmur3-style lanes packed into one
- * uint64_t state: the R5900 has no 64-bit multiplier, so the previous
- * byte-wise 64-bit FNV-1a cost two libgcc __muldi3 calls per TMEM byte and
- * dominated texture lookups. This consumes a whole 64-bit TMEM word per step
- * with native 32-bit multiplies. Only equality of identities matters; the
- * values are never persisted.
- */
-static inline uint32_t gfxRdpTmemLiveRotl32(uint32_t x, unsigned r)
-{
-    return (x << r) | (x >> (32u - r));
-}
-
 static inline void gfxRdpTmemLiveHashMix(uint64_t *hash,
     uint32_t a, uint32_t b)
 {
-    uint32_t h1 = (uint32_t)(*hash >> 32);
-    uint32_t h2 = (uint32_t)*hash;
-
-    a *= 0xcc9e2d51u;
-    a = gfxRdpTmemLiveRotl32(a, 15);
-    a *= 0x1b873593u;
-    h1 ^= a;
-    h1 = gfxRdpTmemLiveRotl32(h1, 13);
-    h1 = h1 * 5u + 0xe6546b64u;
-
-    b *= 0x85ebca6bu;
-    b = gfxRdpTmemLiveRotl32(b, 16);
-    b *= 0xc2b2ae35u;
-    h2 ^= b;
-    h2 = gfxRdpTmemLiveRotl32(h2, 17);
-    h2 = h2 * 5u + 0x52dce729u;
-
-    h1 += h2;
-    h2 += h1;
-    *hash = ((uint64_t)h1 << 32) | h2;
+    gfxRdpTmemHashMix(hash, a, b);
 }
 
 static void gfxRdpTmemLiveHashByte(uint64_t *hash, uint8_t value)
@@ -171,6 +140,55 @@ static bool gfxRdpTmemLiveHashWords(const struct GfxRdpTmem *tmem,
     }
 
     *valid_bytes += counted;
+    return true;
+}
+
+/*
+ * Hash [first_word, +word_count) exactly as gfxRdpTmemLoadBlockLinear /
+ * gfxRdpTmemWriteTlut hash the words they store, so an intact load record and
+ * a fresh read of the same fully valid words give the same value. Uses the
+ * record when one is still intact. Fails if any byte in the range is invalid.
+ */
+static bool gfxRdpTmemLiveHashValidRange(const struct GfxRdpTmem *tmem,
+    uint32_t first_word, uint32_t word_count, uint64_t *range_hash)
+{
+    const struct GfxRdpTmemLoadRecord *record =
+        gfxRdpTmemFindIntactLoad(tmem, first_word, word_count);
+    if (record) {
+        if (record->first_word == first_word &&
+            record->word_count == word_count) {
+            /* Identical to a fresh read of the same words (see below). */
+            *range_hash = record->hash;
+        } else {
+            /* Sub-range of a larger load: still exact, own domain. */
+            uint64_t h = UINT64_C(0xa54ff53a5f1d36f1);
+            gfxRdpTmemHashMix64(&h, record->hash);
+            gfxRdpTmemHashMix(&h, first_word - record->first_word,
+                word_count);
+            gfxRdpTmemHashMix(&h, record->first_word, record->word_count);
+            *range_hash = h;
+        }
+        ++s_live.stats.fingerprint_load_reuse;
+        return true;
+    }
+    if (word_count == 0u || first_word > GFX_RDP_TMEM_WORDS ||
+        word_count > GFX_RDP_TMEM_WORDS - first_word) {
+        return false;
+    }
+    uint64_t h = GFX_RDP_TMEM_HASH_SEED;
+    const uint8_t *bytes = &tmem->bytes[first_word * GFX_RDP_TMEM_WORD_BYTES];
+    const uint8_t *valid = &tmem->byte_valid[first_word * GFX_RDP_TMEM_WORD_BYTES];
+    for (uint32_t w = 0; w < word_count; ++w) {
+        uint64_t v, b;
+        memcpy(&v, valid + w * 8u, 8);
+        if (((v - UINT64_C(0x0101010101010101)) & ~v &
+                UINT64_C(0x8080808080808080)) != 0u) {
+            return false;
+        }
+        memcpy(&b, bytes + w * 8u, 8);
+        gfxRdpTmemHashMix64(&h, b);
+    }
+    *range_hash = h;
     return true;
 }
 
@@ -328,10 +346,33 @@ extern "C" bool gfxRdpTmemLiveTextureFingerprint(uint8_t tile_index,
         rows_from_load > rows_from_render ? rows_from_load : rows_from_render;
 
     uint64_t hash = UINT64_C(1469598103934665603);
+    bool hashed = false;
+
+    /*
+     * Fast path for the common fully valid, non-split case: the rendered rows
+     * are one contiguous word range. Its identity is the word-sequence hash
+     * that the loader already computed (intact load record), or the same
+     * hash recomputed from TMEM. Partially valid ranges keep the masked
+     * per-row hash below (domain-separated).
+     */
+    if (!split_rgba32) {
+        const uint64_t total64 = (uint64_t)row_count * tile->line_words;
+        uint64_t range_hash;
+        if (total64 <= GFX_RDP_TMEM_WORDS &&
+            total64 * GFX_RDP_TMEM_WORD_BYTES >= loaded_size_bytes &&
+            gfxRdpTmemLiveHashValidRange(tmem, tile->tmem_word,
+                (uint32_t)total64, &range_hash)) {
+            hash = UINT64_C(0x3c6ef372a54ff53a);
+            gfxRdpTmemHashMix64(&hash, range_hash);
+            gfxRdpTmemHashMix(&hash, (uint32_t)total64, tile->line_words);
+            hashed = true;
+        }
+    }
+
     uint32_t valid_texture_bytes = 0u;
-    if (!gfxRdpTmemLiveHashTextureRows(tile, tmem,
+    if (!hashed && (!gfxRdpTmemLiveHashTextureRows(tile, tmem,
             row_count, split_rgba32, &hash, &valid_texture_bytes) ||
-        valid_texture_bytes < loaded_size_bytes) {
+        valid_texture_bytes < loaded_size_bytes)) {
         ++s_live.stats.fingerprint_fallback;
         return false;
     }
@@ -356,12 +397,19 @@ extern "C" bool gfxRdpTmemLiveTextureFingerprint(uint8_t tile_index,
             return false;
         }
 
-        uint32_t valid_palette_bytes = 0u;
-        if (!gfxRdpTmemLiveHashWords(tmem, first_palette_word,
-                palette_words, &hash, &valid_palette_bytes) ||
-            valid_palette_bytes < palette_words * GFX_RDP_TMEM_WORD_BYTES) {
-            ++s_live.stats.fingerprint_fallback;
-            return false;
+        uint64_t palette_hash;
+        if (gfxRdpTmemLiveHashValidRange(tmem, first_palette_word,
+                palette_words, &palette_hash)) {
+            gfxRdpTmemHashMix(&hash, 0x7a1e7a1eu, palette_words);
+            gfxRdpTmemHashMix64(&hash, palette_hash);
+        } else {
+            uint32_t valid_palette_bytes = 0u;
+            if (!gfxRdpTmemLiveHashWords(tmem, first_palette_word,
+                    palette_words, &hash, &valid_palette_bytes) ||
+                valid_palette_bytes < palette_words * GFX_RDP_TMEM_WORD_BYTES) {
+                ++s_live.stats.fingerprint_fallback;
+                return false;
+            }
         }
     }
 

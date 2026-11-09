@@ -95,13 +95,62 @@ struct LoadedVertex {
 };
 
 #if defined(PLATFORM_PS2)
+enum { PS2_TEXTURE_CACHE_BUCKETS = 1024 };
+static_assert((PS2_TEXTURE_CACHE_BUCKETS & (PS2_TEXTURE_CACHE_BUCKETS - 1)) == 0,
+    "bucket count must be a power of two");
+static_assert(TEXTURE_CACHE_MAX_SIZE < 65535, "node links are 16-bit");
+
 static struct {
     TextureCacheNode nodes[TEXTURE_CACHE_MAX_SIZE];
     uint32_t free_texture_ids[TEXTURE_CACHE_MAX_SIZE];
+    uint16_t buckets[PS2_TEXTURE_CACHE_BUCKETS]; // 1-based node index, 0 = empty
     size_t free_texture_id_count;
     size_t size;
     uint64_t lru_clock;
 } gfx_texture_cache;
+
+// Must agree with TextureCacheKey::operator==: hash exactly the compared fields.
+static inline uint32_t ps2_texture_cache_bucket(const TextureCacheKey& key) {
+    uint64_t h;
+    if (key.content_identity_valid) {
+        h = key.content_identity;
+    } else {
+        h = (uint64_t)(uintptr_t)key.texture_addr * UINT64_C(0x9E3779B97F4A7C15) ^
+            (uint64_t)(uintptr_t)key.palette_addrs[0] * UINT64_C(0xC2B2AE3D27D4EB4F) ^
+            (uint64_t)(uintptr_t)key.palette_addrs[1] * UINT64_C(0x165667B19E3779F9);
+    }
+    uint32_t x = (uint32_t)h ^ (uint32_t)(h >> 32) ^
+        ((uint32_t)key.fmt << 3) ^ ((uint32_t)key.siz << 7) ^
+        ((uint32_t)key.palette_index << 11) ^ (key.content_identity_valid ? 0x5bd1e995u : 0u);
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    return x & (PS2_TEXTURE_CACHE_BUCKETS - 1);
+}
+
+static void ps2_texture_cache_link(TextureCacheNode* node) {
+    const uint32_t bucket = ps2_texture_cache_bucket(node->first);
+    node->hash_next = gfx_texture_cache.buckets[bucket];
+    gfx_texture_cache.buckets[bucket] = (uint16_t)(node - gfx_texture_cache.nodes + 1);
+}
+
+static void ps2_texture_cache_unlink(TextureCacheNode* node) {
+    const uint16_t self = (uint16_t)(node - gfx_texture_cache.nodes + 1);
+    uint16_t* link = &gfx_texture_cache.buckets[ps2_texture_cache_bucket(node->first)];
+    while (*link != 0) {
+        if (*link == self) {
+            *link = node->hash_next;
+            node->hash_next = 0;
+            return;
+        }
+        link = &gfx_texture_cache.nodes[*link - 1].hash_next;
+    }
+    assert(!"texture cache node missing from its bucket");
+}
+
+// GS residency can be dropped under VRAM pressure while the frontend still
+// owns the handle; such a node must be re-imported instead of bound.
+extern "C" bool gfxPs2TextureResident(uint32_t texture_id);
 #else
 static struct {
     TextureCacheMap map;
@@ -137,6 +186,20 @@ static uint64_t color_combiner_lru_clock;
 static std::map<ColorCombinerKey, struct ColorCombiner> color_combiner_pool;
 static std::map<ColorCombinerKey, struct ColorCombiner>::iterator prev_combiner = color_combiner_pool.end();
 #endif
+
+/*
+ * u8 -> [0,1] float as `x / 255.0f`, precomputed. Filled at gfx_init with a
+ * run-time division (volatile divisor) so every entry is bit-identical to
+ * the inline division the VBO packer used before, on any FPU.
+ */
+static float gfx_u8_unit[256];
+
+static void gfx_init_u8_unit_table(void) {
+    volatile float divisor = 255.0f;
+    for (int i = 0; i < 256; ++i) {
+        gfx_u8_unit[i] = (float)i / divisor;
+    }
+}
 
 static uint8_t* tex_upload_buffer = nullptr;
 #if defined(PLATFORM_PS2)
@@ -633,8 +696,10 @@ void gfx_texture_cache_clear() {
             gfx_texture_cache.free_texture_ids[gfx_texture_cache.free_texture_id_count++] =
                 node->second.texture_id;
             node->occupied = false;
+            node->hash_next = 0;
         }
     }
+    memset(gfx_texture_cache.buckets, 0, sizeof(gfx_texture_cache.buckets));
     gfx_texture_cache.size = 0;
 #else
     for (const auto& entry : gfx_texture_cache.map) {
@@ -650,25 +715,39 @@ void gfx_texture_cache_clear() {
 static bool gfx_texture_cache_lookup(int i, const TextureCacheKey& key) {
 #if defined(PLATFORM_PS2)
     TextureCacheNode** selected = &rendering_state.textures[i];
+
+    for (uint16_t link = gfx_texture_cache.buckets[ps2_texture_cache_bucket(key)];
+         link != 0; link = gfx_texture_cache.nodes[link - 1].hash_next) {
+        TextureCacheNode* node = &gfx_texture_cache.nodes[link - 1];
+        if (node->first == key) {
+            node->lru_stamp = ++gfx_texture_cache.lru_clock;
+            if (!gfxPs2TextureResident(node->second.texture_id)) {
+                // Evicted from GS VRAM: keep node and handle, re-import.
+                node->second = TextureCacheValue{ node->second.texture_id };
+                gfx_rapi->select_texture(i, node->second.texture_id, false);
+                gfx_rapi->set_sampler_parameters(i, false, 0, 0, rdp.tex_lod);
+                *selected = node;
+                return false;
+            }
+            gfx_rapi->select_texture(i, node->second.texture_id, node->second.linear_filter);
+            *selected = node;
+            return true;
+        }
+    }
+
+    // Miss: only now pay for a full scan to find a free or LRU node.
     TextureCacheNode* free_node = nullptr;
     TextureCacheNode* oldest_node = nullptr;
-
     for (size_t index = 0; index < TEXTURE_CACHE_MAX_SIZE; ++index) {
         TextureCacheNode* node = &gfx_texture_cache.nodes[index];
 
         if (node->occupied) {
-            if (node->first == key) {
-                node->lru_stamp = ++gfx_texture_cache.lru_clock;
-                gfx_rapi->select_texture(i, node->second.texture_id, node->second.linear_filter);
-                *selected = node;
-                return true;
-            }
-
             if (oldest_node == nullptr || node->lru_stamp < oldest_node->lru_stamp) {
                 oldest_node = node;
             }
         } else if (free_node == nullptr) {
             free_node = node;
+            break;
         }
     }
 
@@ -679,6 +758,7 @@ static bool gfx_texture_cache_lookup(int i, const TextureCacheKey& key) {
         node = oldest_node;
         assert(node != nullptr);
         texture_id = node->second.texture_id;
+        ps2_texture_cache_unlink(node);
 
         for (int slot = 0; slot < SHADER_MAX_TEXTURES; ++slot) {
             if (rendering_state.textures[slot] == node) {
@@ -701,6 +781,7 @@ static bool gfx_texture_cache_lookup(int i, const TextureCacheKey& key) {
     node->second.texture_id = texture_id;
     node->lru_stamp = ++gfx_texture_cache.lru_clock;
     node->occupied = true;
+    ps2_texture_cache_link(node);
 
     gfx_rapi->select_texture(i, texture_id, false);
     gfx_rapi->set_sampler_parameters(i, false, 0, 0, rdp.tex_lod);
@@ -765,6 +846,7 @@ void gfx_texture_cache_delete(const uint8_t* orig_addr) {
             assert(gfx_texture_cache.free_texture_id_count < TEXTURE_CACHE_MAX_SIZE);
             gfx_texture_cache.free_texture_ids[gfx_texture_cache.free_texture_id_count++] =
                 node->second.texture_id;
+            ps2_texture_cache_unlink(node);
             node->occupied = false;
             --gfx_texture_cache.size;
         }
@@ -811,6 +893,7 @@ void gfx_texture_cache_delete_range(const uint8_t* start, const uint8_t* end) {
             assert(gfx_texture_cache.free_texture_id_count < TEXTURE_CACHE_MAX_SIZE);
             gfx_texture_cache.free_texture_ids[gfx_texture_cache.free_texture_id_count++] =
                 node->second.texture_id;
+            ps2_texture_cache_unlink(node);
             node->occupied = false;
             --gfx_texture_cache.size;
         }
@@ -1795,17 +1878,17 @@ static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx, bo
         }
 
         if (use_fog) {
-            buf_vbo[buf_vbo_len++] = rdp.fog_color.r / 255.0f;
-            buf_vbo[buf_vbo_len++] = rdp.fog_color.g / 255.0f;
-            buf_vbo[buf_vbo_len++] = rdp.fog_color.b / 255.0f;
-            buf_vbo[buf_vbo_len++] = v_arr[i]->fog / 255.0f; // fog factor
+            buf_vbo[buf_vbo_len++] = gfx_u8_unit[rdp.fog_color.r];
+            buf_vbo[buf_vbo_len++] = gfx_u8_unit[rdp.fog_color.g];
+            buf_vbo[buf_vbo_len++] = gfx_u8_unit[rdp.fog_color.b];
+            buf_vbo[buf_vbo_len++] = gfx_u8_unit[v_arr[i]->fog]; // fog factor
         }
 
         if (use_grayscale) {
-            buf_vbo[buf_vbo_len++] = rdp.grayscale_color.r / 255.0f;
-            buf_vbo[buf_vbo_len++] = rdp.grayscale_color.g / 255.0f;
-            buf_vbo[buf_vbo_len++] = rdp.grayscale_color.b / 255.0f;
-            buf_vbo[buf_vbo_len++] = rdp.grayscale_color.a / 255.0f; // lerp interpolation factor (not alpha)
+            buf_vbo[buf_vbo_len++] = gfx_u8_unit[rdp.grayscale_color.r];
+            buf_vbo[buf_vbo_len++] = gfx_u8_unit[rdp.grayscale_color.g];
+            buf_vbo[buf_vbo_len++] = gfx_u8_unit[rdp.grayscale_color.b];
+            buf_vbo[buf_vbo_len++] = gfx_u8_unit[rdp.grayscale_color.a]; // lerp interpolation factor (not alpha)
         }
 
         for (int j = 0; j < num_inputs; j++) {
@@ -1865,11 +1948,11 @@ static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx, bo
                         break;
                 }
                 if (k == 0) {
-                    buf_vbo[buf_vbo_len++] = color->r / 255.0f;
-                    buf_vbo[buf_vbo_len++] = color->g / 255.0f;
-                    buf_vbo[buf_vbo_len++] = color->b / 255.0f;
+                    buf_vbo[buf_vbo_len++] = gfx_u8_unit[color->r];
+                    buf_vbo[buf_vbo_len++] = gfx_u8_unit[color->g];
+                    buf_vbo[buf_vbo_len++] = gfx_u8_unit[color->b];
                 } else {
-                    buf_vbo[buf_vbo_len++] = color->a / 255.0f;
+                    buf_vbo[buf_vbo_len++] = gfx_u8_unit[color->a];
                 }
             }
         }
@@ -2844,6 +2927,7 @@ extern "C" void gfx_get_dimensions(uint32_t* width, uint32_t* height, int32_t* p
 
 extern "C" void gfx_init(const GfxInitSettings *settings) {
     gfx_wapi = settings->wapi;
+    gfx_init_u8_unit_table();
     gfx_rapi = settings->rapi;
     gfx_wapi->init(&settings->window_settings);
     gfx_rapi->init();
