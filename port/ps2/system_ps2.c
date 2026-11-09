@@ -18,6 +18,87 @@
 #include "path_ps2.h"
 #include "timer_convert_ps2.h"
 
+#if PD_PS2_SIO_LOG
+/*
+ * Debug-only mirror of every log line to the EE SIO TX FIFO. PCSX2 prints
+ * these bytes as EE console output, and they survive IOP resets and missing
+ * file services because no IOP is involved. Off in normal builds.
+ */
+static void sysSioWrite(const char *text, u32 length)
+{
+    volatile u8 *const tx_fifo = (volatile u8 *)0xb000f180;
+    for (u32 i = 0; i < length; ++i) {
+        *tx_fifo = (u8)text[i];
+    }
+}
+#else
+static inline void sysSioWrite(const char *text, u32 length)
+{
+    (void)text;
+    (void)length;
+}
+#endif
+
+#if PD_PS2_SCREEN_LOG
+#include <debug.h>
+
+/*
+ * Bring-up aid: show the startup log on the TV through PS2SDK's debug text
+ * screen, which talks to the GS directly and needs no IOP service. It runs
+ * from sysInit() until videoInit() hands the GS to gsKit, so a hang or fatal
+ * error during IOP reset, storage or ROM startup stays readable on screen.
+ */
+#define PS2_SCREEN_LOG_ROWS 26
+#define PS2_SCREEN_LOG_COLS 78
+
+static bool s_screen_log_active;
+static u32 s_screen_log_row;
+
+static void sysScreenLogHeader(void)
+{
+    scr_clear();
+    scr_setXY(0, 0);
+    scr_printf("Perfect DarkStation 2 startup log  %s\n", PD_PS2_GIT_COMMIT);
+    s_screen_log_row = 1;
+}
+
+static void sysScreenLogStart(void)
+{
+    init_scr();
+    s_screen_log_active = true;
+    sysScreenLogHeader();
+}
+
+static void sysScreenLogWrite(const char *msg)
+{
+    if (!s_screen_log_active) {
+        return;
+    }
+    if (s_screen_log_row >= PS2_SCREEN_LOG_ROWS) {
+        sysScreenLogHeader();
+    }
+    char row[PS2_SCREEN_LOG_COLS + 1];
+    u32 length = 0;
+    while (msg[length] && msg[length] != '\n' &&
+           length < PS2_SCREEN_LOG_COLS) {
+        row[length] = msg[length];
+        ++length;
+    }
+    row[length] = '\0';
+    scr_printf("%s\n", row);
+    ++s_screen_log_row;
+}
+
+void ps2ScreenLogStop(void)
+{
+    s_screen_log_active = false;
+}
+#else
+static inline void sysScreenLogStart(void) {}
+static inline void sysScreenLogWrite(const char *msg) { (void)msg; }
+void ps2ScreenLogStop(void) {}
+#endif
+
 #define LOG_FNAME "pdps2.log"
 #define LOG_STAGE_BUFFER_SIZE 8192u
 #define LOG_FLUSH_THRESHOLD 6144u
@@ -306,6 +387,7 @@ void sysInitArgs(s32 argc, const char **argv)
 void sysInit(void)
 {
     startUsec = timerUsec();
+    sysScreenLogStart();
 
     /*
      * Retail hardware proves that synchronous stdio against mass: can stop
@@ -410,6 +492,8 @@ void sysLogPrintf(s32 level, const char *fmt, ...)
         : 0;
 
     FILE *out = safeLevel == LOG_NOTE ? stdout : stderr;
+    sysSioWrite(line, safeLength);
+    sysScreenLogWrite(msg);
     if (safeLength) {
         fwrite(line, 1, safeLength, out);
         sysLogStageLine(line, safeLength);

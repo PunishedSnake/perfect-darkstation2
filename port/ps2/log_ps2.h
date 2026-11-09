@@ -24,6 +24,8 @@ void ps2LogOpenAfterStorage(void);
 
 /* Flush and close the current file sink without affecting console logging. */
 void ps2LogCloseFileSink(void);
+/* Ends the PD_PS2_SCREEN_LOG debug text screen before gsKit owns the GS. */
+void ps2ScreenLogStop(void);
 
 /*
  * Durable bring-up checkpoint.

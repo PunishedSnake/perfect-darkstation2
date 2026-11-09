@@ -257,6 +257,13 @@ jobs:
             -o /tmp/pad_axis_ps2_test
           /tmp/pad_axis_ps2_test
 
+          gcc -std=c11 -Wall -Wextra -Werror \
+            -Iport/ps2 \
+            port/ps2/iop_registry_ps2.c \
+            port/ps2/iop_registry_ps2_test.c \
+            -o /tmp/iop_registry_ps2_test
+          /tmp/iop_registry_ps2_test
+
           gcc -std=c11 -O2 -Wall -Wextra -Werror \
             -Iport/ps2 \
             port/ps2/timer_convert_ps2_test.c \

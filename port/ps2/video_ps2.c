@@ -5,6 +5,7 @@
 #include <PR/ultratypes.h>
 #include <PR/gbi.h>
 
+#include "log_ps2.h"
 #include "config.h"
 #include "system.h"
 #include "video.h"
@@ -88,6 +89,7 @@ s32 videoInit(void)
 {
     /* VI starts blank and explicitly unblacks after the first scheduled task. */
     s_blackout = true;
+    ps2ScreenLogStop();
 
     if (!ps2GsCoreIsReady()) {
         const struct Ps2GsCreateInfo gs_info = {

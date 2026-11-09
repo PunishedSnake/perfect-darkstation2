@@ -7,6 +7,7 @@
 #include <sbv_patches.h>
 #include <sifrpc.h>
 
+#include "iop_registry_ps2.h"
 #include "log_ps2.h"
 #include "system.h"
 
@@ -25,7 +26,8 @@ static int ps2MemoryCardEnsureModule(
     unsigned char *image,
     unsigned int image_size)
 {
-    const int existing = SifSearchModuleByName(search_name);
+    /* Registry, not SifSearchModuleByName(): see iop_registry_ps2.h. */
+    const int existing = ps2IopRegistryFind(search_name);
     if (existing >= 0) {
         sysLogPrintf(LOG_NOTE,
             "MC: reuse project-owned %s id=%d", display_name, existing);
@@ -36,18 +38,11 @@ static int ps2MemoryCardEnsureModule(
     const int result = SifExecModuleBuffer(
         image, image_size, 0, NULL, &module_result);
     if (result >= 0) {
+        (void)ps2IopRegistryRecord(search_name, result);
         sysLogPrintf(LOG_NOTE,
             "MC: executed embedded %s id=%d start_result=%d bytes=%u",
             display_name, result, module_result, image_size);
         return result;
-    }
-
-    const int resident = SifSearchModuleByName(search_name);
-    if (resident >= 0) {
-        sysLogPrintf(LOG_WARNING,
-            "MC: %s load returned %d but project-owned module id=%d is resident",
-            display_name, result, resident);
-        return resident;
     }
 
     sysLogPrintf(LOG_ERROR,

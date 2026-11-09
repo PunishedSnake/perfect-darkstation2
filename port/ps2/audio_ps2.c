@@ -10,6 +10,7 @@
 
 #include "audio.h"
 #include "audio_ps2_queue.h"
+#include "iop_registry_ps2.h"
 #include "log_ps2.h"
 #include "system.h"
 
@@ -28,53 +29,41 @@ static u32 s_audio_capacity_bytes;
 static u32 s_drop_count;
 static u32 s_submit_error_count;
 
+/*
+ * Module presence comes from the project registry, not SifSearchModuleByName():
+ * after the owned clean IOP reboot the boot-ROM LOADFILE cannot answer that
+ * query (see iop_registry_ps2.h).
+ */
 static int ps2AudioEnsureRomModule(const char *name, const char *path)
 {
-    int result = SifSearchModuleByName(name);
-    if (result > 0) {
+    int result = ps2IopRegistryFind(name);
+    if (result >= 0) {
         sysLogPrintf(LOG_NOTE,
-            "AUDIO: reuse resident IOP module %s id=%d", name, result);
+            "AUDIO: reuse project-loaded IOP module %s id=%d", name, result);
         return result;
-    }
-
-    if (result == 0) {
-        sysLogPrintf(LOG_WARNING,
-            "AUDIO: LOADFILE returned ambiguous module id=0 for %s; trying %s",
-            name, path);
     }
 
     result = SifLoadModule(path, 0, NULL);
     if (result >= 0) {
+        (void)ps2IopRegistryRecord(name, result);
         sysLogPrintf(LOG_NOTE,
             "AUDIO: loaded IOP module %s from %s id=%d",
             name, path, result);
         return result;
     }
 
-    /* A loader may report a duplicate module as an error. */
-    const int resident = SifSearchModuleByName(name);
-    if (resident > 0) {
-        sysLogPrintf(LOG_WARNING,
-            "AUDIO: %s load returned %d but resident module id=%d is usable",
-            path, result, resident);
-        return resident;
-    }
-
+    sysLogPrintf(LOG_ERROR,
+        "AUDIO: failed to load IOP module %s from %s (%d)", name, path, result);
     return result;
 }
 
 static int ps2AudioEnsureServer(void)
 {
-    int result = SifSearchModuleByName("audsrv");
-    if (result > 0) {
+    int result = ps2IopRegistryFind("audsrv");
+    if (result >= 0) {
         sysLogPrintf(LOG_NOTE,
-            "AUDIO: reuse resident IOP module audsrv id=%d", result);
+            "AUDIO: reuse project-loaded IOP module audsrv id=%d", result);
         return result;
-    }
-
-    if (result == 0) {
-        sysLogPrintf(LOG_WARNING,
-            "AUDIO: LOADFILE returned ambiguous module id=0 for audsrv; executing embedded IRX");
     }
 
     /* Permit LOADFILE to execute the project-owned in-memory IRX image. */
@@ -84,20 +73,16 @@ static int ps2AudioEnsureServer(void)
     result = SifExecModuleBuffer(
         audsrv_irx, size_audsrv_irx, 0, NULL, &module_result);
     if (result >= 0) {
+        (void)ps2IopRegistryRecord("audsrv", result);
         sysLogPrintf(LOG_NOTE,
             "AUDIO: executed embedded audsrv.irx id=%d start_result=%d bytes=%u",
             result, module_result, size_audsrv_irx);
         return result;
     }
 
-    const int resident = SifSearchModuleByName("audsrv");
-    if (resident > 0) {
-        sysLogPrintf(LOG_WARNING,
-            "AUDIO: embedded audsrv load returned %d but resident module id=%d is usable",
-            result, resident);
-        return resident;
-    }
-
+    sysLogPrintf(LOG_ERROR,
+        "AUDIO: embedded audsrv load failed result=%d start_result=%d",
+        result, module_result);
     return result;
 }
 
