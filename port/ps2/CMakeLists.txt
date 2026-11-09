@@ -413,6 +413,15 @@ if(PD_PS2_HOT_PATH_O2 AND PD_PS2_OPTIMIZATION STREQUAL "Og")
   set(PD_PS2_OPTIMIZATION_LABEL "Og+hotO2")
 endif()
 
+option(PD_PS2_EE_PROFILER
+  "Debug: timer-interrupt EE PC sampler written to host:pd_ee_pcs.bin" OFF
+)
+if(PD_PS2_EE_PROFILER)
+  set(PD_PS2_EE_PROFILER_VALUE 1)
+else()
+  set(PD_PS2_EE_PROFILER_VALUE 0)
+endif()
+
 option(PD_PS2_SIO_LOG
   "Mirror every log line to the EE SIO FIFO (PCSX2 EE console); debug only" OFF
 )
@@ -472,6 +481,7 @@ set(PD_PS2_GAME_DEFINITIONS
   PD_PS2_OPTIMIZATION_PROFILE="${PD_PS2_OPTIMIZATION_LABEL}"
   PD_PS2_FILE_LOG_DEFAULT=${PD_PS2_FILE_LOG_DEFAULT_VALUE}
   PD_PS2_SIO_LOG=${PD_PS2_SIO_LOG_VALUE}
+  PD_PS2_EE_PROFILER=${PD_PS2_EE_PROFILER_VALUE}
   PD_PS2_SCREEN_LOG=${PD_PS2_SCREEN_LOG_VALUE}
   PD_PS2_ALLOW_HOST_BOOT=${PD_PS2_ALLOW_HOST_BOOT_VALUE}
 )
@@ -755,6 +765,7 @@ set(PD_PS2_GAME_RUNTIME_SOURCES
   "${PD_ROOT}/port/src/utils.c"
   ${PD_PS2_PREPROCESS_SOURCES}
   system_ps2.c
+  ee_profiler_ps2.c
   storage_ps2.c
   iop_registry_ps2.c
   memory_card_ps2.c

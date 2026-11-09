@@ -584,6 +584,10 @@ void mainLoop(void)
 				frameTimingTick += tickEnd - frameStart;
 				frameTimingEnd += frameEnd - tickEnd;
 				frameTimingFrames++;
+				if (frameEnd >= 60000000ULL) {
+					ps2EeProfilerStart();
+				}
+				ps2EeProfilerPoll();
 				if (frameEnd - frameTimingReport >= 5000000ULL) {
 					/* Averages over the report window. audio and gfx are
 					 * subsets of tick; logic is the remainder of tick. */
