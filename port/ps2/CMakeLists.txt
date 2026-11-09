@@ -412,6 +412,24 @@ if(PD_PS2_HOT_PATH_O2 AND PD_PS2_OPTIMIZATION STREQUAL "Og")
   set(PD_PS2_OPTIMIZATION_LABEL "Og+hotO2")
 endif()
 
+option(PD_PS2_SIO_LOG
+  "Mirror every log line to the EE SIO FIFO (PCSX2 EE console); debug only" OFF
+)
+if(PD_PS2_SIO_LOG)
+  set(PD_PS2_SIO_LOG_VALUE 1)
+else()
+  set(PD_PS2_SIO_LOG_VALUE 0)
+endif()
+
+option(PD_PS2_SCREEN_LOG
+  "Show the startup log on screen (PS2SDK debug text) until video init" OFF
+)
+if(PD_PS2_SCREEN_LOG)
+  set(PD_PS2_SCREEN_LOG_VALUE 1)
+else()
+  set(PD_PS2_SCREEN_LOG_VALUE 0)
+endif()
+
 option(PD_PS2_FILE_LOG_DEFAULT
   "Enable the blocking mass:/host: file logger by default in the full game" OFF
 )
@@ -443,6 +461,8 @@ set(PD_PS2_GAME_DEFINITIONS
   VERSION_ROMID="${PD_PS2_ROMID}"
   PD_PS2_OPTIMIZATION_PROFILE="${PD_PS2_OPTIMIZATION_LABEL}"
   PD_PS2_FILE_LOG_DEFAULT=${PD_PS2_FILE_LOG_DEFAULT_VALUE}
+  PD_PS2_SIO_LOG=${PD_PS2_SIO_LOG_VALUE}
+  PD_PS2_SCREEN_LOG=${PD_PS2_SCREEN_LOG_VALUE}
 )
 
 # The game compile depends on generated enum headers even before any binary
