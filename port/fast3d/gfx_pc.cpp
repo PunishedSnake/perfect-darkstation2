@@ -187,6 +187,20 @@ static std::map<ColorCombinerKey, struct ColorCombiner> color_combiner_pool;
 static std::map<ColorCombinerKey, struct ColorCombiner>::iterator prev_combiner = color_combiner_pool.end();
 #endif
 
+/*
+ * u8 -> [0,1] float as `x / 255.0f`, precomputed. Filled at gfx_init with a
+ * run-time division (volatile divisor) so every entry is bit-identical to
+ * the inline division the VBO packer used before, on any FPU.
+ */
+static float gfx_u8_unit[256];
+
+static void gfx_init_u8_unit_table(void) {
+    volatile float divisor = 255.0f;
+    for (int i = 0; i < 256; ++i) {
+        gfx_u8_unit[i] = (float)i / divisor;
+    }
+}
+
 static uint8_t* tex_upload_buffer = nullptr;
 #if defined(PLATFORM_PS2)
 static size_t tex_upload_buffer_size;
@@ -1864,17 +1878,17 @@ static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx, bo
         }
 
         if (use_fog) {
-            buf_vbo[buf_vbo_len++] = rdp.fog_color.r / 255.0f;
-            buf_vbo[buf_vbo_len++] = rdp.fog_color.g / 255.0f;
-            buf_vbo[buf_vbo_len++] = rdp.fog_color.b / 255.0f;
-            buf_vbo[buf_vbo_len++] = v_arr[i]->fog / 255.0f; // fog factor
+            buf_vbo[buf_vbo_len++] = gfx_u8_unit[rdp.fog_color.r];
+            buf_vbo[buf_vbo_len++] = gfx_u8_unit[rdp.fog_color.g];
+            buf_vbo[buf_vbo_len++] = gfx_u8_unit[rdp.fog_color.b];
+            buf_vbo[buf_vbo_len++] = gfx_u8_unit[v_arr[i]->fog]; // fog factor
         }
 
         if (use_grayscale) {
-            buf_vbo[buf_vbo_len++] = rdp.grayscale_color.r / 255.0f;
-            buf_vbo[buf_vbo_len++] = rdp.grayscale_color.g / 255.0f;
-            buf_vbo[buf_vbo_len++] = rdp.grayscale_color.b / 255.0f;
-            buf_vbo[buf_vbo_len++] = rdp.grayscale_color.a / 255.0f; // lerp interpolation factor (not alpha)
+            buf_vbo[buf_vbo_len++] = gfx_u8_unit[rdp.grayscale_color.r];
+            buf_vbo[buf_vbo_len++] = gfx_u8_unit[rdp.grayscale_color.g];
+            buf_vbo[buf_vbo_len++] = gfx_u8_unit[rdp.grayscale_color.b];
+            buf_vbo[buf_vbo_len++] = gfx_u8_unit[rdp.grayscale_color.a]; // lerp interpolation factor (not alpha)
         }
 
         for (int j = 0; j < num_inputs; j++) {
@@ -1934,11 +1948,11 @@ static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx, bo
                         break;
                 }
                 if (k == 0) {
-                    buf_vbo[buf_vbo_len++] = color->r / 255.0f;
-                    buf_vbo[buf_vbo_len++] = color->g / 255.0f;
-                    buf_vbo[buf_vbo_len++] = color->b / 255.0f;
+                    buf_vbo[buf_vbo_len++] = gfx_u8_unit[color->r];
+                    buf_vbo[buf_vbo_len++] = gfx_u8_unit[color->g];
+                    buf_vbo[buf_vbo_len++] = gfx_u8_unit[color->b];
                 } else {
-                    buf_vbo[buf_vbo_len++] = color->a / 255.0f;
+                    buf_vbo[buf_vbo_len++] = gfx_u8_unit[color->a];
                 }
             }
         }
@@ -2912,6 +2926,7 @@ extern "C" void gfx_get_dimensions(uint32_t* width, uint32_t* height, int32_t* p
 }
 
 extern "C" void gfx_init(const GfxInitSettings *settings) {
+    gfx_init_u8_unit_table();
     gfx_wapi = settings->wapi;
     gfx_rapi = settings->rapi;
     gfx_wapi->init(&settings->window_settings);
