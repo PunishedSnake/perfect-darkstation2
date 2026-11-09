@@ -3,17 +3,20 @@
 #include "rdp_tmem_trace.h"
 
 /*
- * Transitional PS2 shadow seam.
- *
  * gfx_pc.cpp is compiled on PS2 with gfx_run renamed to gfx_run_ps2_impl.
- * This wrapper observes the exact same display list first, updates the shared
- * backend-independent TMEM model, then hands control to the unchanged Fast3D
- * renderer. The shadow cannot affect pixels yet by design.
+ *
+ * This seam used to replay every display list through a second, standalone
+ * TMEM model (gfxRdpTmemTraceDisplayList) before rendering. The live TMEM
+ * model inside the frontend has since become authoritative, nothing on PS2
+ * reads the replayed state, and the replay duplicated every LoadBlock/TLUT
+ * copy each frame. It is now opt-in for diagnostics only.
  */
 extern "C" void gfx_run_ps2_impl(Gfx *commands);
 
 extern "C" void gfx_run(Gfx *commands)
 {
+#if defined(PD_PS2_TMEM_SHADOW_REPLAY)
     gfxRdpTmemTraceDisplayList(commands);
+#endif
     gfx_run_ps2_impl(commands);
 }

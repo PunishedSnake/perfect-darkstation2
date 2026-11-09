@@ -1,4 +1,5 @@
 #include "rdp_tmem.h"
+#include "rdp_tmem_hash.h"
 
 #include <string.h>
 
@@ -12,6 +13,7 @@ static uint32_t gfxRdpTmemNextGeneration(struct GfxRdpTmem *tmem)
         for (uint32_t i = 0; i < GFX_RDP_TMEM_WORDS; ++i) {
             tmem->word_generation[i] = 0u;
         }
+        memset(tmem->load_records, 0, sizeof(tmem->load_records));
     }
 
     tmem->generation = next;
@@ -44,6 +46,45 @@ static void gfxRdpTmemRefreshWordValid(struct GfxRdpTmem *tmem, uint32_t word)
     const uint32_t first_byte = word * GFX_RDP_TMEM_WORD_BYTES;
     tmem->word_valid[word] = gfxRdpTmemAllBytesNonZero(
         gfxRdpTmemLoad64(&tmem->byte_valid[first_byte])) ? 1u : 0u;
+}
+
+static void gfxRdpTmemRecordLoad(struct GfxRdpTmem *tmem,
+    uint32_t first_word, uint32_t word_count, uint32_t generation,
+    uint64_t hash)
+{
+    struct GfxRdpTmemLoadRecord *record =
+        &tmem->load_records[tmem->load_record_next % GFX_RDP_TMEM_LOAD_RECORDS];
+    tmem->load_record_next =
+        (tmem->load_record_next + 1u) % GFX_RDP_TMEM_LOAD_RECORDS;
+    record->first_word = first_word;
+    record->word_count = word_count;
+    record->generation = generation;
+    record->hash = hash;
+}
+
+extern "C" const struct GfxRdpTmemLoadRecord *gfxRdpTmemFindIntactLoad(
+    const struct GfxRdpTmem *tmem, uint32_t first_word, uint32_t word_count)
+{
+    if (!tmem || word_count == 0u || first_word > GFX_RDP_TMEM_WORDS ||
+        word_count > GFX_RDP_TMEM_WORDS - first_word) {
+        return NULL;
+    }
+    for (uint32_t i = 0; i < GFX_RDP_TMEM_LOAD_RECORDS; ++i) {
+        const struct GfxRdpTmemLoadRecord *record = &tmem->load_records[i];
+        if (record->generation == 0u || first_word < record->first_word ||
+            first_word + word_count > record->first_word + record->word_count) {
+            continue;
+        }
+        const uint32_t *gen = &tmem->word_generation[first_word];
+        uint32_t w = 0;
+        while (w < word_count && gen[w] == record->generation) {
+            ++w;
+        }
+        if (w == word_count) {
+            return record;
+        }
+    }
+    return NULL;
 }
 
 /*
@@ -211,6 +252,7 @@ extern "C" bool gfxRdpTmemWriteTlut(struct GfxRdpTmem *tmem,
     }
 
     const uint32_t generation = gfxRdpTmemNextGeneration(tmem);
+    uint64_t load_hash = GFX_RDP_TMEM_HASH_SEED;
     for (uint32_t i = 0; i < entry_count; ++i) {
         const uint16_t value = entries[i];
         const uint8_t hi = (uint8_t)(value >> 8);
@@ -223,8 +265,11 @@ extern "C" bool gfxRdpTmemWriteTlut(struct GfxRdpTmem *tmem,
             gfxRdpTmemWriteMappedByte(tmem, dst_byte + copy * 2u + 1u, lo);
         }
         gfxRdpTmemMarkOneWord(tmem, first_tmem_word + i, generation);
+        gfxRdpTmemHashMix64(&load_hash, gfxRdpTmemLoad64(&tmem->bytes[dst_byte]));
     }
 
+    gfxRdpTmemRecordLoad(tmem, first_tmem_word, entry_count,
+        generation, load_hash);
     return true;
 }
 
@@ -368,8 +413,42 @@ extern "C" bool gfxRdpTmemLoadBlockLinear(struct GfxRdpTmem *tmem,
         return false;
     }
 
+    /*
+     * Re-loading identical bytes into fully valid words is a no-op for the
+     * TMEM contents. Detect it with a read-only compare and leave generations
+     * (and therefore any intact load record and downstream identity reuse)
+     * untouched. The compare stops at the first difference.
+     */
+    if ((size_bytes % GFX_RDP_TMEM_WORD_BYTES) == 0u) {
+        uint32_t t_check = 0u;
+        uint32_t word = 0u;
+        for (; word < word_count; ++word, t_check += dxt) {
+            const uint32_t dst_byte =
+                (first_tmem_word + word) * GFX_RDP_TMEM_WORD_BYTES;
+            const uint8_t *src = source + word * GFX_RDP_TMEM_WORD_BYTES;
+            uint64_t want;
+            if (dxt != 0u && ((t_check >> 11) & 1u)) {
+                uint32_t lo, hi;
+                memcpy(&lo, src + 4, 4);
+                memcpy(&hi, src, 4);
+                want = (uint64_t)lo | ((uint64_t)hi << 32);
+            } else {
+                want = gfxRdpTmemLoad64(src);
+            }
+            if (gfxRdpTmemLoad64(&tmem->bytes[dst_byte]) != want ||
+                gfxRdpTmemLoad64(&tmem->byte_valid[dst_byte]) !=
+                    k_gfx_rdp_tmem_ones) {
+                break;
+            }
+        }
+        if (word == word_count) {
+            return true;
+        }
+    }
+
     const uint32_t generation = gfxRdpTmemNextGeneration(tmem);
     uint32_t t_accum = 0u;
+    uint64_t load_hash = GFX_RDP_TMEM_HASH_SEED;
 
     for (uint32_t word = 0; word < word_count; ++word) {
         const uint32_t src_offset = word * GFX_RDP_TMEM_WORD_BYTES;
@@ -386,6 +465,8 @@ extern "C" bool gfxRdpTmemLoadBlockLinear(struct GfxRdpTmem *tmem,
         if (copy_bytes == GFX_RDP_TMEM_WORD_BYTES) {
             gfxRdpTmemStoreFullWord(tmem, dst_word, src,
                 dxt != 0u && (line & 1u), generation);
+            gfxRdpTmemHashMix64(&load_hash,
+                gfxRdpTmemLoad64(&tmem->bytes[dst_byte]));
             t_accum += dxt;
             continue;
         }
@@ -399,6 +480,10 @@ extern "C" bool gfxRdpTmemLoadBlockLinear(struct GfxRdpTmem *tmem,
         t_accum += dxt;
     }
 
+    if ((size_bytes % GFX_RDP_TMEM_WORD_BYTES) == 0u) {
+        gfxRdpTmemRecordLoad(tmem, first_tmem_word, word_count,
+            generation, load_hash);
+    }
     return true;
 }
 

@@ -100,6 +100,52 @@ static void test_unrelated_tmem_load_does_not_change_fingerprint(void)
     assert(before == after);
 }
 
+static void test_fingerprint_independent_of_load_record_eviction(void)
+{
+    uint8_t source[32];
+    uint8_t unrelated[16];
+    for (uint32_t i = 0; i < sizeof(source); ++i) {
+        source[i] = (uint8_t)(0x13u * i + 7u);
+    }
+    for (uint32_t i = 0; i < sizeof(unrelated); ++i) {
+        unrelated[i] = (uint8_t)(0xc0u + i);
+    }
+
+    gfxRdpTmemLiveReset();
+    gfxRdpTmemLiveSetTextureImage(FMT_RGBA, SIZ_16B, 15u, source);
+    gfxRdpTmemLiveSetTile(FMT_RGBA, SIZ_16B, 2u, 0u, 0u);
+    gfxRdpTmemLiveLoadBlock(0u, 0u, 0u, 15u, 0x400u);
+
+    uint64_t via_record = 0u;
+    assert(gfxRdpTmemLiveTextureFingerprint(
+        0u, sizeof(source), sizeof(source),
+        FMT_RGBA, SIZ_16B, 0u, &via_record));
+
+    /* Push the texture's load record out of the ring with unrelated loads. */
+    gfxRdpTmemLiveSetTextureImage(FMT_RGBA, SIZ_16B, 7u, unrelated);
+    gfxRdpTmemLiveSetTile(FMT_RGBA, SIZ_16B, 1u, 64u, 1u);
+    for (uint32_t i = 0; i < 2u * GFX_RDP_TMEM_LOAD_RECORDS; ++i) {
+        gfxRdpTmemLiveLoadBlock(1u, 0u, 0u, 7u, 0u);
+    }
+
+    uint64_t via_read = 0u;
+    assert(gfxRdpTmemLiveTextureFingerprint(
+        0u, sizeof(source), sizeof(source),
+        FMT_RGBA, SIZ_16B, 0u, &via_read));
+    assert(via_record == via_read);
+
+    /* And a rewrite with different bytes must still change the identity. */
+    source[3] ^= 1u;
+    gfxRdpTmemLiveSetTextureImage(FMT_RGBA, SIZ_16B, 15u, source);
+    gfxRdpTmemLiveSetTile(FMT_RGBA, SIZ_16B, 2u, 0u, 0u);
+    gfxRdpTmemLiveLoadBlock(0u, 0u, 0u, 15u, 0x400u);
+    uint64_t changed = 0u;
+    assert(gfxRdpTmemLiveTextureFingerprint(
+        0u, sizeof(source), sizeof(source),
+        FMT_RGBA, SIZ_16B, 0u, &changed));
+    assert(changed != via_record);
+}
+
 static void test_ci_fingerprint_tracks_tlut(void)
 {
     uint8_t palette[32];
@@ -247,6 +293,7 @@ int main(void)
     test_changed_texel_changes_fingerprint();
     test_unrelated_tmem_load_does_not_change_fingerprint();
     test_ci_fingerprint_tracks_tlut();
+    test_fingerprint_independent_of_load_record_eviction();
     test_conservative_shadow_forces_pointer_fallback();
     test_materialized_linear_view_owns_loaded_bytes();
     test_materialized_rgba32_split_view();

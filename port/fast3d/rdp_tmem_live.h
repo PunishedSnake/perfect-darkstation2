@@ -23,6 +23,7 @@ struct GfxRdpTmemLiveStats {
     uint32_t fingerprint_fallback;
     uint32_t materialize_exact;
     uint32_t materialize_fallback;
+    uint32_t fingerprint_load_reuse;
 };
 
 struct GfxRdpTmemLiveTextureView {
