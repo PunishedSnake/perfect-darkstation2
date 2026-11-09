@@ -160,6 +160,7 @@ static bool ps2GsVu1QueueSendChainAndWait(uint32_t *ucab)
     if (!ucab || !ps2GsVu1QueueWaitVifIdle()) {
         return false;
     }
+    ps2GsNativeQueueWaitPendingFlip();
     dmaKit_send_chain_ucab(DMA_CHANNEL_VIF1, ucab);
     s_pending = true;
     if (!ps2GsVu1QueueWaitVifIdle()) {
@@ -411,6 +412,7 @@ extern "C" bool ps2GsVu1QueueSubmitAd(
     }
     ps2RendererTraceRecordPath1Qwords(slot->ucab, layout.dma_chain_qw,
         layout.register_count, record_count / 2u, false);
+    ps2GsNativeQueueWaitPendingFlip();
     dmaKit_send_chain_ucab(DMA_CHANNEL_VIF1, slot->ucab);
     s_pending = true;
     s_build_slot ^= 1u;
@@ -488,6 +490,7 @@ extern "C" bool ps2GsVu1QueueSubmitTexturedTransform(
         trace_layout.dma_chain_qw,
         prefix_count + suffix_count + vertex_count * 3u,
         vertex_count, true);
+    ps2GsNativeQueueWaitPendingFlip();
     dmaKit_send_chain_ucab(DMA_CHANNEL_VIF1, slot->ucab);
     s_pending = true;
     s_build_slot ^= 1u;

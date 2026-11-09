@@ -127,6 +127,33 @@ static_assert(sizeof(Ps2GsTexturedVertex) == sizeof(GSPRIMSTQPOINT),
 
 static uint64_t ps2GsCoreTracePair(uint32_t low, uint32_t high);
 
+/*
+ * Copy packet-ready A+D records into the (uncached-accelerated) command arena.
+ * newlib's generic memcpy was ~7% of EE time here; records are 16-byte A+D
+ * pairs, so move them with native 128-bit lq/sq when both sides are quadword
+ * aligned and 64-bit ld/sd otherwise.
+ */
+static inline void ps2GsCoreCopyPackedRegs(struct Ps2GsPackedReg *dst,
+    const void *src, uint32_t count)
+{
+#if defined(_EE) || defined(__R5900__) || defined(PLATFORM_PS2)
+    if ((((uintptr_t)dst | (uintptr_t)src) & 15u) == 0u) {
+        typedef unsigned int ps2_qword __attribute__((mode(TI)));
+        ps2_qword *d = (ps2_qword *)(void *)dst;
+        const ps2_qword *q = (const ps2_qword *)src;
+        for (uint32_t i = 0; i < count; ++i) {
+            d[i] = q[i];
+        }
+        return;
+    }
+#endif
+    uint64_t *d = (uint64_t *)(void *)dst;
+    const uint64_t *q = (const uint64_t *)src;
+    for (uint32_t i = 0; i < count * 2u; ++i) {
+        d[i] = q[i];
+    }
+}
+
 static uint64_t ps2GsCoreTraceHash(const void *data, uint32_t size)
 {
     const uint8_t *bytes = (const uint8_t *)data;
@@ -2731,7 +2758,8 @@ extern "C" void ps2GsCoreDrawColorTriangles(const struct Ps2GsColorVertex *verti
         ps2GsStateShadowCommit(
             &s_state_shadow, PS2_GS_STATE_PRIM, prim);
     }
-    memcpy(&p[out], vertices, (size_t)vertex_count * sizeof(*vertices));
+    ps2GsCoreCopyPackedRegs(&p[out], vertices,
+        vertex_count * (uint32_t)(sizeof(*vertices) / sizeof(*p)));
     ps2RendererStatsRecordPath3(
         false, vertex_count, register_count);
     ps2GsCoreTraceDraw(false, false, 0u,
@@ -2968,7 +2996,8 @@ static bool ps2GsCoreDrawTexturedTrianglesInternal(GSTEXTURE *tex,
             &s_state_shadow, PS2_GS_STATE_PRIM, prim);
     }
 
-    memcpy(&p[out], vertices, (size_t)vertex_count * sizeof(*vertices));
+    ps2GsCoreCopyPackedRegs(&p[out], vertices,
+        vertex_count * (uint32_t)(sizeof(*vertices) / sizeof(*p)));
     out += vertex_count * 3u;
     if (target_view) {
         ps2GsCoreWriteReg(&p[out++],
