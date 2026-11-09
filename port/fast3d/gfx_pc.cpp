@@ -2926,8 +2926,8 @@ extern "C" void gfx_get_dimensions(uint32_t* width, uint32_t* height, int32_t* p
 }
 
 extern "C" void gfx_init(const GfxInitSettings *settings) {
-    gfx_init_u8_unit_table();
     gfx_wapi = settings->wapi;
+    gfx_init_u8_unit_table();
     gfx_rapi = settings->rapi;
     gfx_wapi->init(&settings->window_settings);
     gfx_rapi->init();
