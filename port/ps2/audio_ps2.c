@@ -10,6 +10,10 @@
 
 #include "audio.h"
 #include "audio_ps2_queue.h"
+
+#ifdef PD_MIXER_MMI_SELFTEST
+void mixerMmiSelfTest(void);
+#endif
 #include "iop_registry_ps2.h"
 #include "log_ps2.h"
 #include "system.h"
@@ -216,6 +220,9 @@ s32 audioInit(void)
             (u32)initial_available + (u32)initial_queued;
     }
 
+#ifdef PD_MIXER_MMI_SELFTEST
+    mixerMmiSelfTest();
+#endif
     s_audio_ready = true;
     sysLogPrintf(LOG_NOTE,
         "AUDIO: native SPU2 service ready module=%d format=22050/S16/stereo queue_limit=%u capacity_bytes=%u",

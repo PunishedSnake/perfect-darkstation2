@@ -28,6 +28,115 @@
 #define LOADLH(l, h) _mm_castpd_si128(_mm_loadh_pd(_mm_load_sd((const double *)(l)), (const double *)(h)))
 #endif
 
+#if defined(_MIPS_ARCH_R5900)
+/*
+ * R5900 MMI kernels. Every one is bit-exact with the scalar reference it
+ * replaces (see the comments); they are only used on 16-byte aligned DMEM
+ * spans. GCC treats GPRs as 64-bit, so each block keeps its 128-bit values in
+ * explicitly clobbered temporaries ($8-$15) inside a single asm statement.
+ */
+#define HAS_MMI 1
+
+typedef struct { int16_t h[8]; } __attribute__((aligned(16))) mmi_h8;
+typedef struct { int32_t w[4]; } __attribute__((aligned(16))) mmi_w4;
+
+static const mmi_w4 k_mmi_round = {{0x4000, 0x4000, 0x4000, 0x4000}};
+static const mmi_w4 k_mmi_max16 = {{0x7fff, 0x7fff, 0x7fff, 0x7fff}};
+static const mmi_w4 k_mmi_min16 = {{-0x8000, -0x8000, -0x8000, -0x8000}};
+
+static inline int mmiAligned(const void *a, const void *b)
+{
+    return (((uintptr_t)a | (uintptr_t)b) & 15u) == 0u;
+}
+
+/* out[i] = clamp16((out[i] * 0x7fff + in[i] * gain + 0x4000) >> 15) */
+static void mmiMixGeneral(int16_t *out, const int16_t *in, int16_t gain, int blocks)
+{
+    mmi_h8 coef;
+    for (int k = 0; k < 8; k += 2) {
+        coef.h[k] = 0x7fff;
+        coef.h[k + 1] = gain;
+    }
+    for (int b = 0; b < blocks; ++b, out += 8, in += 8) {
+        __asm__ __volatile__(
+            "lq      $8, 0(%0)\n\t"        /* out */
+            "lq      $9, 0(%1)\n\t"        /* in */
+            "lq      $10, 0(%2)\n\t"       /* {0x7fff, gain} x4 */
+            "lq      $11, 0(%3)\n\t"       /* 0x4000 words */
+            "pextlh  $12, $9, $8\n\t"      /* {out0,in0,out1,in1,...} */
+            "pextuh  $13, $9, $8\n\t"      /* samples 4..7 */
+            "phmadh  $12, $12, $10\n\t"
+            "phmadh  $13, $13, $10\n\t"
+            "lq      $14, 0(%4)\n\t"       /* 32767 words */
+            "lq      $15, 0(%5)\n\t"       /* -32768 words */
+            "paddw   $12, $12, $11\n\t"
+            "paddw   $13, $13, $11\n\t"
+            "psraw   $12, $12, 15\n\t"
+            "psraw   $13, $13, 15\n\t"
+            "pminw   $12, $12, $14\n\t"
+            "pminw   $13, $13, $14\n\t"
+            "pmaxw   $12, $12, $15\n\t"
+            "pmaxw   $13, $13, $15\n\t"
+            "ppach   $12, $13, $12\n\t"
+            "sq      $12, 0(%0)\n\t"
+            :
+            : "r"(out), "r"(in), "r"(&coef), "r"(&k_mmi_round),
+              "r"(&k_mmi_max16), "r"(&k_mmi_min16)
+            : "$8", "$9", "$10", "$11", "$12", "$13", "$14", "$15",
+              "hi", "lo", "memory");
+    }
+}
+
+/* out[i] = clamp16(out[i] - in[i]) */
+static void mmiMixSubtract(int16_t *out, const int16_t *in, int blocks)
+{
+    for (int b = 0; b < blocks; ++b, out += 8, in += 8) {
+        __asm__ __volatile__(
+            "lq      $8, 0(%0)\n\t"
+            "lq      $9, 0(%1)\n\t"
+            "psubsh  $8, $8, $9\n\t"
+            "sq      $8, 0(%0)\n\t"
+            :
+            : "r"(out), "r"(in)
+            : "$8", "$9", "memory");
+    }
+}
+
+/*
+ * out[i] = clamp16(out[i] + ((in[i] * g) >> 15)), g != -0x8000.
+ * With g > -0x8000 the shifted product always fits in int16, so a saturating
+ * halfword add reproduces the 32-bit add + clamp exactly.
+ */
+static void mmiMixScaledAdd(int16_t *out, const int16_t *in, int16_t g, int blocks)
+{
+    mmi_h8 coef;
+    for (int k = 0; k < 8; k += 2) {
+        coef.h[k] = g;
+        coef.h[k + 1] = 0;
+    }
+    for (int b = 0; b < blocks; ++b, out += 8, in += 8) {
+        __asm__ __volatile__(
+            "lq      $8, 0(%0)\n\t"        /* out */
+            "lq      $9, 0(%1)\n\t"        /* in */
+            "lq      $10, 0(%2)\n\t"       /* {g, 0} x4 */
+            "pextlh  $12, $0, $9\n\t"      /* {in0,0,in1,0,...} */
+            "pextuh  $13, $0, $9\n\t"
+            "phmadh  $12, $12, $10\n\t"    /* in*g words */
+            "phmadh  $13, $13, $10\n\t"
+            "psraw   $12, $12, 15\n\t"
+            "psraw   $13, $13, 15\n\t"
+            "ppach   $12, $13, $12\n\t"
+            "paddsh  $8, $8, $12\n\t"
+            "sq      $8, 0(%0)\n\t"
+            :
+            : "r"(out), "r"(in), "r"(&coef)
+            : "$8", "$9", "$10", "$12", "$13", "hi", "lo", "memory");
+    }
+}
+#else
+#define HAS_MMI 0
+#endif
+
 #define ROUND_UP_64(v) (((v) + 63) & ~63)
 #define ROUND_UP_32(v) (((v) + 31) & ~31)
 #define ROUND_UP_16(v) (((v) + 15) & ~15)
@@ -64,7 +173,7 @@ static struct {
     union {
         int16_t as_s16[BUF_SIZE / sizeof(int16_t)];
         uint8_t as_u8[BUF_SIZE];
-    } buf;
+    } buf __attribute__((aligned(16)));
 } rspa;
 
 static int16_t resample_table[64][4] = {
@@ -597,7 +706,20 @@ void aEnvMixerImpl(uint8_t flags, ENVMIX_STATE state, int16_t rvol) {
             const int32_t g = gain[j];
             if (g != 0) {
                 int16_t *out = outs[j];
-                for (int k = i; k < nsamples; ++k) {
+                int k = i;
+#if HAS_MMI
+                if (g != -0x8000) {
+                    for (; k < nsamples && (k & 7) != 0; ++k) {
+                        out[k] = clamp16(out[k] + ((in[k] * g) >> 15));
+                    }
+                    if (mmiAligned(out + k, in + k)) {
+                        const int blocks = (nsamples - k) >> 3;
+                        mmiMixScaledAdd(out + k, in + k, (int16_t)g, blocks);
+                        k += blocks << 3;
+                    }
+                }
+#endif
+                for (; k < nsamples; ++k) {
                     out[k] = clamp16(out[k] + ((in[k] * g) >> 15));
                 }
             }
@@ -625,6 +747,17 @@ void aMixImpl(uint8_t flags, int16_t gain, uint16_t in_addr, uint16_t out_addr) 
 #elif !HAS_NEON
     int i;
     int32_t sample;
+#endif
+
+#if HAS_MMI
+    if (mmiAligned(out, in)) {
+        if (gain == -0x8000) {
+            mmiMixSubtract(out, in, nbytes >> 4);
+        } else {
+            mmiMixGeneral(out, in, gain, nbytes >> 4);
+        }
+        return;
+    }
 #endif
 
 #if !HAS_NEON
@@ -743,3 +876,55 @@ void aPoleFilterImpl(uint8_t flags, int16_t gain, uint32_t t, uint32_t addr) {
 void aDisableImpl(uint16_t outp, uint32_t b, uint32_t c) {
     // this never gets called?
 }
+
+#if HAS_MMI && defined(PD_MIXER_MMI_SELFTEST)
+#include "system.h"
+// On-target equivalence check of the MMI kernels against the scalar
+// formulas. Debug builds only (needs real R5900 or PCSX2).
+void mixerMmiSelfTest(void)
+{
+    static mmi_h8 outa[24], outb[24], in[24];
+    uint32_t seed = 0x1234567u;
+    unsigned fails = 0, cases = 0;
+    for (int it = 0; it < 4000; ++it) {
+        for (int k = 0; k < 24 * 8; ++k) {
+            seed = seed * 1664525u + 1013904223u;
+            int16_t v = (int16_t)(seed >> 8);
+            if ((seed & 0x70) == 0) v = (seed & 0x80) ? 0x7fff : -0x8000;
+            ((int16_t *)in)[k] = v;
+            seed = seed * 1664525u + 1013904223u;
+            v = (int16_t)(seed >> 8);
+            if ((seed & 0x70) == 0) v = (seed & 0x80) ? 0x7fff : -0x8000;
+            ((int16_t *)outa)[k] = ((int16_t *)outb)[k] = v;
+        }
+        seed = seed * 1664525u + 1013904223u;
+        int16_t g = (int16_t)(seed >> 8);
+        if (it % 7 == 0) g = 0x7fff;
+        if (it % 11 == 0) g = -0x7fff;
+        if (it % 13 == 0) g = -0x8000;
+        int16_t *a = (int16_t *)outa, *b = (int16_t *)outb, *x = (int16_t *)in;
+        int mode = it % 3;
+        if (mode == 0) {
+            if (g == -0x8000) mmiMixSubtract(a, x, 23); else mmiMixGeneral(a, x, g, 23);
+            for (int k = 0; k < 184; ++k)
+                b[k] = g == -0x8000 ? clamp16(b[k] - x[k])
+                    : clamp16(((b[k] * 0x7fff + x[k] * g) + 0x4000) >> 15);
+        } else {
+            if (g == -0x8000) g = -0x7fff;
+            mmiMixScaledAdd(a, x, g, 23);
+            for (int k = 0; k < 184; ++k)
+                b[k] = clamp16(b[k] + ((x[k] * g) >> 15));
+        }
+        ++cases;
+        if (memcmp(a, b, 184 * 2) != 0) {
+            if (fails++ < 4) {
+                int k = 0;
+                while (a[k] == b[k]) ++k;
+                sysLogPrintf(LOG_ERROR, "MMI selftest mismatch mode=%d g=%d k=%d mmi=%d ref=%d in=%d",
+                    mode, g, k, a[k], b[k], x[k]);
+            }
+        }
+    }
+    sysLogPrintf(fails ? LOG_ERROR : LOG_NOTE, "MMI mixer selftest: %u/%u cases failed", fails, cases);
+}
+#endif
