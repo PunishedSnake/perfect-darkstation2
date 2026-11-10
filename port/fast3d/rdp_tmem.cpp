@@ -394,9 +394,56 @@ extern "C" bool gfxRdpTmemLoadTileRgba32(struct GfxRdpTmem *tmem,
     return true;
 }
 
+extern "C" uint64_t gfxRdpTmemHashBlockSource(const uint8_t *source,
+    uint32_t first_word, uint32_t word_count, uint16_t dxt)
+{
+    uint64_t hash = GFX_RDP_TMEM_HASH_SEED;
+    uint32_t t_accum = first_word * (uint32_t)dxt;
+    const uint8_t *src = source + first_word * GFX_RDP_TMEM_WORD_BYTES;
+    for (uint32_t word = 0u; word < word_count;
+         ++word, t_accum += dxt, src += GFX_RDP_TMEM_WORD_BYTES) {
+        if (dxt != 0u && ((t_accum >> 11) & 1u)) {
+            /* odd line: TMEM holds src[4..7] then src[0..3] */
+            uint8_t swapped[8];
+            memcpy(swapped, src + 4, 4);
+            memcpy(swapped + 4, src, 4);
+            gfxRdpTmemHashMix64(&hash, gfxRdpTmemLoad64(swapped));
+        } else {
+            gfxRdpTmemHashMix64(&hash, gfxRdpTmemLoad64(src));
+        }
+    }
+    return hash;
+}
+
+static bool gfxRdpTmemLoadBlockLinearImpl(struct GfxRdpTmem *tmem,
+    uint32_t first_tmem_word, const uint8_t *source,
+    uint32_t size_bytes, uint16_t dxt, uint32_t t_start);
+
 extern "C" bool gfxRdpTmemLoadBlockLinear(struct GfxRdpTmem *tmem,
     uint32_t first_tmem_word, const uint8_t *source,
     uint32_t size_bytes, uint16_t dxt)
+{
+    return gfxRdpTmemLoadBlockLinearImpl(tmem, first_tmem_word, source,
+        size_bytes, dxt, 0u);
+}
+
+extern "C" bool gfxRdpTmemLoadBlockLinearPart(struct GfxRdpTmem *tmem,
+    uint32_t first_tmem_word, const uint8_t *block_source,
+    uint32_t skip_words, uint32_t word_count, uint16_t dxt)
+{
+    if (!block_source || skip_words > GFX_RDP_TMEM_WORDS ||
+        word_count > GFX_RDP_TMEM_WORDS) {
+        return false;
+    }
+    return gfxRdpTmemLoadBlockLinearImpl(tmem, first_tmem_word,
+        block_source + skip_words * GFX_RDP_TMEM_WORD_BYTES,
+        word_count * GFX_RDP_TMEM_WORD_BYTES, dxt,
+        skip_words * (uint32_t)dxt);
+}
+
+static bool gfxRdpTmemLoadBlockLinearImpl(struct GfxRdpTmem *tmem,
+    uint32_t first_tmem_word, const uint8_t *source,
+    uint32_t size_bytes, uint16_t dxt, uint32_t t_start)
 {
     if (!tmem || (!source && size_bytes != 0u) || dxt > 0x0fffu ||
         first_tmem_word > GFX_RDP_TMEM_WORDS) {
@@ -420,7 +467,7 @@ extern "C" bool gfxRdpTmemLoadBlockLinear(struct GfxRdpTmem *tmem,
      * untouched. The compare stops at the first difference.
      */
     if ((size_bytes % GFX_RDP_TMEM_WORD_BYTES) == 0u) {
-        uint32_t t_check = 0u;
+        uint32_t t_check = t_start;
         uint32_t word = 0u;
         for (; word < word_count; ++word, t_check += dxt) {
             const uint32_t dst_byte =
@@ -447,7 +494,7 @@ extern "C" bool gfxRdpTmemLoadBlockLinear(struct GfxRdpTmem *tmem,
     }
 
     const uint32_t generation = gfxRdpTmemNextGeneration(tmem);
-    uint32_t t_accum = 0u;
+    uint32_t t_accum = t_start;
     uint64_t load_hash = GFX_RDP_TMEM_HASH_SEED;
 
     for (uint32_t word = 0; word < word_count; ++word) {

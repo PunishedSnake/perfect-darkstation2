@@ -24,6 +24,9 @@ struct GfxRdpTmemLiveStats {
     uint32_t materialize_exact;
     uint32_t materialize_fallback;
     uint32_t fingerprint_load_reuse;
+    uint32_t load_block_deferred;
+    uint32_t load_block_elided;
+    uint32_t fingerprint_source_hash;
 };
 
 struct GfxRdpTmemLiveTextureView {
@@ -103,6 +106,17 @@ bool gfxRdpTmemLiveIdentifyTexture(uint8_t tile,
     struct GfxRdpTmemLiveTextureView *view);
 bool gfxRdpTmemLiveFillTextureView(uint8_t tile,
     struct GfxRdpTmemLiveTextureView *view);
+
+/*
+ * LoadBlock is lazy: a full-word block load is only recorded, and copied into
+ * TMEM when something actually needs the bytes (a texture cache miss, an
+ * overlapping load, a state query). A later block that covers it replaces it
+ * without the copy ever happening, and texture identity is hashed straight
+ * from the source. Source RAM must stay unchanged until the load is flushed,
+ * which holds while one display list is being executed; call Flush once the
+ * list is done.
+ */
+void gfxRdpTmemLiveFlush(void);
 
 const struct GfxRdpTmem *gfxRdpTmemLiveState(void);
 void gfxRdpTmemLiveGetStats(struct GfxRdpTmemLiveStats *stats);

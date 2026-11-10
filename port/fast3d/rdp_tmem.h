@@ -130,6 +130,26 @@ bool gfxRdpTmemLoadBlockLinear(struct GfxRdpTmem *tmem,
     uint32_t size_bytes, uint16_t dxt);
 
 /*
+ * Store only words [skip_words, skip_words + word_count) of the block that
+ * gfxRdpTmemLoadBlockLinear(block_source, ..., dxt) would store, at
+ * first_tmem_word, keeping the block's line parity. Loading a block in
+ * parts gives the same bytes as loading it whole.
+ */
+bool gfxRdpTmemLoadBlockLinearPart(struct GfxRdpTmem *tmem,
+    uint32_t first_tmem_word, const uint8_t *block_source,
+    uint32_t skip_words, uint32_t word_count, uint16_t dxt);
+
+/*
+ * Hash of TMEM words [first_word, first_word + word_count) of the block a
+ * full-word gfxRdpTmemLoadBlockLinear(source, ..., dxt) would store, without
+ * touching TMEM (first_word counts from the start of the block). Equal to a
+ * fresh hash of those words after the load, and for the whole block to its
+ * load record hash.
+ */
+uint64_t gfxRdpTmemHashBlockSource(const uint8_t *source,
+    uint32_t first_word, uint32_t word_count, uint16_t dxt);
+
+/*
  * RGBA32 LoadBlock variant. Each 64-bit source word contains two RGBA32 texels:
  * four R/G bytes are written into low TMEM and the matching four B/A bytes into
  * high TMEM. `dxt` controls the odd-line XOR-4 mapping. `line_words` is the
