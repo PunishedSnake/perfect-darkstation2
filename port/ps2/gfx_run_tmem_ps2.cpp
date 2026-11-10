@@ -1,6 +1,7 @@
 #include <PR/gbi.h>
 
 #include "rdp_tmem_trace.h"
+#include "rdp_tmem_live.h"
 
 /*
  * gfx_pc.cpp is compiled on PS2 with gfx_run renamed to gfx_run_ps2_impl.
@@ -19,4 +20,7 @@ extern "C" void gfx_run(Gfx *commands)
     gfxRdpTmemTraceDisplayList(commands);
 #endif
     gfx_run_ps2_impl(commands);
+    /* Lazy block loads reference display-list source RAM; settle them
+     * before the game can change it for the next frame. */
+    gfxRdpTmemLiveFlush();
 }
