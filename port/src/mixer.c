@@ -43,6 +43,12 @@ typedef struct { int32_t w[4]; } __attribute__((aligned(16))) mmi_w4;
 static const mmi_w4 k_mmi_round = {{0x4000, 0x4000, 0x4000, 0x4000}};
 static const mmi_w4 k_mmi_max16 = {{0x7fff, 0x7fff, 0x7fff, 0x7fff}};
 static const mmi_w4 k_mmi_min16 = {{-0x8000, -0x8000, -0x8000, -0x8000}};
+static int s_adpcm_book_entries;
+#if defined(PD_MIXER_MMI_SELFTEST)
+static int s_adpcm_force_scalar;
+#else
+#define s_adpcm_force_scalar 0
+#endif
 
 static inline int mmiAligned(const void *a, const void *b)
 {
@@ -176,7 +182,7 @@ static struct {
     } buf __attribute__((aligned(16)));
 } rspa;
 
-static int16_t resample_table[64][4] = {
+static int16_t resample_table[64][4] __attribute__((aligned(16))) = {
     {0x0c39, 0x66ad, 0x0d46, 0xffdf}, {0x0b39, 0x6696, 0x0e5f, 0xffd8},
     {0x0a44, 0x6669, 0x0f83, 0xffd0}, {0x095a, 0x6626, 0x10b4, 0xffc8},
     {0x087d, 0x65cd, 0x11f0, 0xffbf}, {0x07ab, 0x655e, 0x1338, 0xffb6},
@@ -229,6 +235,168 @@ static inline int32_t clamp32(int64_t v) {
     return (int32_t)v;
 }
 
+#if HAS_MMI
+/*
+ * Four resampler outputs. w[k] is the 4-tap input window (any 2-byte
+ * alignment), t[k] the 8-byte aligned filter row. Bit-exact with the scalar
+ * loop: every product is rounded and shifted on its own (PMULTH keeps all
+ * eight 32-bit products), then the four taps are summed and clamped.
+ */
+static inline void mmiResample4(int16_t *out, const int16_t *w0,
+    const int16_t *w1, const int16_t *w2, const int16_t *w3,
+    const int16_t *t0, const int16_t *t1, const int16_t *t2,
+    const int16_t *t3)
+{
+    __asm__ __volatile__(
+        "ldl     $8, 7(%1)\n\t"
+        "ldr     $8, 0(%1)\n\t"
+        "ldl     $9, 7(%2)\n\t"
+        "ldr     $9, 0(%2)\n\t"
+        "ldl     $10, 7(%3)\n\t"
+        "ldr     $10, 0(%3)\n\t"
+        "ldl     $11, 7(%4)\n\t"
+        "ldr     $11, 0(%4)\n\t"
+        "ld      $12, 0(%5)\n\t"
+        "ld      $13, 0(%6)\n\t"
+        "ld      $14, 0(%7)\n\t"
+        "ld      $15, 0(%8)\n\t"
+        "pcpyld  $8, $9, $8\n\t"      /* {w0, w1} */
+        "pcpyld  $12, $13, $12\n\t"   /* {t0, t1} */
+        "pcpyld  $10, $11, $10\n\t"   /* {w2, w3} */
+        "pcpyld  $14, $15, $14\n\t"   /* {t2, t3} */
+        "lq      $15, 0(%9)\n\t"      /* 0x4000 words */
+        "pmulth  $0, $8, $12\n\t"
+        "pmflo   $8\n\t"              /* {a0 a1 b0 b1} */
+        "pmfhi   $9\n\t"              /* {a2 a3 b2 b3} */
+        "pmulth  $0, $10, $14\n\t"
+        "paddw   $8, $8, $15\n\t"
+        "paddw   $9, $9, $15\n\t"
+        "psraw   $8, $8, 15\n\t"
+        "psraw   $9, $9, 15\n\t"
+        "pmflo   $10\n\t"             /* {c0 c1 d0 d1} */
+        "pmfhi   $11\n\t"             /* {c2 c3 d2 d3} */
+        "paddw   $8, $8, $9\n\t"      /* {a02 a13 b02 b13} */
+        "paddw   $10, $10, $15\n\t"
+        "paddw   $11, $11, $15\n\t"
+        "psraw   $10, $10, 15\n\t"
+        "psraw   $11, $11, 15\n\t"
+        "paddw   $10, $10, $11\n\t"   /* {c02 c13 d02 d13} */
+        "pextlw  $12, $10, $8\n\t"    /* {a02 c02 a13 c13} */
+        "pextuw  $13, $10, $8\n\t"    /* {b02 d02 b13 d13} */
+        "pextlw  $8, $13, $12\n\t"    /* {a02 b02 c02 d02} */
+        "pextuw  $9, $13, $12\n\t"    /* {a13 b13 c13 d13} */
+        "lq      $14, 0(%10)\n\t"
+        "lq      $15, 0(%11)\n\t"
+        "paddw   $8, $8, $9\n\t"
+        "pminw   $8, $8, $14\n\t"
+        "pmaxw   $8, $8, $15\n\t"
+        "ppach   $8, $0, $8\n\t"
+        "sd      $8, 0(%0)\n\t"
+        :
+        : "r"(out), "r"(w0), "r"(w1), "r"(w2), "r"(w3),
+          "r"(t0), "r"(t1), "r"(t2), "r"(t3),
+          "r"(&k_mmi_round), "r"(&k_mmi_max16), "r"(&k_mmi_min16)
+        : "$8", "$9", "$10", "$11", "$12", "$13", "$14", "$15",
+          "hi", "lo", "memory");
+}
+#endif
+
+#if HAS_MMI
+/*
+ * ADPCM: each 8-sample group is acc = M . [prev2, prev1, ins0..ins7] with a
+ * fixed 8x10 int16 matrix per codebook entry (ins<<11 is the 2048 diagonal).
+ * Rows are stored as five column pairs per 4-output group so PHMADH forms
+ * two products per lane; the sums wrap exactly like the scalar int32 code.
+ */
+typedef struct { mmi_h8 pair[2][5]; } mmi_adpcm_matrix;
+static mmi_adpcm_matrix s_adpcm_matrix[8];
+static int16_t s_adpcm_matrix_book[8][2][8];
+static int s_adpcm_matrix_entries = -1;
+
+static void mmiAdpcmBuildMatrices(int entries)
+{
+    if (entries == s_adpcm_matrix_entries &&
+        memcmp(s_adpcm_matrix_book, rspa.adpcm_table, (size_t)entries * 32u) == 0) {
+        return;
+    }
+    for (int t = 0; t < entries; ++t) {
+        const int16_t *tbl0 = rspa.adpcm_table[t][0];
+        const int16_t *tbl1 = rspa.adpcm_table[t][1];
+        for (int j = 0; j < 8; ++j) {
+            int16_t row[10];
+            row[0] = tbl0[j];
+            row[1] = tbl1[j];
+            for (int k = 0; k < 8; ++k) {
+                row[2 + k] = k == j ? 2048 : (k < j ? tbl1[j - k - 1] : 0);
+            }
+            for (int p = 0; p < 5; ++p) {
+                s_adpcm_matrix[t].pair[j >> 2][p].h[(j & 3) * 2 + 0] = row[p * 2 + 0];
+                s_adpcm_matrix[t].pair[j >> 2][p].h[(j & 3) * 2 + 1] = row[p * 2 + 1];
+            }
+        }
+    }
+    memcpy(s_adpcm_matrix_book, rspa.adpcm_table, (size_t)entries * 32u);
+    s_adpcm_matrix_entries = entries;
+}
+
+/* out[0..7] = clamp16((M . x) >> 11); x as five packed halfword pairs. */
+static inline void mmiAdpcm8(int16_t *out, const mmi_adpcm_matrix *m,
+    const uint32_t x[5])
+{
+    __asm__ __volatile__(
+#define ADPCM_PAIR(p, first) \
+        "lw      $8, " #p "*4(%2)\n\t" \
+        "pextlw  $8, $8, $8\n\t" \
+        "pcpyld  $8, $8, $8\n\t" \
+        "lq      $9, " #p "*16(%1)\n\t" \
+        "lq      $10, 80+" #p "*16(%1)\n\t" \
+        "phmadh  $9, $9, $8\n\t" \
+        "phmadh  $10, $10, $8\n\t" \
+        first
+        ADPCM_PAIR(0, "por     $14, $9, $0\n\tpor     $15, $10, $0\n\t")
+        ADPCM_PAIR(1, "paddw   $14, $14, $9\n\tpaddw   $15, $15, $10\n\t")
+        ADPCM_PAIR(2, "paddw   $14, $14, $9\n\tpaddw   $15, $15, $10\n\t")
+        ADPCM_PAIR(3, "paddw   $14, $14, $9\n\tpaddw   $15, $15, $10\n\t")
+        ADPCM_PAIR(4, "paddw   $14, $14, $9\n\tpaddw   $15, $15, $10\n\t")
+#undef ADPCM_PAIR
+        "lq      $11, 0(%3)\n\t"
+        "lq      $12, 0(%4)\n\t"
+        "psraw   $14, $14, 11\n\t"
+        "psraw   $15, $15, 11\n\t"
+        "pminw   $14, $14, $11\n\t"
+        "pminw   $15, $15, $11\n\t"
+        "pmaxw   $14, $14, $12\n\t"
+        "pmaxw   $15, $15, $12\n\t"
+        "ppach   $14, $15, $14\n\t"
+        "sq      $14, 0(%0)\n\t"
+        :
+        : "r"(out), "r"(m), "r"(x), "r"(&k_mmi_max16), "r"(&k_mmi_min16)
+        : "$8", "$9", "$10", "$11", "$12", "$14", "$15",
+          "hi", "lo", "memory");
+}
+
+static inline uint32_t mmiAdpcmPair(int16_t a, int16_t b)
+{
+    return (uint32_t)(uint16_t)a | ((uint32_t)(uint16_t)b << 16);
+}
+
+/* Packed (hi nibble, lo nibble) sample pair per shift and input byte. */
+static uint32_t s_adpcm_nibble_pairs[13][256];
+static int s_adpcm_nibble_pairs_ready;
+
+static void mmiAdpcmInitNibblePairs(void)
+{
+    for (int shift = 0; shift < 13; ++shift) {
+        for (int b = 0; b < 256; ++b) {
+            const int16_t hi = (int16_t)((((b >> 4) << 28) >> 28) << shift);
+            const int16_t lo = (int16_t)((((b & 0xf) << 28) >> 28) << shift);
+            s_adpcm_nibble_pairs[shift][b] = mmiAdpcmPair(hi, lo);
+        }
+    }
+    s_adpcm_nibble_pairs_ready = 1;
+}
+#endif
+
 void aClearBufferImpl(uint16_t addr, int nbytes) {
     nbytes = ROUND_UP_16(nbytes);
     memset(BUF_U8(addr), 0, nbytes);
@@ -244,6 +412,12 @@ void aSaveBufferImpl(uint16_t source_addr, int16_t *dest_addr, uint16_t nbytes) 
 
 void aLoadADPCMImpl(int num_entries_times_16, const int16_t *book_source_addr) {
     memcpy(rspa.adpcm_table, book_source_addr, num_entries_times_16);
+#if HAS_MMI
+    s_adpcm_book_entries = num_entries_times_16 / 32;
+    if (s_adpcm_book_entries > 8) {
+        s_adpcm_book_entries = 8;
+    }
+#endif
 }
 
 void aInterleaveImpl(void) {
@@ -325,6 +499,15 @@ void aADPCMdecImpl(uint8_t flags, ADPCM_STATE state, int nbytes, uint16_t inofs,
         memcpy(out, state, 16 * sizeof(int16_t));
     }
     out += 16;
+#if HAS_MMI
+    const int mmi_ok = ((uintptr_t)out & 15u) == 0u;
+    if (mmi_ok) {
+        if (!s_adpcm_nibble_pairs_ready) {
+            mmiAdpcmInitNibblePairs();
+        }
+        mmiAdpcmBuildMatrices(s_adpcm_book_entries);
+    }
+#endif
 #if HAS_SSE41
     __m128i prev_interleaved = _mm_set1_epi32((uint16_t)out[-2] | ((uint16_t)out[-1] << 16));
     //__m128i prev_interleaved = _mm_shuffle_epi32(_mm_loadu_si32(out - 2), 0); // GCC misses this?
@@ -440,6 +623,26 @@ void aADPCMdecImpl(uint8_t flags, ADPCM_STATE state, int nbytes, uint16_t inofs,
             out += 8;
         }
 #else
+#if HAS_MMI
+        if (mmi_ok && !s_adpcm_force_scalar && shift <= 12 &&
+            table_index < s_adpcm_matrix_entries) {
+            const mmi_adpcm_matrix *m = &s_adpcm_matrix[table_index];
+            const uint32_t *pairs = s_adpcm_nibble_pairs[shift];
+            for (i = 0; i < 2; i++) {
+                uint32_t x[5];
+                x[0] = mmiAdpcmPair(out[-2], out[-1]);
+                x[1] = pairs[in[0]];
+                x[2] = pairs[in[1]];
+                x[3] = pairs[in[2]];
+                x[4] = pairs[in[3]];
+                in += 4;
+                mmiAdpcm8(out, m, x);
+                out += 8;
+            }
+            nbytes -= 16 * sizeof(int16_t);
+            continue;
+        }
+#endif
         for (i = 0; i < 2; i++) {
             int16_t ins[8];
             int16_t prev1 = out[-1];
@@ -473,8 +676,8 @@ void aResampleImpl(uint8_t flags, uint16_t pitch, RESAMPLE_STATE state, uint16_t
     uint32_t pitch_accumulator;
     int i;
 #if !HAS_SSE41 && !HAS_NEON
-    int16_t *tbl;
-    int32_t sample;
+    int16_t *tbl = NULL;
+    int32_t sample = 0;
 #endif
     if (flags & A_INIT) {
         memset(tmp, 0, 5 * sizeof(int16_t));
@@ -585,6 +788,30 @@ void aResampleImpl(uint8_t flags, uint16_t pitch, RESAMPLE_STATE state, uint16_t
     } while (nbytes > 0);
     in += vgetq_lane_u16(vreinterpretq_u16_u32(acc_a), 1);
     pitch_accumulator = vgetq_lane_u16(vreinterpretq_u16_u32(acc_a), 0);
+#elif HAS_MMI
+    {
+        const uint32_t step = (uint32_t)pitch << 1;
+        const int16_t *w[4];
+        const int16_t *t[4];
+        (void)tbl;
+        (void)sample;
+        do {
+            /* out is 16-byte aligned; each kernel call writes 8 bytes. */
+            for (int half = 0; half < 2; ++half) {
+                for (i = 0; i < 4; i++) {
+                    w[i] = in;
+                    t[i] = resample_table[pitch_accumulator >> 10];
+                    pitch_accumulator += step;
+                    in += pitch_accumulator >> 16;
+                    pitch_accumulator &= 0xffffu;
+                }
+                mmiResample4(out, w[0], w[1], w[2], w[3],
+                    t[0], t[1], t[2], t[3]);
+                out += 4;
+            }
+            nbytes -= 8 * sizeof(int16_t);
+        } while (nbytes > 0);
+    }
 #else
     do {
         for (i = 0; i < 8; i++) {
@@ -924,6 +1151,128 @@ void mixerMmiSelfTest(void)
                     mode, g, k, a[k], b[k], x[k]);
             }
         }
+    }
+    /* Resampler kernel: random windows at every alignment, random rows. */
+    {
+        static int16_t src[64] __attribute__((aligned(16)));
+        static int16_t got[4] __attribute__((aligned(16)));
+        for (int it = 0; it < 4000; ++it) {
+            for (int k = 0; k < 64; ++k) {
+                seed = seed * 1664525u + 1013904223u;
+                int16_t v = (int16_t)(seed >> 8);
+                if ((seed & 0x70) == 0) v = (seed & 0x80) ? 0x7fff : -0x8000;
+                src[k] = v;
+            }
+            const int16_t *w[4];
+            const int16_t *t[4];
+            for (int k = 0; k < 4; ++k) {
+                seed = seed * 1664525u + 1013904223u;
+                w[k] = &src[(seed >> 8) % 60u];
+                t[k] = resample_table[(seed >> 20) & 63u];
+            }
+            mmiResample4(got, w[0], w[1], w[2], w[3], t[0], t[1], t[2], t[3]);
+            ++cases;
+            for (int k = 0; k < 4; ++k) {
+                const int32_t ref = ((w[k][0] * t[k][0] + 0x4000) >> 15) +
+                    ((w[k][1] * t[k][1] + 0x4000) >> 15) +
+                    ((w[k][2] * t[k][2] + 0x4000) >> 15) +
+                    ((w[k][3] * t[k][3] + 0x4000) >> 15);
+                if (got[k] != clamp16(ref)) {
+                    if (fails++ < 8) {
+                        sysLogPrintf(LOG_ERROR, "MMI resample mismatch lane=%d mmi=%d ref=%d",
+                            k, got[k], clamp16(ref));
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    /* ADPCM 8-sample kernel against the scalar recurrence. */
+    {
+        static int16_t got[16] __attribute__((aligned(16)));
+        for (int it = 0; it < 2000; ++it) {
+            for (int k = 0; k < 8 * 16; ++k) {
+                seed = seed * 1664525u + 1013904223u;
+                int16_t v = (int16_t)(seed >> 8);
+                if ((seed & 0x70) == 0) v = (seed & 0x80) ? 0x7fff : -0x8000;
+                ((int16_t *)rspa.adpcm_table)[k] = v;
+            }
+            mmiAdpcmBuildMatrices(8);
+            seed = seed * 1664525u + 1013904223u;
+            const int t = (int)((seed >> 8) & 7u);
+            const int shift = (int)((seed >> 12) % 13u);
+            int16_t prev2 = (int16_t)(seed >> 3), prev1 = (int16_t)(seed >> 17);
+            uint8_t bytes[4];
+            for (int k = 0; k < 4; ++k) {
+                seed = seed * 1664525u + 1013904223u;
+                bytes[k] = (uint8_t)(seed >> 13);
+            }
+            int16_t ins[8];
+            for (int j = 0; j < 4; j++) {
+                ins[j * 2] = (((bytes[j] >> 4) << 28) >> 28) << shift;
+                ins[j * 2 + 1] = (((bytes[j] & 0xf) << 28) >> 28) << shift;
+            }
+            uint32_t x[5] = {
+                mmiAdpcmPair(prev2, prev1), mmiAdpcmPair(ins[0], ins[1]),
+                mmiAdpcmPair(ins[2], ins[3]), mmiAdpcmPair(ins[4], ins[5]),
+                mmiAdpcmPair(ins[6], ins[7]),
+            };
+            mmiAdpcm8(got, &s_adpcm_matrix[t], x);
+            ++cases;
+            const int16_t (*tbl)[8] = rspa.adpcm_table[t];
+            for (int j = 0; j < 8; j++) {
+                int32_t acc = (int32_t)((uint32_t)(tbl[0][j] * prev2) +
+                    (uint32_t)(tbl[1][j] * prev1) + (uint32_t)(ins[j] << 11));
+                for (int k = 0; k < j; k++) {
+                    acc = (int32_t)((uint32_t)acc + (uint32_t)(tbl[1][((j - k) - 1)] * ins[k]));
+                }
+                if (got[j] != clamp16(acc >> 11)) {
+                    if (fails++ < 8) {
+                        sysLogPrintf(LOG_ERROR, "MMI adpcm mismatch j=%d mmi=%d ref=%d",
+                            j, got[j], clamp16(acc >> 11));
+                    }
+                    break;
+                }
+            }
+        }
+        s_adpcm_matrix_entries = -1;
+    }
+    /* Whole decoder, MMI vs scalar, with timing. */
+    {
+        static uint8_t src[0x200];
+        static int16_t ref[0x1d0];
+        static ADPCM_STATE st;
+        uint64_t tt[2] = { 0, 0 };
+        for (int it = 0; it < 200; ++it) {
+            for (int k = 0; k < 0x200; ++k) {
+                seed = seed * 1664525u + 1013904223u;
+                src[k] = (uint8_t)(seed >> 9);
+                if ((k % 9) == 0) src[k] = (uint8_t)((src[k] % 13u) << 4 | (src[k] & 7u));
+            }
+            for (int k = 0; k < 8 * 16; ++k) {
+                seed = seed * 1664525u + 1013904223u;
+                ((int16_t *)rspa.adpcm_table)[k] = (int16_t)(seed >> 12);
+            }
+            s_adpcm_book_entries = 8;
+            for (int mode = 1; mode >= 0; --mode) {
+                s_adpcm_force_scalar = mode;
+                memcpy(BUF_U8(0x400), src, 0x200);
+                const uint64_t t0 = sysGetMicroseconds();
+                aADPCMdecImpl(A_INIT, st, 0x380, 0x400, 0x800);
+                tt[mode] += sysGetMicroseconds() - t0;
+                if (mode == 1) {
+                    memcpy(ref, BUF_S16(0x800), sizeof(ref));
+                }
+            }
+            ++cases;
+            if (memcmp(ref, BUF_S16(0x800), sizeof(ref)) != 0 && fails++ < 8) {
+                sysLogPrintf(LOG_ERROR, "MMI adpcm decoder mismatch it=%d", it);
+            }
+        }
+        s_adpcm_force_scalar = 0;
+        s_adpcm_matrix_entries = -1;
+        sysLogPrintf(LOG_NOTE, "ADPCM decoder: mmi=%u us scalar=%u us (200 x 448 samples)",
+            (unsigned)tt[0], (unsigned)tt[1]);
     }
     sysLogPrintf(fails ? LOG_ERROR : LOG_NOTE, "MMI mixer selftest: %u/%u cases failed", fails, cases);
 }

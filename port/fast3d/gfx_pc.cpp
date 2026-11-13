@@ -1310,6 +1310,52 @@ static void calculate_normal_dir(const struct NormalColor *vcn, float coeffs[3])
 }
 
 static void gfx_matrix_mul(float res[4][4], const float a[4][4], const float b[4][4]) {
+#if defined(PLATFORM_PS2) && defined(_EE)
+    /*
+     * VU0 macro mode: each result row is a[i].x*b0 + a[i].y*b1 + a[i].z*b2 +
+     * a[i].w*b3, one MULA/MADDA/MADDA/MADD chain per row instead of 64 FPU
+     * multiplies. LQC2/SQC2 need 16-byte alignment, so go through aligned
+     * copies (res may alias a or b).
+     */
+    float ta[4][4] __attribute__((aligned(16)));
+    float tb[4][4] __attribute__((aligned(16)));
+    float tr[4][4] __attribute__((aligned(16)));
+    memcpy(ta, a, sizeof(ta));
+    memcpy(tb, b, sizeof(tb));
+    __asm__ __volatile__(
+        "lqc2    $vf4, 0(%2)\n\t"
+        "lqc2    $vf5, 16(%2)\n\t"
+        "lqc2    $vf6, 32(%2)\n\t"
+        "lqc2    $vf7, 48(%2)\n\t"
+        "lqc2    $vf1, 0(%1)\n\t"
+        "lqc2    $vf2, 16(%1)\n\t"
+        "lqc2    $vf3, 32(%1)\n\t"
+        "lqc2    $vf8, 48(%1)\n\t"
+        "vmulax.xyzw  $ACC, $vf4, $vf1x\n\t"
+        "vmadday.xyzw $ACC, $vf5, $vf1y\n\t"
+        "vmaddaz.xyzw $ACC, $vf6, $vf1z\n\t"
+        "vmaddw.xyzw  $vf1, $vf7, $vf1w\n\t"
+        "vmulax.xyzw  $ACC, $vf4, $vf2x\n\t"
+        "vmadday.xyzw $ACC, $vf5, $vf2y\n\t"
+        "vmaddaz.xyzw $ACC, $vf6, $vf2z\n\t"
+        "vmaddw.xyzw  $vf2, $vf7, $vf2w\n\t"
+        "vmulax.xyzw  $ACC, $vf4, $vf3x\n\t"
+        "vmadday.xyzw $ACC, $vf5, $vf3y\n\t"
+        "vmaddaz.xyzw $ACC, $vf6, $vf3z\n\t"
+        "vmaddw.xyzw  $vf3, $vf7, $vf3w\n\t"
+        "vmulax.xyzw  $ACC, $vf4, $vf8x\n\t"
+        "vmadday.xyzw $ACC, $vf5, $vf8y\n\t"
+        "vmaddaz.xyzw $ACC, $vf6, $vf8z\n\t"
+        "vmaddw.xyzw  $vf8, $vf7, $vf8w\n\t"
+        "sqc2    $vf1, 0(%0)\n\t"
+        "sqc2    $vf2, 16(%0)\n\t"
+        "sqc2    $vf3, 32(%0)\n\t"
+        "sqc2    $vf8, 48(%0)\n\t"
+        :
+        : "r"(tr), "r"(ta), "r"(tb)
+        : "memory");
+    memcpy(res, tr, sizeof(tr));
+#else
     float tmp[4][4];
     for (int i = 0; i < 4; i++) {
         for (int j = 0; j < 4; j++) {
@@ -1317,6 +1363,7 @@ static void gfx_matrix_mul(float res[4][4], const float a[4][4], const float b[4
         }
     }
     memcpy(res, tmp, sizeof(tmp));
+#endif
 }
 
 static void gfx_sp_matrix(uint8_t parameters, const int32_t* addr) {
@@ -1394,48 +1441,82 @@ static void gfx_adjust_width_height_for_scale(uint32_t& width, uint32_t& height)
 static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx* vertices) {
     SUPPORT_CHECK(n_vertices <= MAX_VERTICES);
 
+    /*
+     * Per-call invariants. Writes through `d` alias rsp, so without local
+     * copies the compiler reloads all sixteen matrix floats per vertex; the
+     * aspect correction's division becomes one multiply by a constant.
+     */
+    float m[4][4];
+    memcpy(m, rsp.MP_matrix, sizeof(m));
+    const bool aspect_adjust = !fbActive;
+    const float aspect_ofs = rsp.aspect_ofs;
+    const float aspect_k = rsp.aspect_scale / gfx_current_dimensions.aspect_ratio;
+
+    /* Lighting state is per call too; the 1/127 normal scale folds into it. */
+    const bool lighting = (rsp.geometry_mode & G_LIGHTING) != 0;
+    int num_dir_lights = 0;
+    int ambient_r = 0, ambient_g = 0, ambient_b = 0;
+    float light_coeffs[MAX_LIGHTS][3];
+    float light_cols[MAX_LIGHTS][3];
+    if (lighting) {
+        if (rsp.lights_changed) {
+            for (int i = 0; i < rsp.current_num_lights - 1; i++) {
+                calculate_normal_dir(&rsp.current_lights[i], rsp.current_lights_coeffs[i]);
+            }
+            if (rsp.lookat_enabled) {
+                calculate_normal_dir(&rsp.lookat[0], rsp.current_lookat_coeffs[0]);
+                calculate_normal_dir(&rsp.lookat[1], rsp.current_lookat_coeffs[1]);
+            }
+            rsp.lights_changed = false;
+        }
+        num_dir_lights = rsp.current_num_lights - 1;
+        if (num_dir_lights > MAX_LIGHTS) {
+            num_dir_lights = MAX_LIGHTS;
+        }
+        ambient_r = rsp.current_lights[rsp.current_num_lights - 1].col[0];
+        ambient_g = rsp.current_lights[rsp.current_num_lights - 1].col[1];
+        ambient_b = rsp.current_lights[rsp.current_num_lights - 1].col[2];
+        for (int i = 0; i < num_dir_lights; i++) {
+            for (int k = 0; k < 3; k++) {
+                light_coeffs[i][k] = rsp.current_lights_coeffs[i][k] * (1.0f / 127.0f);
+                light_cols[i][k] = rsp.current_lights[i].col[k];
+            }
+        }
+    }
+
     for (size_t i = 0; i < n_vertices; i++, dest_index++) {
         const Vtx* v = &vertices[i];
         struct LoadedVertex* d = &rsp.loaded_vertices[dest_index];
 
-        float x = v->v[0] * rsp.MP_matrix[0][0] + v->v[1] * rsp.MP_matrix[1][0] + v->v[2] * rsp.MP_matrix[2][0] + rsp.MP_matrix[3][0];
-        float y = v->v[0] * rsp.MP_matrix[0][1] + v->v[1] * rsp.MP_matrix[1][1] + v->v[2] * rsp.MP_matrix[2][1] + rsp.MP_matrix[3][1];
-        float z = v->v[0] * rsp.MP_matrix[0][2] + v->v[1] * rsp.MP_matrix[1][2] + v->v[2] * rsp.MP_matrix[2][2] + rsp.MP_matrix[3][2];
-        float w = v->v[0] * rsp.MP_matrix[0][3] + v->v[1] * rsp.MP_matrix[1][3] + v->v[2] * rsp.MP_matrix[2][3] + rsp.MP_matrix[3][3];
+        const float vx = v->v[0];
+        const float vy = v->v[1];
+        const float vz = v->v[2];
+        float x = vx * m[0][0] + vy * m[1][0] + vz * m[2][0] + m[3][0];
+        float y = vx * m[0][1] + vy * m[1][1] + vz * m[2][1] + m[3][1];
+        float z = vx * m[0][2] + vy * m[1][2] + vz * m[2][2] + m[3][2];
+        float w = vx * m[0][3] + vy * m[1][3] + vz * m[2][3] + m[3][3];
 
-        x = gfx_adjust_x_for_aspect_ratio(x, w);
+        if (aspect_adjust) {
+            x = (aspect_ofs * w + x) * aspect_k;
+        }
 
         short U = v->s * rsp.texture_scaling_factor.s >> 16;
         short V = v->t * rsp.texture_scaling_factor.t >> 16;
 
         const struct NormalColor *vcn = &rsp.vertex_colors[v->colour >> 2];
 
-        if (rsp.geometry_mode & G_LIGHTING) {
-            if (rsp.lights_changed) {
-                for (int i = 0; i < rsp.current_num_lights - 1; i++) {
-                    calculate_normal_dir(&rsp.current_lights[i], rsp.current_lights_coeffs[i]);
-                }
-                if (rsp.lookat_enabled) {
-                    calculate_normal_dir(&rsp.lookat[0], rsp.current_lookat_coeffs[0]);
-                    calculate_normal_dir(&rsp.lookat[1], rsp.current_lookat_coeffs[1]);
-                }
-                rsp.lights_changed = false;
-            }
+        if (lighting) {
+            int r = ambient_r;
+            int g = ambient_g;
+            int b = ambient_b;
 
-            int r = rsp.current_lights[rsp.current_num_lights - 1].col[0];
-            int g = rsp.current_lights[rsp.current_num_lights - 1].col[1];
-            int b = rsp.current_lights[rsp.current_num_lights - 1].col[2];
-
-            for (int i = 0; i < rsp.current_num_lights - 1; i++) {
-                float intensity = 0;
-                intensity += vcn->x * rsp.current_lights_coeffs[i][0];
-                intensity += vcn->y * rsp.current_lights_coeffs[i][1];
-                intensity += vcn->z * rsp.current_lights_coeffs[i][2];
-                intensity /= 127.0f;
+            for (int i = 0; i < num_dir_lights; i++) {
+                const float intensity = vcn->x * light_coeffs[i][0] +
+                    vcn->y * light_coeffs[i][1] + vcn->z * light_coeffs[i][2];
                 if (intensity > 0.0f) {
-                    r += intensity * rsp.current_lights[i].col[0];
-                    g += intensity * rsp.current_lights[i].col[1];
-                    b += intensity * rsp.current_lights[i].col[2];
+                    r += intensity * light_cols[i][0];
+                    g += intensity * light_cols[i][1];
+                    b += intensity * light_cols[i][2];
                 }
             }
 
@@ -1551,57 +1632,39 @@ static inline int gfx_lod_tile_offset(const int i) {
     return (rdp.tex_lod ? rdp.tex_detail : i);
 }
 
-static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx, bool is_rect) {
-    struct LoadedVertex* v1 = &rsp.loaded_vertices[vtx1_idx];
-    struct LoadedVertex* v2 = &rsp.loaded_vertices[vtx2_idx];
-    struct LoadedVertex* v3 = &rsp.loaded_vertices[vtx3_idx];
-    struct LoadedVertex* v_arr[3] = { v1, v2, v3 };
+/*
+ * Everything gfx_sp_tri1 derives from RDP/RSP state rather than from the
+ * triangle's vertices. Display lists issue long runs of G_VTX/G_TRI* with no
+ * state change, so the result is cached and only rebuilt after a command that
+ * can change state (gfx_run_dl invalidates on every other opcode).
+ */
+enum { GFX_TRI_IN_CONST, GFX_TRI_IN_SHADE, GFX_TRI_IN_SHADE_ALPHA, GFX_TRI_IN_LOD };
 
-    if ((rsp.extra_geometry_mode & G_NO_CLIPPING_EXT) == 0) {
-        if (v1->clip_rej & v2->clip_rej & v3->clip_rej) {
-            // The whole triangle lies outside the visible area
-            return;
-        }
-    }
+struct GfxTriSetup {
+    bool valid;
+    bool depth_source_prim;
+    bool z_is_from_0_to_1;
+    bool invert_y;
+    bool use_alpha;
+    bool use_fog;
+    bool use_grayscale;
+    bool used_textures[2];
+    bool clamp_s[2];
+    bool clamp_t[2];
+    uint8_t num_inputs;
+    float u_scale[2], u_bias[2], v_scale[2], v_bias[2];
+    float tex_clamp_s[2], tex_clamp_t[2];
+    uint8_t in_kind[2][7];
+    float in_const[7][4];
+};
 
-    if ((rsp.geometry_mode & G_CULL_BOTH) != 0) {
-        /* v2's projection is shared by both edges; compute it once. */
-        const float x2 = v2->x / (v2->w);
-        const float y2 = v2->y / (v2->w);
-        float dx1 = v1->x / (v1->w) - x2;
-        float dy1 = v1->y / (v1->w) - y2;
-        float dx2 = v3->x / (v3->w) - x2;
-        float dy2 = v3->y / (v3->w) - y2;
-        float cross = dx1 * dy2 - dy1 * dx2;
+static struct GfxTriSetup gfx_tri_setup_cache;
 
-        if ((v1->w < 0) ^ (v2->w < 0) ^ (v3->w < 0)) {
-            // If one vertex lies behind the eye, negating cross will give the correct result.
-            // If all vertices lie behind the eye, the triangle will be rejected anyway.
-            cross = -cross;
-        }
+static inline void gfx_tri_setup_invalidate(void) {
+    gfx_tri_setup_cache.valid = false;
+}
 
-        // If inverted culling is requested, negate the cross
-        // if ((rsp.extra_geometry_mode & G_EX_INVERT_CULLING) == 1) {
-        //     cross = -cross;
-        // }
-
-        switch (rsp.geometry_mode & G_CULL_BOTH) {
-            case G_CULL_FRONT:
-                if (cross <= 0) {
-                    return;
-                }
-                break;
-            case G_CULL_BACK:
-                if (cross >= 0) {
-                    return;
-                }
-                break;
-            case G_CULL_BOTH:
-                // Why is this even an option?
-                return;
-        }
-    }
-
+static void gfx_tri_setup(struct GfxTriSetup* S, bool is_rect) {
     bool depth_test = ((rsp.geometry_mode & G_ZBUFFER) == G_ZBUFFER || (rdp.other_mode_l & G_ZS_PRIM) == G_ZS_PRIM) &&
                       ((rdp.other_mode_h & G_CYC_1CYCLE) == G_CYC_1CYCLE || (rdp.other_mode_h & G_CYC_2CYCLE) == G_CYC_2CYCLE);
     bool depth_update = (rdp.other_mode_l & Z_UPD) == Z_UPD;
@@ -1803,159 +1866,248 @@ static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx, bo
         }
     }
 
+
+    S->depth_source_prim = depth_source_prim;
+    S->z_is_from_0_to_1 = clip_parameters.z_is_from_0_to_1;
+    S->invert_y = clip_parameters.invert_y;
+    S->use_alpha = use_alpha;
+    S->use_fog = use_fog;
+    S->use_grayscale = use_grayscale;
+    S->num_inputs = num_inputs;
+    for (int t = 0; t < 2; t++) {
+        S->used_textures[t] = used_textures[t];
+        S->clamp_s[t] = (tm & (1 << 2 * t)) != 0;
+        S->clamp_t[t] = (tm & (1 << (2 * t + 1))) != 0;
+        S->tex_clamp_s[t] = tex_clamp_s[t];
+        S->tex_clamp_t[t] = tex_clamp_t[t];
+        if (!used_textures[t]) {
+            continue;
+        }
+        // TODO: fix this; for now just ignore smaller mips
+        const auto* tt = &rdp.texture_tile[rdp.first_tile_index + gfx_lod_tile_offset(t)];
+        const int shifts = tt->shifts;
+        const int shiftt = tt->shiftt;
+        const float su = shifts == 0 ? 1.0f
+            : (shifts <= 10 ? gfx_pow2_reciprocal[shifts] : (float)(1 << (16 - shifts)));
+        const float sv = shiftt == 0 ? 1.0f
+            : (shiftt <= 10 ? gfx_pow2_reciprocal[shiftt] : (float)(1 << (16 - shiftt)));
+        float half = 1.0f;
+        float add = 0.0f;
+        if (!is_rect) {
+            if (!(rdp.other_mode_h & G_TP_PERSP)) {
+                half = 0.5f;
+            }
+            if ((rdp.other_mode_h & (3U << G_MDSFT_TEXTFILT)) != G_TF_POINT) {
+                // Linear filter adds 0.5f to the coordinates
+                add = 0.5f;
+            }
+        }
+        const float rw = tex_width_rcp[t] != 0.0f ? tex_width_rcp[t] : 1.0f / tex_width[t];
+        const float rh = tex_height_rcp[t] != 0.0f ? tex_height_rcp[t] : 1.0f / tex_height[t];
+        /* u' = ((u / 32 * su - uls / 4) * half + add) / width, folded. */
+        S->u_scale[t] = su / 32.0f * half * rw;
+        S->u_bias[t] = (add - tt->uls / 4.0f * half) * rw;
+        S->v_scale[t] = sv / 32.0f * half * rh;
+        S->v_bias[t] = (add - tt->ult / 4.0f * half) * rh;
+    }
+
+    for (int j = 0; j < num_inputs; j++) {
+        for (int k = 0; k < 1 + (use_alpha ? 1 : 0); k++) {
+            struct RGBA tmp = { 0 };
+            uint8_t kind = GFX_TRI_IN_CONST;
+            switch (comb->shader_input_mapping[k][j]) {
+                    // Note: CCMUX constants and ACMUX constants used here have same value, which is why this works
+                    // (except LOD fraction).
+                case G_CCMUX_PRIMITIVE:
+                    tmp = rdp.prim_color;
+                    break;
+                case G_CCMUX_SHADE:
+                    kind = GFX_TRI_IN_SHADE;
+                    break;
+                case G_CCMUX_SHADE_ALPHA:
+                    kind = GFX_TRI_IN_SHADE_ALPHA;
+                    break;
+                case G_CCMUX_ENVIRONMENT:
+                    tmp = rdp.env_color;
+                    break;
+                case G_CCMUX_PRIMITIVE_ALPHA:
+                    tmp.r = tmp.g = tmp.b = rdp.prim_color.a;
+                    break;
+                case G_CCMUX_ENV_ALPHA:
+                    tmp.r = tmp.g = tmp.b = rdp.env_color.a;
+                    break;
+                case G_CCMUX_PRIM_LOD_FRAC:
+                    tmp.r = tmp.g = tmp.b = rdp.prim_lod_fraction;
+                    break;
+                case G_CCMUX_LOD_FRACTION:
+                    if (rdp.other_mode_h & G_TL_LOD) {
+                        kind = GFX_TRI_IN_LOD;
+                    } else {
+                        tmp.r = tmp.g = tmp.b = tmp.a = 255;
+                    }
+                    break;
+                case G_ACMUX_PRIM_LOD_FRAC:
+                    tmp.a = rdp.prim_lod_fraction;
+                    break;
+                default:
+                    break;
+            }
+            S->in_kind[k][j] = kind;
+            if (k == 0) {
+                S->in_const[j][0] = gfx_u8_unit[tmp.r];
+                S->in_const[j][1] = gfx_u8_unit[tmp.g];
+                S->in_const[j][2] = gfx_u8_unit[tmp.b];
+            } else {
+                S->in_const[j][3] = gfx_u8_unit[tmp.a];
+            }
+        }
+    }
+}
+
+static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx, bool is_rect) {
+    struct LoadedVertex* v1 = &rsp.loaded_vertices[vtx1_idx];
+    struct LoadedVertex* v2 = &rsp.loaded_vertices[vtx2_idx];
+    struct LoadedVertex* v3 = &rsp.loaded_vertices[vtx3_idx];
+    struct LoadedVertex* v_arr[3] = { v1, v2, v3 };
+
+    if ((rsp.extra_geometry_mode & G_NO_CLIPPING_EXT) == 0) {
+        if (v1->clip_rej & v2->clip_rej & v3->clip_rej) {
+            // The whole triangle lies outside the visible area
+            return;
+        }
+    }
+
+    if ((rsp.geometry_mode & G_CULL_BOTH) != 0) {
+        /* v2's projection is shared by both edges; compute it once. */
+        const float x2 = v2->x / (v2->w);
+        const float y2 = v2->y / (v2->w);
+        float dx1 = v1->x / (v1->w) - x2;
+        float dy1 = v1->y / (v1->w) - y2;
+        float dx2 = v3->x / (v3->w) - x2;
+        float dy2 = v3->y / (v3->w) - y2;
+        float cross = dx1 * dy2 - dy1 * dx2;
+
+        if ((v1->w < 0) ^ (v2->w < 0) ^ (v3->w < 0)) {
+            // If one vertex lies behind the eye, negating cross will give the correct result.
+            // If all vertices lie behind the eye, the triangle will be rejected anyway.
+            cross = -cross;
+        }
+
+        // If inverted culling is requested, negate the cross
+        // if ((rsp.extra_geometry_mode & G_EX_INVERT_CULLING) == 1) {
+        //     cross = -cross;
+        // }
+
+        switch (rsp.geometry_mode & G_CULL_BOTH) {
+            case G_CULL_FRONT:
+                if (cross <= 0) {
+                    return;
+                }
+                break;
+            case G_CULL_BACK:
+                if (cross >= 0) {
+                    return;
+                }
+                break;
+            case G_CULL_BOTH:
+                // Why is this even an option?
+                return;
+        }
+    }
+
+    struct GfxTriSetup rect_setup;
+    const struct GfxTriSetup* S = &gfx_tri_setup_cache;
+    if (is_rect) {
+        gfx_tri_setup(&rect_setup, true);
+        S = &rect_setup;
+    } else if (!gfx_tri_setup_cache.valid) {
+        gfx_tri_setup(&gfx_tri_setup_cache, false);
+        gfx_tri_setup_cache.valid = true;
+    }
+
+    const bool use_alpha = S->use_alpha;
+    const int num_inputs = S->num_inputs;
     for (int i = 0; i < 3; i++) {
-        float z = v_arr[i]->z, w = v_arr[i]->w;
-        if (depth_source_prim) {
+        const struct LoadedVertex* V = v_arr[i];
+        float z = V->z, w = V->w;
+        if (S->depth_source_prim) {
             z = gfx_primitive_depth_to_clip_z(rdp.primitive_depth_z, w);
         }
-        if (clip_parameters.z_is_from_0_to_1) {
+        if (S->z_is_from_0_to_1) {
             z = (z + w) / 2.0f;
         }
 
-        buf_vbo[buf_vbo_len++] = v_arr[i]->x;
-        buf_vbo[buf_vbo_len++] = clip_parameters.invert_y ? -v_arr[i]->y : v_arr[i]->y;
-        buf_vbo[buf_vbo_len++] = z;
-        buf_vbo[buf_vbo_len++] = w;
+        float* out = &buf_vbo[buf_vbo_len];
+        *out++ = V->x;
+        *out++ = S->invert_y ? -V->y : V->y;
+        *out++ = z;
+        *out++ = w;
 
         for (int t = 0; t < 2; t++) {
-            if (!used_textures[t]) {
+            if (!S->used_textures[t]) {
                 continue;
             }
-
-            // TODO: fix this; for now just ignore smaller mips
-            const uint32_t tile = gfx_lod_tile_offset(t);
-
-            float u = v_arr[i]->u / 32.0f;
-            float v = v_arr[i]->v / 32.0f;
-
-            int shifts = rdp.texture_tile[rdp.first_tile_index + tile].shifts;
-            int shiftt = rdp.texture_tile[rdp.first_tile_index + tile].shiftt;
-            if (shifts != 0) {
-                if (shifts <= 10) {
-                    u *= gfx_pow2_reciprocal[shifts];
-                } else {
-                    u *= 1 << (16 - shifts);
-                }
+            *out++ = V->u * S->u_scale[t] + S->u_bias[t];
+            *out++ = V->v * S->v_scale[t] + S->v_bias[t];
+            if (S->clamp_s[t]) {
+                *out++ = S->tex_clamp_s[t];
             }
-            if (shiftt != 0) {
-                if (shiftt <= 10) {
-                    v *= gfx_pow2_reciprocal[shiftt];
-                } else {
-                    v *= 1 << (16 - shiftt);
-                }
-            }
-
-            u -= rdp.texture_tile[rdp.first_tile_index + tile].uls / 4.0f;
-            v -= rdp.texture_tile[rdp.first_tile_index + tile].ult / 4.0f;
-
-            if (!is_rect) {
-                if (!(rdp.other_mode_h & G_TP_PERSP)) {
-                    u *= 0.5f;
-                    v *= 0.5f;
-                }
-
-                if ((rdp.other_mode_h & (3U << G_MDSFT_TEXTFILT)) != G_TF_POINT) {
-                    // Linear filter adds 0.5f to the coordinates
-                    u += 0.5f;
-                    v += 0.5f;
-                }
-            }
-
-            buf_vbo[buf_vbo_len++] = tex_width_rcp[t] != 0.0f
-                ? u * tex_width_rcp[t] : u / tex_width[t];
-            buf_vbo[buf_vbo_len++] = tex_height_rcp[t] != 0.0f
-                ? v * tex_height_rcp[t] : v / tex_height[t];
-
-            bool clampS = tm & (1 << 2 * t);
-            bool clampT = tm & (1 << (2 * t + 1));
-
-            if (clampS) {
-                buf_vbo[buf_vbo_len++] = tex_clamp_s[t];
-            }
-            if (clampT) {
-                buf_vbo[buf_vbo_len++] = tex_clamp_t[t];
+            if (S->clamp_t[t]) {
+                *out++ = S->tex_clamp_t[t];
             }
         }
 
-        if (use_fog) {
-            buf_vbo[buf_vbo_len++] = gfx_u8_unit[rdp.fog_color.r];
-            buf_vbo[buf_vbo_len++] = gfx_u8_unit[rdp.fog_color.g];
-            buf_vbo[buf_vbo_len++] = gfx_u8_unit[rdp.fog_color.b];
-            buf_vbo[buf_vbo_len++] = gfx_u8_unit[v_arr[i]->fog]; // fog factor
+        if (S->use_fog) {
+            *out++ = gfx_u8_unit[rdp.fog_color.r];
+            *out++ = gfx_u8_unit[rdp.fog_color.g];
+            *out++ = gfx_u8_unit[rdp.fog_color.b];
+            *out++ = gfx_u8_unit[V->fog]; // fog factor
         }
 
-        if (use_grayscale) {
-            buf_vbo[buf_vbo_len++] = gfx_u8_unit[rdp.grayscale_color.r];
-            buf_vbo[buf_vbo_len++] = gfx_u8_unit[rdp.grayscale_color.g];
-            buf_vbo[buf_vbo_len++] = gfx_u8_unit[rdp.grayscale_color.b];
-            buf_vbo[buf_vbo_len++] = gfx_u8_unit[rdp.grayscale_color.a]; // lerp interpolation factor (not alpha)
+        if (S->use_grayscale) {
+            *out++ = gfx_u8_unit[rdp.grayscale_color.r];
+            *out++ = gfx_u8_unit[rdp.grayscale_color.g];
+            *out++ = gfx_u8_unit[rdp.grayscale_color.b];
+            *out++ = gfx_u8_unit[rdp.grayscale_color.a]; // lerp interpolation factor (not alpha)
         }
 
         for (int j = 0; j < num_inputs; j++) {
-            struct RGBA* color = 0;
-            struct RGBA tmp = { 0 };
             for (int k = 0; k < 1 + (use_alpha ? 1 : 0); k++) {
-                switch (comb->shader_input_mapping[k][j]) {
-                        // Note: CCMUX constants and ACMUX constants used here have same value, which is why this works
-                        // (except LOD fraction).
-                    case G_CCMUX_PRIMITIVE:
-                        color = &rdp.prim_color;
+                uint8_t r, g, b, a;
+                switch (S->in_kind[k][j]) {
+                    case GFX_TRI_IN_SHADE:
+                        r = V->color.r; g = V->color.g; b = V->color.b; a = V->color.a;
                         break;
-                    case G_CCMUX_SHADE:
-                        color = &v_arr[i]->color;
+                    case GFX_TRI_IN_SHADE_ALPHA:
+                        r = g = b = V->color.a; a = 0;
                         break;
-                    case G_CCMUX_SHADE_ALPHA:
-                        tmp.r = tmp.g = tmp.b = v_arr[i]->color.a;
-                        color = &tmp;
-                        break;
-                    case G_CCMUX_ENVIRONMENT:
-                        color = &rdp.env_color;
-                        break;
-                    case G_CCMUX_PRIMITIVE_ALPHA: {
-                        tmp.r = tmp.g = tmp.b = rdp.prim_color.a;
-                        color = &tmp;
+                    case GFX_TRI_IN_LOD: {
+                        // HACK: very roughly eyeballed based on the carpets in Defection
+                        // this is actually supposed to be calculated per pixel
+                        const float distance_frac = std::max(0.f, std::min(w / 1024.f, 1.f));
+                        r = g = b = a = (uint8_t)((0.7f + distance_frac * 0.3f) * 255.f);
                         break;
                     }
-                    case G_CCMUX_ENV_ALPHA: {
-                        tmp.r = tmp.g = tmp.b = rdp.env_color.a;
-                        color = &tmp;
-                        break;
-                    }
-                    case G_CCMUX_PRIM_LOD_FRAC: {
-                        tmp.r = tmp.g = tmp.b = rdp.prim_lod_fraction;
-                        color = &tmp;
-                        break;
-                    }
-                    case G_CCMUX_LOD_FRACTION: {
-                        if (rdp.other_mode_h & G_TL_LOD) {
-                            // HACK: very roughly eyeballed based on the carpets in Defection
-                            // this is actually supposed to be calculated per pixel
-                            const float distance_frac = std::max(0.f, std::min(w / 1024.f, 1.f));
-                            tmp.r = tmp.g = tmp.b = tmp.a = (0.7f + distance_frac * 0.3f) * 255.f;
-                        } else {
-                            tmp.r = tmp.g = tmp.b = tmp.a = 255;
-                        }
-                        color = &tmp;
-                        break;
-                    }
-                    case G_ACMUX_PRIM_LOD_FRAC:
-                        tmp.a = rdp.prim_lod_fraction;
-                        color = &tmp;
-                        break;
                     default:
-                        memset(&tmp, 0, sizeof(tmp));
-                        color = &tmp;
-                        break;
+                        if (k == 0) {
+                            *out++ = S->in_const[j][0];
+                            *out++ = S->in_const[j][1];
+                            *out++ = S->in_const[j][2];
+                        } else {
+                            *out++ = S->in_const[j][3];
+                        }
+                        continue;
                 }
                 if (k == 0) {
-                    buf_vbo[buf_vbo_len++] = gfx_u8_unit[color->r];
-                    buf_vbo[buf_vbo_len++] = gfx_u8_unit[color->g];
-                    buf_vbo[buf_vbo_len++] = gfx_u8_unit[color->b];
+                    *out++ = gfx_u8_unit[r];
+                    *out++ = gfx_u8_unit[g];
+                    *out++ = gfx_u8_unit[b];
                 } else {
-                    buf_vbo[buf_vbo_len++] = gfx_u8_unit[color->a];
+                    *out++ = gfx_u8_unit[a];
                 }
             }
         }
+        buf_vbo_len = (size_t)(out - buf_vbo);
     }
 
     if (++buf_vbo_num_tris == MAX_BUFFERED) {
@@ -2662,6 +2814,11 @@ static void gfx_run_dl(Gfx* cmd) {
     for (;;) {
         uint32_t opcode = cmd->words.w0 >> 24;
         // gfx_print_cmd(cmd);
+        if (opcode != G_VTX && opcode != G_TRI1 && opcode != G_TRI4 &&
+            opcode != G_COL && opcode != G_MTX && opcode != (uint8_t)G_POPMTX &&
+            opcode != G_NOOP) {
+            gfx_tri_setup_invalidate();
+        }
         switch (opcode) {
                 // RSP commands:
             case G_NOOP:
@@ -3097,6 +3254,7 @@ extern "C" void gfx_run(Gfx* commands) {
     rdp.viewport_or_scissor_changed = true;
     rendering_state.viewport = {};
     rendering_state.scissor = {};
+    gfx_tri_setup_invalidate();
     gfx_run_dl(commands);
     gfx_flush();
     gfxFramebuffer = 0;

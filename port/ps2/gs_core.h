@@ -253,6 +253,14 @@ void ps2GsCoreDrawTexturedTriangles(Ps2GsTextureHandle texture,
     const struct Ps2GsTexturedVertex *vertices, uint32_t vertex_count);
 bool ps2GsCoreDrawTextureAlphaMaskTriangles(Ps2GsTextureHandle texture,
     const struct Ps2GsTexturedVertex *vertices, uint32_t vertex_count);
+/*
+ * Draw a CI4 texture's indices through a caller-built CT32 CLUT (16 entries,
+ * natural order, 0xAABBGGRR). Returns false without drawing for non-CI4
+ * textures or when no CLUT slot could be prepared.
+ */
+bool ps2GsCoreDrawTextureClut4Triangles(Ps2GsTextureHandle texture,
+    const uint32_t clut_ct32[16],
+    const struct Ps2GsTexturedVertex *vertices, uint32_t vertex_count);
 void ps2GsCoreDrawTexturedTrianglesTransform(Ps2GsTextureHandle texture,
     const struct Ps2GsTexturedVertex *fallback_vertices,
     const struct Ps2GsVu1TransformVertex *transform_vertices,

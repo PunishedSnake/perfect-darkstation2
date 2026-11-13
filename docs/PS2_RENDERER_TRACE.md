@@ -561,3 +561,19 @@ The CI4/CI8 native-residency diagnostic was also reverted to the normal default
 indexed residency disabled produced no visible correctness change, so keeping
 the slower RGBA32 control as the default would only muddy subsequent
 performance measurements.
+
+
+## Two-palette text material in one GS pass
+
+`PS2_PASS_GRAPH_TEX1_ALPHA_FACTOR_LERP` is Perfect Dark's font material
+(`textRender`): colour `lerp(PRIM, ENV, TEXEL1.a)`, alpha `TEXEL0.a * ENV.a`,
+with tile 0 and tile 1 pointing at the same CI4 TMEM indices through palettes
+0 and 1. The backend now folds the combiner into a per-draw 16-entry CT32 CLUT
+(RGB = lerp at palette-1 alpha, A = palette-0 alpha) and draws the glyphs as
+one ordinary textured pass (`ps2GsCoreDrawTextureClut4Triangles`, 32-slot
+content-addressed CLUT pool). No framebuffer alpha is touched, so the earlier
+destination-alpha menu-text regression does not apply. Batches whose two
+textures are not the same CI4 indices, whose UVs differ between tiles, or
+whose PRIM/ENV colours vary per vertex keep the exact tiled graph.
+File-select scene in PCSX2: frame 22.3 -> 16.6 ms. Screenshot comparison over
+eight frames shows the same text colours through the highlight/title pulse.

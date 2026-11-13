@@ -24,20 +24,42 @@ float planeDistance(const float *vertex, size_t plane)
     }
 }
 
-unsigned int clipCode(const float *vertex)
+inline unsigned int clipCode(const float *vertex)
 {
-    unsigned int code = 0u;
-    for (size_t plane = 0u; plane < kClipPlaneCount; ++plane) {
-        if (planeDistance(vertex, plane) < 0.0f) {
-            code |= 1u << plane;
+    const float x = vertex[0];
+    const float y = vertex[1];
+    const float z = vertex[2];
+    const float w = vertex[3];
+    /* Same tests as planeDistance(vertex, plane) < 0 for planes 0..5. */
+    return (x + w < 0.0f ? 1u : 0u) |
+        (w - x < 0.0f ? 2u : 0u) |
+        (y + w < 0.0f ? 4u : 0u) |
+        (w - y < 0.0f ? 8u : 0u) |
+        (z < 0.0f ? 16u : 0u) |
+        (w - z < 0.0f ? 32u : 0u);
+}
+
+/* Outcodes of a finite triangle; false if any position is non-finite. */
+inline bool triangleCodes(const float *triangle, size_t stride,
+    unsigned int codes[3])
+{
+    for (size_t vertex = 0u; vertex < 3u; ++vertex) {
+        const float *v = &triangle[vertex * stride];
+        if (!std::isfinite(v[0]) || !std::isfinite(v[1]) ||
+            !std::isfinite(v[2]) || !std::isfinite(v[3])) {
+            return false;
         }
+        codes[vertex] = clipCode(v);
     }
-    return code;
+    return true;
 }
 
 void copyVertex(float *destination, const float *source, size_t stride)
 {
-    std::memcpy(destination, source, stride * sizeof(float));
+    /* stride is small (<= 32 floats); a library memcpy call costs more. */
+    for (size_t component = 0u; component < stride; ++component) {
+        destination[component] = source[component];
+    }
 }
 
 void intersectEdge(float *destination, const float *from, const float *to,
@@ -55,25 +77,23 @@ void intersectEdge(float *destination, const float *from, const float *to,
 
 } // namespace
 
+static enum Ps2GsClipClass classifyCodes(const unsigned int codes[3])
+{
+    if ((codes[0] & codes[1] & codes[2]) != 0u) {
+        return PS2_GS_CLIP_REJECT;
+    }
+    return (codes[0] | codes[1] | codes[2]) == 0u
+        ? PS2_GS_CLIP_ACCEPT : PS2_GS_CLIP_PARTIAL;
+}
+
 enum Ps2GsClipClass ps2GsClipClassifyTriangle(
     const float *triangle, size_t stride)
 {
-    for (size_t vertex = 0u; vertex < 3u; ++vertex) {
-        for (size_t component = 0u; component < 4u; ++component) {
-            if (!std::isfinite(triangle[vertex * stride + component])) {
-                return PS2_GS_CLIP_REJECT;
-            }
-        }
-    }
-
-    const unsigned int code0 = clipCode(&triangle[0u * stride]);
-    const unsigned int code1 = clipCode(&triangle[1u * stride]);
-    const unsigned int code2 = clipCode(&triangle[2u * stride]);
-    if ((code0 & code1 & code2) != 0u) {
+    unsigned int codes[3];
+    if (!triangleCodes(triangle, stride, codes)) {
         return PS2_GS_CLIP_REJECT;
     }
-    return (code0 | code1 | code2) == 0u
-        ? PS2_GS_CLIP_ACCEPT : PS2_GS_CLIP_PARTIAL;
+    return classifyCodes(codes);
 }
 
 bool ps2GsClipTriangle(const float *triangle, size_t stride,
@@ -88,8 +108,10 @@ bool ps2GsClipTriangle(const float *triangle, size_t stride,
         return false;
     }
 
+    unsigned int codes[3];
     const enum Ps2GsClipClass clip_class =
-        ps2GsClipClassifyTriangle(triangle, stride);
+        triangleCodes(triangle, stride, codes)
+            ? classifyCodes(codes) : PS2_GS_CLIP_REJECT;
     if (clip_class == PS2_GS_CLIP_REJECT) {
         return true;
     }
@@ -103,26 +125,31 @@ bool ps2GsClipTriangle(const float *triangle, size_t stride,
     }
 
     /*
-     * Deliberately uninitialized: every polygon slot is written (copied or
-     * interpolated) before it is read, and only `stride` floats of a slot are
-     * ever touched. Zero-initialising both arrays cost a 2304-byte clear per
-     * clipped triangle, over a quarter of the R5900's 8 KiB data cache.
+     * Sutherland-Hodgman over vertex pointers: surviving vertices are never
+     * copied between planes, only new intersection points get storage.
+     * Planes that no input vertex violates are skipped; every clipped vertex
+     * is a convex combination of the inputs, so it cannot violate them
+     * either. The result is identical to clipping against all six planes.
      */
-    float polygon_a[PS2_GS_CLIP_MAX_POLYGON_VERTICES]
-        [PS2_GS_CLIP_MAX_VERTEX_FLOATS];
-    float polygon_b[PS2_GS_CLIP_MAX_POLYGON_VERTICES]
-        [PS2_GS_CLIP_MAX_VERTEX_FLOATS];
-    float (*input)[PS2_GS_CLIP_MAX_VERTEX_FLOATS] = polygon_a;
-    float (*output)[PS2_GS_CLIP_MAX_VERTEX_FLOATS] = polygon_b;
+    const unsigned int crossed = codes[0] | codes[1] | codes[2];
+    constexpr size_t kPoolVertices = 2u * kClipPlaneCount;
+    float pool[kPoolVertices][PS2_GS_CLIP_MAX_VERTEX_FLOATS];
+    size_t pool_used = 0u;
+    const float *polygon_a[PS2_GS_CLIP_MAX_POLYGON_VERTICES];
+    const float *polygon_b[PS2_GS_CLIP_MAX_POLYGON_VERTICES];
+    const float **input = polygon_a;
+    const float **output = polygon_b;
     size_t input_count = 3u;
-
-    for (size_t vertex = 0u; vertex < input_count; ++vertex) {
-        copyVertex(input[vertex], &triangle[vertex * stride], stride);
-    }
+    input[0] = &triangle[0u * stride];
+    input[1] = &triangle[1u * stride];
+    input[2] = &triangle[2u * stride];
 
     for (size_t plane = 0u; plane < kClipPlaneCount; ++plane) {
         if (input_count == 0u) {
             break;
+        }
+        if ((crossed & (1u << plane)) == 0u) {
+            continue;
         }
 
         size_t output_count = 0u;
@@ -136,17 +163,20 @@ bool ps2GsClipTriangle(const float *triangle, size_t stride,
             const bool current_inside = current_distance >= 0.0f;
 
             if (previous_inside != current_inside) {
-                if (output_count >= PS2_GS_CLIP_MAX_POLYGON_VERTICES) {
+                if (output_count >= PS2_GS_CLIP_MAX_POLYGON_VERTICES ||
+                    pool_used >= kPoolVertices) {
                     return false;
                 }
-                intersectEdge(output[output_count++], previous, current,
+                float *point = pool[pool_used++];
+                intersectEdge(point, previous, current,
                     previous_distance, current_distance, stride);
+                output[output_count++] = point;
             }
             if (current_inside) {
                 if (output_count >= PS2_GS_CLIP_MAX_POLYGON_VERTICES) {
                     return false;
                 }
-                copyVertex(output[output_count++], current, stride);
+                output[output_count++] = current;
             }
 
             previous = current;
@@ -155,7 +185,7 @@ bool ps2GsClipTriangle(const float *triangle, size_t stride,
         }
 
         input_count = output_count;
-        float (*swap)[PS2_GS_CLIP_MAX_VERTEX_FLOATS] = input;
+        const float **swap = input;
         input = output;
         output = swap;
     }

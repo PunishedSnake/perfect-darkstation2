@@ -168,6 +168,9 @@ struct Ps2TextureSamplerState {
     uint64_t source_hash;
     uint64_t palette_hash;
     uint64_t content_identity;
+    /* CI4 only: palette alpha per index, as delivered to the GS. */
+    bool ci4_alpha_valid;
+    uint8_t ci4_alpha[16];
 };
 
 struct Ps2TextureRegionClampState {
@@ -571,6 +574,7 @@ static void ps2_record_texture_provenance(
     sampler->source_hash = source_hash;
     sampler->palette_hash = palette_hash;
     sampler->content_identity = content_identity;
+    sampler->ci4_alpha_valid = false;
 }
 
 static void ps2_apply_texture_clamp(int tile)
@@ -1149,6 +1153,16 @@ extern "C" bool gfxPs2UploadTmemTexture(
     ps2_record_texture_provenance(
         handle, format, size, palette_format, view->palette_count,
         source_hash, palette_hash, view->content_identity);
+    if (ci4 && handle < PS2_GFX_TEXTURE_STATE_SLOTS) {
+        struct Ps2TextureSamplerState *sampler = &s_texture_sampler[handle];
+        for (uint32_t i = 0u; i < 16u; ++i) {
+            /* Same alpha the colour CLUT delivers (see alpha-mask CLUT). */
+            sampler->ci4_alpha[i] = ia16_palette
+                ? (uint8_t)(view->palette[i] >> 8u)
+                : ((view->palette[i] & 1u) != 0u ? 0xffu : 0x00u);
+        }
+        sampler->ci4_alpha_valid = true;
+    }
     if (!*logged) {
         sysLogPrintf(LOG_NOTE,
             "GfxPS2 native texture path: exact N64 CI%u/%s TLUT -> GS PSMT%u/%s CSM1",
@@ -1267,21 +1281,33 @@ static float ps2_clampf(float v, float lo, float hi)
     return v < lo ? lo : (v > hi ? hi : v);
 }
 
-static uint8_t ps2_u8_component(float v)
+/*
+ * Branchless clamp to [0, 1]. The R5900 FPU has MAX.S/MIN.S; the per-vertex
+ * colour and depth conversions below otherwise pay two compare-and-branch
+ * pairs each. (The PS2 FPU has no NaN, so ordering semantics do not matter.)
+ */
+static inline float ps2_saturate(float v)
 {
-    int out = (int)(ps2_clampf(v, 0.0f, 1.0f) * 255.0f + 0.5f);
-    if (out < 0) out = 0;
-    if (out > 255) out = 255;
-    return (uint8_t)out;
+#if defined(_EE)
+    float r;
+    __asm__("max.s %0, %1, %2" : "=f"(r) : "f"(v), "f"(0.0f));
+    __asm__("min.s %0, %1, %2" : "=f"(r) : "f"(r), "f"(1.0f));
+    return r;
+#else
+    return ps2_clampf(v, 0.0f, 1.0f);
+#endif
 }
 
-static uint8_t ps2_modulate_component(float v)
+static inline uint8_t ps2_u8_component(float v)
+{
+    /* Saturated input keeps the result in 0..255 without integer clamps. */
+    return (uint8_t)(int)(ps2_saturate(v) * 255.0f + 0.5f);
+}
+
+static inline uint8_t ps2_modulate_component(float v)
 {
     /* GS texture MODULATE uses 0x80 as a 1.0 fragment multiplier. */
-    int out = (int)(ps2_clampf(v, 0.0f, 1.0f) * 128.0f + 0.5f);
-    if (out < 0) out = 0;
-    if (out > 128) out = 128;
-    return (uint8_t)out;
+    return (uint8_t)(int)(ps2_saturate(v) * 128.0f + 0.5f);
 }
 
 static uint8_t ps2_texture_alpha_fragment_component(float v)
@@ -1291,10 +1317,7 @@ static uint8_t ps2_texture_alpha_fragment_component(float v)
      * so Af=0x40 represents the compensation needed to map texel 0xff to the
      * GS-native opaque alpha neighbourhood without an upload-side repack.
      */
-    int out = (int)(ps2_clampf(v, 0.0f, 1.0f) * 64.0f + 0.5f);
-    if (out < 0) out = 0;
-    if (out > 64) out = 64;
-    return (uint8_t)out;
+    return (uint8_t)(int)(ps2_saturate(v) * 64.0f + 0.5f);
 }
 
 #if defined(PERFECT_DARK_PS2_MATERIAL_BASELINE)
@@ -1438,13 +1461,12 @@ static struct Ps2GsPackedReg ps2_pack_xyzf2(float x, float y, int z, uint8_t fog
     return out;
 }
 
-static int ps2_map_clip_depth(float z, float w)
+/* inv_w is ps2_clip_inv_w(w): 1/w, or 0 for w == 0 (maps to ndc 1). */
+static inline int ps2_map_clip_depth_inv(float z, float inv_w)
 {
-    float ndc = (w != 0.0f) ? (z / w) : 1.0f;
-    ndc = ps2_clampf(ndc, 0.0f, 1.0f);
-
-    float ranged = s_depth_near + ndc * (s_depth_far - s_depth_near);
-    ranged = ps2_clampf(ranged, 0.0f, 1.0f);
+    const float ndc = inv_w != 0.0f ? ps2_saturate(z * inv_w) : 1.0f;
+    const float ranged = ps2_saturate(
+        s_depth_near + ndc * (s_depth_far - s_depth_near));
 
     /* Current GS baseline uses GEQUAL: near is large, far is small. */
     const int depth = 1 + (int)((1.0f - ranged) * 65534.0f);
@@ -1471,7 +1493,8 @@ static inline void ps2_project_screen(
         (ndc_x * 0.5f + 0.5f) * (float)s_viewport.width;
     *sy = (float)s_viewport.y +
         (0.5f - ndc_y * 0.5f) * (float)s_viewport.height;
-    *iz = ps2_map_clip_depth(clip_z, clip_w);
+    (void)clip_w;
+    *iz = ps2_map_clip_depth_inv(clip_z, inv_w);
 }
 
 static inline struct Ps2GsPackedReg ps2_pack_screen_position(
@@ -1642,8 +1665,24 @@ static void ps2_input1_tex0_lerp_set_texture_state(void)
     ps2_apply_texture_clamp(0);
 }
 
-static void ps2_draw_opaque_trilerp(uint32_t vertex_count)
+static bool ps2_alpha_trilerp_sampler_states_match(void);
+
+static void ps2_draw_opaque_trilerp(uint32_t vertex_count, bool same_uv)
 {
+    /*
+     * lerp(T, T, lod) == T: when both taps are the same texture, sampler and
+     * coordinates (Fast3D maps plain mip LOD to one tile), the second pass
+     * only re-blends the first pass's own colour over itself. Draw once.
+     */
+    if (same_uv && s_sampler_linear[0] == s_sampler_linear[1] &&
+        ps2_alpha_trilerp_sampler_states_match()) {
+        ps2_trilerp_set_base_state();
+        ps2GsCoreDrawTexturedTriangles(
+            s_selected_texture[0], s_stq_vertices[0], vertex_count);
+        ps2_trilerp_restore_state();
+        return;
+    }
+
     /*
      * With a writing Z buffer, pass 0 establishes ownership for the complete
      * batch and pass 1 can safely use equal-depth rejection. Without that
@@ -2471,6 +2510,83 @@ static bool ps2_draw_tex0_factor_lerp_tile(
     ps2GsCoreSetAlphaBlend(s_alpha_blend);
     return ps2GsCoreDrawRenderTargetTriangles(
         s_alpha_trilerp_color_target, composite, 3u, false);
+}
+
+/*
+ * Text material: colour = lerp(INPUT2, INPUT1, TEXEL1.a), alpha =
+ * TEXEL0.a * INPUT1.a. Perfect Dark's font renderer samples the same CI4
+ * indices through palette 0 (tile 0) and palette 1 (tile 1), so the whole
+ * combiner folds into one 16-entry CLUT per colour pair: RGB is the lerp at
+ * palette-1 alpha, A is palette-0 alpha. One ordinary textured GS pass then
+ * replaces the tiled pass graph. Any batch that does not fit that shape
+ * returns false and takes the exact graph.
+ */
+static bool ps2_draw_text_blend_clut(uint32_t vertex_count)
+{
+    if (s_shader->plan.pass_graph != PS2_PASS_GRAPH_TEX1_ALPHA_FACTOR_LERP ||
+        s_shader->features.opt_fog || s_modulate || vertex_count == 0u) {
+        return false;
+    }
+    const Ps2GsTextureHandle h0 = s_selected_texture[0];
+    const Ps2GsTextureHandle h1 = s_selected_texture[1];
+    if (h0 >= PS2_GFX_TEXTURE_STATE_SLOTS ||
+        h1 >= PS2_GFX_TEXTURE_STATE_SLOTS) {
+        return false;
+    }
+    const struct Ps2TextureSamplerState *t0 = &s_texture_sampler[h0];
+    const struct Ps2TextureSamplerState *t1 = &s_texture_sampler[h1];
+    if (!t0->ci4_alpha_valid || !t1->ci4_alpha_valid ||
+        t0->source_hash != t1->source_hash ||
+        t0->logical_width != t1->logical_width ||
+        t0->logical_height != t1->logical_height ||
+        s_sampler_cms[0] != s_sampler_cms[1] ||
+        s_sampler_cmt[0] != s_sampler_cmt[1] ||
+        s_sampler_linear[0] != s_sampler_linear[1]) {
+        return false;
+    }
+
+    const struct Ps2Tex0FactorLerpVertex *v = s_tex0_factor_vertices;
+    for (uint32_t i = 0u; i < vertex_count; ++i) {
+        if (v[i].tex_u[0] != v[i].tex_u[1] ||
+            v[i].tex_v[0] != v[i].tex_v[1] ||
+            memcmp(v[i].input1, v[0].input1, 3u) != 0 ||
+            memcmp(v[i].input2, v[0].input2, 3u) != 0) {
+            return false;
+        }
+    }
+
+    uint32_t clut[16];
+    for (uint32_t i = 0u; i < 16u; ++i) {
+        const uint32_t f = t1->ci4_alpha[i];
+        uint32_t rgb = 0u;
+        for (uint32_t c = 0u; c < 3u; ++c) {
+            const uint32_t lerp = ((uint32_t)v[0].input2[c] * (255u - f) +
+                (uint32_t)v[0].input1[c] * f + 127u) / 255u;
+            rgb |= lerp << (8u * c);
+        }
+        clut[i] = rgb | ((uint32_t)t0->ci4_alpha[i] << 24u);
+    }
+
+    struct Ps2GsTexturedVertex *out = s_stq_vertices[0];
+    for (uint32_t i = 0u; i < vertex_count; ++i) {
+        out[i].rgbaq = ps2_pack_rgbaq(
+            0x80u, 0x80u, 0x80u, v[i].tex0_alpha_input, v[i].inv_w);
+        out[i].st = ps2_pack_st(
+            v[i].tex_u[0] * v[i].inv_w, v[i].tex_v[0] * v[i].inv_w);
+        out[i].xyz2 = ps2_pack_xyz2(v[i].x, v[i].y, v[i].z);
+    }
+    ps2_apply_texture_clamp(0);
+    ps2GsCoreSetTextureAlpha(true);
+    if (!ps2GsCoreDrawTextureClut4Triangles(h0, clut, out, vertex_count)) {
+        return false;
+    }
+    static bool s_logged_text_clut;
+    if (!s_logged_text_clut) {
+        sysLogPrintf(LOG_NOTE,
+            "GfxPS2 two-palette text material uses one GS pass (CI4 CLUT)");
+        s_logged_text_clut = true;
+    }
+    return true;
 }
 
 static bool ps2_draw_tex0_factor_lerp(uint32_t vertex_count)
@@ -4149,6 +4265,8 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
         float trace_max_u[2] = { -FLT_MAX, -FLT_MAX };
         float trace_max_v[2] = { -FLT_MAX, -FLT_MAX };
 
+        /* Opaque trilerp whose two samples are identical needs one pass. */
+        bool trilerp_same_uv = true;
         const uint64_t translation_start = sysGetMicroseconds();
         for (size_t i = 0; i < batch_vertices; ++i) {
             const float *src = &buf_vbo[(base_vertex + i) * stride];
@@ -4537,6 +4655,8 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
                 }
 
                 const uint8_t lod = ps2_modulate_component(input[0][0]);
+                trilerp_same_uv = trilerp_same_uv &&
+                    tex_u[0] == tex_u[1] && tex_v[0] == tex_v[1];
                 s_stq_vertices[0][i].rgbaq =
                     ps2_pack_rgbaq(shade_r, shade_g, shade_b, 0x80, inv_w);
                 s_stq_vertices[0][i].st =
@@ -4683,15 +4803,18 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
             (void)ps2_draw_interference(
                 (uint32_t)batch_vertices);
         } else if (texture_factor_lerp) {
-            (void)ps2_draw_tex0_factor_lerp(
-                (uint32_t)batch_vertices);
+            if (!ps2_draw_text_blend_clut((uint32_t)batch_vertices)) {
+                (void)ps2_draw_tex0_factor_lerp(
+                    (uint32_t)batch_vertices);
+            }
         } else if (alpha_trilerp) {
             (void)ps2_draw_alpha_trilerp((uint32_t)batch_vertices);
         } else if (independent_alpha_trilerp) {
             (void)ps2_draw_trilerp_independent_alpha(
                 (uint32_t)batch_vertices);
         } else if (opaque_trilerp) {
-            ps2_draw_opaque_trilerp((uint32_t)batch_vertices);
+            ps2_draw_opaque_trilerp((uint32_t)batch_vertices,
+                trilerp_same_uv);
         } else if (opaque_input1_tex0_lerp) {
             ps2_draw_opaque_input1_tex0_lerp((uint32_t)batch_vertices);
         } else if (s_shader->plan.textured) {
