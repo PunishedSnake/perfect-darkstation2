@@ -1446,8 +1446,20 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx* verti
      * copies the compiler reloads all sixteen matrix floats per vertex; the
      * aspect correction's division becomes one multiply by a constant.
      */
-    float m[4][4];
+    float m[4][4] __attribute__((aligned(16)));
     memcpy(m, rsp.MP_matrix, sizeof(m));
+#if defined(PLATFORM_PS2) && defined(_EE)
+    int32_t vtx_in[4] __attribute__((aligned(16))) = { 0, 0, 0, 1 };
+    float vtx_out[4] __attribute__((aligned(16)));
+    __asm__ __volatile__(
+        "lqc2    $vf4, 0(%0)\n\t"
+        "lqc2    $vf5, 16(%0)\n\t"
+        "lqc2    $vf6, 32(%0)\n\t"
+        "lqc2    $vf7, 48(%0)\n\t"
+        :
+        : "r"(m)
+        : "memory");
+#endif
     const bool aspect_adjust = !fbActive;
     const float aspect_ofs = rsp.aspect_ofs;
     const float aspect_k = rsp.aspect_scale / gfx_current_dimensions.aspect_ratio;
@@ -1488,6 +1500,28 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx* verti
         const Vtx* v = &vertices[i];
         struct LoadedVertex* d = &rsp.loaded_vertices[dest_index];
 
+#if defined(PLATFORM_PS2) && defined(_EE)
+        /* VU0 macro mode: ITOF + one MULA/MADDA/MADDA/MADD chain (vf4..vf7
+         * hold the matrix rows, loaded once before the loop). */
+        vtx_in[0] = v->v[0];
+        vtx_in[1] = v->v[1];
+        vtx_in[2] = v->v[2];
+        __asm__ __volatile__(
+            "lqc2    $vf1, 0(%1)\n\t"
+            "vitof0.xyz $vf1, $vf1\n\t"
+            "vmulax.xyzw  $ACC, $vf4, $vf1x\n\t"
+            "vmadday.xyzw $ACC, $vf5, $vf1y\n\t"
+            "vmaddaz.xyzw $ACC, $vf6, $vf1z\n\t"
+            "vmaddw.xyzw  $vf2, $vf7, $vf0w\n\t"
+            "sqc2    $vf2, 0(%0)\n\t"
+            :
+            : "r"(vtx_out), "r"(vtx_in)
+            : "memory");
+        float x = vtx_out[0];
+        float y = vtx_out[1];
+        float z = vtx_out[2];
+        float w = vtx_out[3];
+#else
         const float vx = v->v[0];
         const float vy = v->v[1];
         const float vz = v->v[2];
@@ -1495,6 +1529,7 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx* verti
         float y = vx * m[0][1] + vy * m[1][1] + vz * m[2][1] + m[3][1];
         float z = vx * m[0][2] + vy * m[1][2] + vz * m[2][2] + m[3][2];
         float w = vx * m[0][3] + vy * m[1][3] + vz * m[2][3] + m[3][3];
+#endif
 
         if (aspect_adjust) {
             x = (aspect_ofs * w + x) * aspect_k;
