@@ -103,6 +103,7 @@ extern "C" void ps2RendererTraceRequest(
     }
     if (!s_events || !s_qwords || !s_blob) {
         s_state = PS2_TRACE_IDLE;
+        g_ps2RendererTraceCapturing = 0;
         printf("RendererTrace: allocation FAILED\n");
         fflush(stdout);
         return;
@@ -112,6 +113,7 @@ extern "C" void ps2RendererTraceRequest(
     s_warmup_frames = warmup_frames;
     s_capture_profile = profile;
     s_state = PS2_TRACE_ARMED;
+    g_ps2RendererTraceCapturing = 0;
     printf("RendererTrace: armed stage=%u warmup=%u profile=%u "
            "events=%u qwords=%u blob=%u KiB\n",
         stage, warmup_frames, profile,
@@ -148,16 +150,16 @@ extern "C" void ps2RendererTraceBeginFrame(void)
     s_dropped_blob_bytes = 0u;
     s_frame_end_marked = false;
     s_state = PS2_TRACE_CAPTURING;
+    g_ps2RendererTraceCapturing = 1;
     ps2RendererTraceRecord(PS2_TRACE_FRAME_BEGIN, 0u,
         s_stage, s_frame_number, 0u, 0u);
 }
 
-extern "C" bool ps2RendererTraceIsCapturing(void)
-{
-    return s_state == PS2_TRACE_CAPTURING;
+extern "C" {
+int g_ps2RendererTraceCapturing;
 }
 
-extern "C" void ps2RendererTraceRecord(uint16_t type, uint16_t flags,
+extern "C" void ps2RendererTraceRecordImpl(uint16_t type, uint16_t flags,
     uint64_t a, uint64_t b, uint64_t c, uint64_t d)
 {
     if (s_state != PS2_TRACE_CAPTURING) {
@@ -180,7 +182,7 @@ extern "C" void ps2RendererTraceRecord(uint16_t type, uint16_t flags,
     event->d = d;
 }
 
-extern "C" void ps2RendererTraceRecordPath3Qwords(
+extern "C" void ps2RendererTraceRecordPath3QwordsImpl(
     const void *qwords, uint32_t count)
 {
     if (s_state != PS2_TRACE_CAPTURING || !qwords || count == 0u) {
@@ -207,7 +209,7 @@ extern "C" void ps2RendererTraceRecordPath3Qwords(
         offset, stored, count, 0u);
 }
 
-extern "C" void ps2RendererTraceRecordPath1Qwords(const void *qwords,
+extern "C" void ps2RendererTraceRecordPath1QwordsImpl(const void *qwords,
     uint32_t chain_qwords,
     uint32_t register_count, uint32_t vertex_count, bool textured)
 {
@@ -582,5 +584,6 @@ extern "C" bool ps2RendererTraceEndFrameAndWrite(void)
     fflush(stdout);
     ps2RendererTraceFreeBuffers();
     s_state = PS2_TRACE_IDLE;
+    g_ps2RendererTraceCapturing = 0;
     return ok;
 }
