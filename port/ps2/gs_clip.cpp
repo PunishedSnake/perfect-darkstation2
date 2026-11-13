@@ -37,7 +37,10 @@ unsigned int clipCode(const float *vertex)
 
 void copyVertex(float *destination, const float *source, size_t stride)
 {
-    std::memcpy(destination, source, stride * sizeof(float));
+    /* stride is small (<= 32 floats); a library memcpy call costs more. */
+    for (size_t component = 0u; component < stride; ++component) {
+        destination[component] = source[component];
+    }
 }
 
 void intersectEdge(float *destination, const float *from, const float *to,
@@ -103,26 +106,34 @@ bool ps2GsClipTriangle(const float *triangle, size_t stride,
     }
 
     /*
-     * Deliberately uninitialized: every polygon slot is written (copied or
-     * interpolated) before it is read, and only `stride` floats of a slot are
-     * ever touched. Zero-initialising both arrays cost a 2304-byte clear per
-     * clipped triangle, over a quarter of the R5900's 8 KiB data cache.
+     * Sutherland-Hodgman over vertex pointers: surviving vertices are never
+     * copied between planes, only new intersection points get storage.
+     * Planes that no input vertex violates are skipped; every clipped vertex
+     * is a convex combination of the inputs, so it cannot violate them
+     * either. The result is identical to clipping against all six planes.
      */
-    float polygon_a[PS2_GS_CLIP_MAX_POLYGON_VERTICES]
-        [PS2_GS_CLIP_MAX_VERTEX_FLOATS];
-    float polygon_b[PS2_GS_CLIP_MAX_POLYGON_VERTICES]
-        [PS2_GS_CLIP_MAX_VERTEX_FLOATS];
-    float (*input)[PS2_GS_CLIP_MAX_VERTEX_FLOATS] = polygon_a;
-    float (*output)[PS2_GS_CLIP_MAX_VERTEX_FLOATS] = polygon_b;
+    const unsigned int crossed =
+        clipCode(&triangle[0u * stride]) |
+        clipCode(&triangle[1u * stride]) |
+        clipCode(&triangle[2u * stride]);
+    constexpr size_t kPoolVertices = 2u * kClipPlaneCount;
+    float pool[kPoolVertices][PS2_GS_CLIP_MAX_VERTEX_FLOATS];
+    size_t pool_used = 0u;
+    const float *polygon_a[PS2_GS_CLIP_MAX_POLYGON_VERTICES];
+    const float *polygon_b[PS2_GS_CLIP_MAX_POLYGON_VERTICES];
+    const float **input = polygon_a;
+    const float **output = polygon_b;
     size_t input_count = 3u;
-
-    for (size_t vertex = 0u; vertex < input_count; ++vertex) {
-        copyVertex(input[vertex], &triangle[vertex * stride], stride);
-    }
+    input[0] = &triangle[0u * stride];
+    input[1] = &triangle[1u * stride];
+    input[2] = &triangle[2u * stride];
 
     for (size_t plane = 0u; plane < kClipPlaneCount; ++plane) {
         if (input_count == 0u) {
             break;
+        }
+        if ((crossed & (1u << plane)) == 0u) {
+            continue;
         }
 
         size_t output_count = 0u;
@@ -136,17 +147,20 @@ bool ps2GsClipTriangle(const float *triangle, size_t stride,
             const bool current_inside = current_distance >= 0.0f;
 
             if (previous_inside != current_inside) {
-                if (output_count >= PS2_GS_CLIP_MAX_POLYGON_VERTICES) {
+                if (output_count >= PS2_GS_CLIP_MAX_POLYGON_VERTICES ||
+                    pool_used >= kPoolVertices) {
                     return false;
                 }
-                intersectEdge(output[output_count++], previous, current,
+                float *point = pool[pool_used++];
+                intersectEdge(point, previous, current,
                     previous_distance, current_distance, stride);
+                output[output_count++] = point;
             }
             if (current_inside) {
                 if (output_count >= PS2_GS_CLIP_MAX_POLYGON_VERTICES) {
                     return false;
                 }
-                copyVertex(output[output_count++], current, stride);
+                output[output_count++] = current;
             }
 
             previous = current;
@@ -155,7 +169,7 @@ bool ps2GsClipTriangle(const float *triangle, size_t stride,
         }
 
         input_count = output_count;
-        float (*swap)[PS2_GS_CLIP_MAX_VERTEX_FLOATS] = input;
+        const float **swap = input;
         input = output;
         output = swap;
     }
