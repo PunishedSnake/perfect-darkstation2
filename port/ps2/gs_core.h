@@ -51,11 +51,19 @@ enum Ps2GsAlphaTestComparison {
     PS2_GS_ALPHA_TEST_LEQUAL,
 };
 
+enum Ps2GsOutputMode {
+    PS2_GS_OUTPUT_480I = 0, /* region default (NTSC 480i / PAL 576i) */
+    PS2_GS_OUTPUT_480P,
+    PS2_GS_OUTPUT_1080I,
+    PS2_GS_OUTPUT_COUNT
+};
+
 struct Ps2GsCreateInfo {
     int color_psm;
     int depth_psm;
     bool z_buffering;
     bool dithering;
+    int output_mode; /* enum Ps2GsOutputMode */
 };
 
 typedef uint16_t Ps2GsTextureHandle;

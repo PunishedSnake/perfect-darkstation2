@@ -31,18 +31,12 @@
 
 #define PS2_VIF1_DMAC_CHCR (*(volatile uint32_t *)0x10009000u)
 
-struct Ps2GsVu1QueueSlot {
-    void *canonical;
-    uint32_t *ucab;
-};
 
 extern "C" uint32_t Ps2GsVu1ColorPathCodeStart;
 extern "C" uint32_t Ps2GsVu1ColorPathCodeEnd;
 extern "C" uint32_t Ps2GsVu1TexturedTransformCodeStart;
 extern "C" uint32_t Ps2GsVu1TexturedTransformCodeEnd;
 
-static struct Ps2GsVu1QueueSlot s_slots[2];
-static uint32_t s_build_slot;
 static bool s_initialized;
 static bool s_enabled;
 static bool s_pending;
@@ -81,11 +75,6 @@ static void ps2GsVu1QueueRelease(void)
         s_initialized = false;
         s_enabled = false;
         return;
-    }
-    for (uint32_t i = 0; i < 2u; ++i) {
-        free(s_slots[i].canonical);
-        s_slots[i].canonical = NULL;
-        s_slots[i].ucab = NULL;
     }
     s_initialized = false;
     s_enabled = false;
@@ -272,18 +261,6 @@ extern "C" bool ps2GsVu1QueueInit(void)
         return true;
     }
 
-    memset(s_slots, 0, sizeof(s_slots));
-    const size_t slot_bytes = (size_t)PS2_GS_VU1_DMA_SLOT_QW * 16u;
-    for (uint32_t i = 0; i < 2u; ++i) {
-        s_slots[i].canonical = memalign(64, slot_bytes);
-        if (!s_slots[i].canonical) {
-            ps2GsVu1QueueRelease();
-            return false;
-        }
-        s_slots[i].ucab = (uint32_t *)UCAB_SEG(s_slots[i].canonical);
-        memset(s_slots[i].ucab, 0, slot_bytes);
-    }
-
     if (!ps2GsVu1QueueUploadProgram(
             &Ps2GsVu1ColorPathCodeStart,
             &Ps2GsVu1ColorPathCodeEnd,
@@ -297,7 +274,6 @@ extern "C" bool ps2GsVu1QueueInit(void)
         return false;
     }
 
-    s_build_slot = 0u;
     s_pending = false;
     s_initialized = true;
     s_enabled = true;
@@ -328,6 +304,15 @@ extern "C" bool ps2GsVu1QueueEnabled(void)
 #endif
 }
 
+extern "C" void ps2GsVu1QueueMarkPending(void)
+{
+#if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
+    if (s_initialized) {
+        s_pending = true;
+    }
+#endif
+}
+
 extern "C" bool ps2GsVu1QueueWaitIdle(void)
 {
 #if !defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
@@ -340,19 +325,6 @@ extern "C" bool ps2GsVu1QueueWaitIdle(void)
         return false;
     }
     s_pending = false;
-    return true;
-#endif
-}
-
-extern "C" bool ps2GsVu1QueueSetEnabled(bool enabled)
-{
-#if !defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
-    return !enabled;
-#else
-    if (!s_initialized || !ps2GsVu1QueueWaitIdle()) {
-        return false;
-    }
-    s_enabled = enabled;
     return true;
 #endif
 }
@@ -382,57 +354,31 @@ extern "C" bool ps2GsVu1QueueSubmitAd(
         return false;
     }
 
-    /*
-     * Publish every earlier PATH3 state write first. FLUSHA in the VIF stream
-     * then orders PATH1 after that state without a GS FINISH token.
-     */
-    bool vif_idle_after_path3 = false;
-    if (!ps2GsNativeQueueSubmitForPath1(&vif_idle_after_path3)) {
+    /* Appended to the shared VIF1 chain: ordering is the chain's job. */
+    uint32_t *payload = ps2GsNativeQueueReserveVu1Batch(layout.gif_packet_qw, 0u);
+    if (!payload) {
         return false;
     }
-    ps2GsNativeQueueBeginFrame();
-
-    struct Ps2GsVu1QueueSlot *slot = &s_slots[s_build_slot];
-    const uint32_t payload_dma_address =
-        (uint32_t)(uintptr_t)slot->canonical +
-        PS2_GS_VU1_DMA_CHAIN_OVERHEAD_QW * 16u;
-    if (!ps2GsVu1BuildAdBatchStream(
-            slot->ucab, PS2_GS_VU1_DMA_SLOT_QW, payload_dma_address,
-            prefix, prefix_count, records, record_count,
-            suffix, suffix_count, &layout)) {
-        return false;
+    uint8_t *out = (uint8_t *)payload;
+    const uint64_t gif_tag = ((uint64_t)layout.register_count) |
+        ((uint64_t)1u << 15) | ((uint64_t)1u << 60);
+    const uint64_t gif_reg = 0x0eu; /* A+D */
+    memcpy(out, &gif_tag, sizeof(gif_tag));
+    memcpy(out + 8, &gif_reg, sizeof(gif_reg));
+    out += 16u;
+    if (prefix_count != 0u) {
+        memcpy(out, prefix, (size_t)prefix_count * sizeof(*prefix));
+        out += (size_t)prefix_count * sizeof(*prefix);
     }
-
-    if (ps2GsPath1NeedsVifWait(vif_idle_after_path3)) {
-        if (!ps2GsVu1QueueWaitVifIdle()) {
-            return false;
-        }
-    } else {
-        ps2RendererStatsRecordVu1WaitElided();
+    memcpy(out, records, (size_t)record_count * sizeof(*records));
+    out += (size_t)record_count * sizeof(*records);
+    if (suffix_count != 0u) {
+        memcpy(out, suffix, (size_t)suffix_count * sizeof(*suffix));
     }
-    ps2RendererTraceRecordPath1Qwords(slot->ucab, layout.dma_chain_qw,
+    ps2RendererTraceRecordPath1Qwords(payload, layout.gif_packet_qw,
         layout.register_count, record_count / 2u, false);
-    ps2GsNativeQueueWaitPendingFlip();
-    dmaKit_send_chain_ucab(DMA_CHANNEL_VIF1, slot->ucab);
-    s_pending = true;
-    s_build_slot ^= 1u;
     return true;
 #endif
-}
-
-extern "C" bool ps2GsVu1QueueSubmitColor(
-    const struct Ps2GsPackedReg *prim, bool emit_prim,
-    const struct Ps2GsColorVertex *vertices, uint32_t vertex_count)
-{
-    if (!vertices || vertex_count == 0u ||
-        vertex_count > PS2_GS_VU1_MAX_COLOR_VERTICES ||
-        vertex_count % 3u != 0u) {
-        return false;
-    }
-    return ps2GsVu1QueueSubmitAd(
-        emit_prim ? prim : NULL, emit_prim ? 1u : 0u,
-        &vertices[0].rgbaq, vertex_count * 2u,
-        NULL, 0u);
 }
 
 extern "C" bool ps2GsVu1QueueSubmitTexturedTransform(
@@ -459,41 +405,25 @@ extern "C" bool ps2GsVu1QueueSubmitTexturedTransform(
         return false;
     }
 
-    /* Preserve earlier PATH3 state before the validation FLUSHA transition. */
-    bool vif_idle_after_path3 = false;
-    if (!ps2GsNativeQueueSubmitForPath1(&vif_idle_after_path3)) {
+    struct Ps2GsVu1TransformLayout planned;
+    if (!ps2GsVu1PlanTexturedTransform(
+            vertex_count, prefix_count, suffix_count, &planned) ||
+        (flags & ~PS2_GS_VU1_TRANSFORM_FLAG_FOG) != 0u) {
         return false;
     }
-    ps2GsNativeQueueBeginFrame();
-
-    struct Ps2GsVu1QueueSlot *slot = &s_slots[s_build_slot];
-    const uint32_t payload_dma_address =
-        (uint32_t)(uintptr_t)slot->canonical +
-        PS2_GS_VU1_DMA_CHAIN_OVERHEAD_QW * 16u;
-    struct Ps2GsVu1TransformLayout trace_layout;
-    if (!ps2GsVu1BuildTexturedTransformStream(
-            slot->ucab, PS2_GS_VU1_DMA_SLOT_QW,
-            payload_dma_address, scale, offset, flags,
-            prefix, prefix_count, vertices, vertex_count,
-            suffix, suffix_count, &trace_layout)) {
+    uint32_t *payload = ps2GsNativeQueueReserveVu1Batch(planned.input_qw,
+        PS2_GS_VU1_TRANSFORM_PROGRAM_ADDRESS);
+    if (!payload) {
         return false;
     }
-
-    if (ps2GsPath1NeedsVifWait(vif_idle_after_path3)) {
-        if (!ps2GsVu1QueueWaitVifIdle()) {
-            return false;
-        }
-    } else {
-        ps2RendererStatsRecordVu1WaitElided();
-    }
-    ps2RendererTraceRecordPath1Qwords(slot->ucab,
-        trace_layout.dma_chain_qw,
+    /* Inputs were validated by the planner; the builder cannot fail now. */
+    (void)ps2GsVu1BuildTexturedTransformPayload(
+        payload, planned.input_qw, scale, offset, flags,
+        prefix, prefix_count, vertices, vertex_count,
+        suffix, suffix_count, NULL);
+    ps2RendererTraceRecordPath1Qwords(payload, planned.input_qw,
         prefix_count + suffix_count + vertex_count * 3u,
         vertex_count, true);
-    ps2GsNativeQueueWaitPendingFlip();
-    dmaKit_send_chain_ucab(DMA_CHANNEL_VIF1, slot->ucab);
-    s_pending = true;
-    s_build_slot ^= 1u;
     return true;
 #endif
 }

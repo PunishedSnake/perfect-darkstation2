@@ -467,11 +467,6 @@ u64 sysGetMicroseconds(void)
     return now >= startUsec ? now - startUsec : 0;
 }
 
-s32 sysLogIsOpen(void)
-{
-    return logFile != NULL;
-}
-
 void sysLogPrintf(s32 level, const char *fmt, ...)
 {
     static const char *const label[] = { "INFO", "WARN", "ERROR" };
@@ -627,15 +622,6 @@ void sysSleep(const s64 hns)
     }
 }
 
-void sysCpuRelax(void)
-{
-    /*
-     * Keep this a true spin hint for now. Turning it into a scheduler yield
-     * would change call-site behaviour and needs workload evidence first.
-     */
-    __asm__ volatile("nop");
-}
-
 bool g_CrashEnabled = false;
 
 void crashInit(void)
@@ -649,18 +635,8 @@ void crashCreateThread(void)
     /* The portable crash monitor is a desktop service, not an EE thread. */
 }
 
-void crashSetMessage(char *string)
-{
-    (void)string;
-}
-
 void crashReset(void)
 {
-}
-
-void crashAppendChar(char c)
-{
-    (void)c;
 }
 
 void crashShutdown(void)

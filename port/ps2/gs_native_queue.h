@@ -43,6 +43,13 @@ bool ps2GsNativeQueueSubmit(void);
  * its normal late VIF1 ownership wait.
  */
 bool ps2GsNativeQueueSubmitForPath1(bool *vif_idle_after_submit);
+/*
+ * Append one VU1 batch to the open VIF1 chain: V4-32 UNPACK of input_qw
+ * quadwords into the TOPS bank, then MSCAL program_address. Returns the
+ * payload to fill, or NULL when the arena cannot hold it.
+ */
+uint32_t *ps2GsNativeQueueReserveVu1Batch(uint32_t input_qw,
+    uint32_t program_address);
 
 /*
  * Submit one native GS FINISH token after all earlier PATH3 traffic and wait
@@ -98,7 +105,6 @@ bool ps2GsNativeQueueReadbackTexture(
 
 uint32_t ps2GsNativeQueueUsedQwords(void);
 uint32_t ps2GsNativeQueueCapacityQwords(void);
-bool ps2GsNativeQueueOverflowed(void);
 
 /* Block until the scanout flip queued by the last Present has latched. Any
  * DMA kick that can write the draw framebuffer must call this first. */

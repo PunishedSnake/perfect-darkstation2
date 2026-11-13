@@ -52,12 +52,42 @@ static union {
       PS2_GS_READBACK_VIF1_NOP }
 };
 
+/*
+ * Each command arena is one VIF1 source chain. GIF packets are carried in
+ * DIRECT (PATH2) segments; VU1 batches (UNPACK + MSCAL, PATH1) are appended
+ * between them in program order. VIF1 executes the chain sequentially, so
+ * PATH1/PATH2 ordering needs no EE-side handshakes:
+ *   - FLUSHA before every MSCAL that follows GIF data drains PATH2/PATH3,
+ *   - FLUSH before every DIRECT that follows a VU1 batch waits for the
+ *     microprogram and its XGKICK to finish.
+ * IMAGE uploads, present and FINISH still use the GIF channel (PATH3); they
+ * synchronise with the VIF1 stream only at those points.
+ */
+#define PS2_DMA_TAG_ID_CNT 1u
+#define PS2_DMA_TAG_ID_END 7u
+#define PS2_VIF_NOP 0x00u
+#define PS2_VIF_STCYCL 0x01u
+#define PS2_VIF_FLUSH 0x11u
+#define PS2_VIF_FLUSHA 0x13u
+#define PS2_VIF_MSCAL 0x14u
+#define PS2_VIF_DIRECT 0x50u
+#define PS2_VIF_UNPACK_V4_32 0x6cu
+#define PS2_VIF_UNPACK_FLAG_TOPS 0x8000u
+#define PS2_VIF_DIRECT_MAX_QW 0xffffu
+#define PS2_GS_NATIVE_SEGMENT_NONE UINT32_MAX
+/* END tag plus one segment tag always fit after a successful reservation. */
+#define PS2_GS_NATIVE_TAIL_QW 2u
+
 struct Ps2GsNativeArena {
     void *canonical;
     uint64_t *ucab;
     uint32_t capacity_qw;
     uint32_t used_qw;
     bool overflowed;
+    uint32_t open_tag_qw;   /* DIRECT segment tag being filled */
+    uint32_t open_qw;       /* GIF qwords in the open segment */
+    bool last_was_vu1;      /* next DIRECT needs FLUSH */
+    bool has_gif_since_vu1; /* next MSCAL needs FLUSHA */
 };
 
 struct Ps2GsNativeUploadSlot {
@@ -78,6 +108,47 @@ static bool s_initialized;
 
 static_assert(sizeof(struct Ps2GsPackedReg) == 16,
     "native A+D records must occupy exactly one GIF quadword");
+
+static inline uint32_t ps2VifCode(uint32_t immediate, uint32_t num,
+    uint32_t command)
+{
+    return (immediate & 0xffffu) | ((num & 0xffu) << 16) |
+        ((command & 0x7fu) << 24);
+}
+
+static inline void ps2GsNativeWriteTag(uint64_t *qw, uint32_t qwc,
+    uint32_t id, uint32_t vif0, uint32_t vif1)
+{
+    qw[0] = (uint64_t)(qwc & 0xffffu) | ((uint64_t)(id & 7u) << 28);
+    qw[1] = (uint64_t)vif0 | ((uint64_t)vif1 << 32);
+}
+
+static void ps2GsNativeCloseSegment(struct Ps2GsNativeArena *arena)
+{
+    if (arena->open_tag_qw == PS2_GS_NATIVE_SEGMENT_NONE) {
+        return;
+    }
+    uint64_t *tag = arena->ucab + (size_t)arena->open_tag_qw * 2u;
+    ps2RendererTraceRecordPath3Qwords(tag + 2, arena->open_qw);
+    ps2GsNativeWriteTag(tag, arena->open_qw, PS2_DMA_TAG_ID_CNT,
+        ps2VifCode(0u, 0u, arena->last_was_vu1 ? PS2_VIF_FLUSH : PS2_VIF_NOP),
+        ps2VifCode(arena->open_qw, 0u, PS2_VIF_DIRECT));
+    arena->open_tag_qw = PS2_GS_NATIVE_SEGMENT_NONE;
+    arena->open_qw = 0u;
+    arena->last_was_vu1 = false;
+    arena->has_gif_since_vu1 = true;
+}
+
+static void ps2GsNativeResetArena(struct Ps2GsNativeArena *arena)
+{
+    arena->used_qw = 0u;
+    arena->overflowed = false;
+    arena->open_tag_qw = PS2_GS_NATIVE_SEGMENT_NONE;
+    arena->open_qw = 0u;
+    /* The previous chain may end in a VU1 batch still kicking. */
+    arena->last_was_vu1 = true;
+    arena->has_gif_since_vu1 = true;
+}
 
 static uint64_t ps2GifPackedAdTag(uint32_t nloop)
 {
@@ -220,6 +291,7 @@ extern "C" bool ps2GsNativeQueueInit(uint32_t qwords_per_buffer)
         s_arenas[i].canonical = canonical;
         s_arenas[i].ucab = (uint64_t *)UCAB_SEG(canonical);
         s_arenas[i].capacity_qw = qwords_per_buffer;
+        ps2GsNativeResetArena(&s_arenas[i]);
     }
 
     const size_t upload_chain_bytes = (size_t)PS2_GS_UPLOAD_CHAIN_QW * 16u;
@@ -283,9 +355,7 @@ extern "C" void ps2GsNativeQueueBeginFrame(void)
         return;
     }
 
-    struct Ps2GsNativeArena *arena = &s_arenas[s_build_arena];
-    arena->used_qw = 0;
-    arena->overflowed = false;
+    ps2GsNativeResetArena(&s_arenas[s_build_arena]);
 }
 
 extern "C" struct Ps2GsPackedReg *ps2GsNativeQueueReserveAd(uint32_t reg_count)
@@ -296,8 +366,15 @@ extern "C" struct Ps2GsPackedReg *ps2GsNativeQueueReserveAd(uint32_t reg_count)
 
     struct Ps2GsNativeArena *arena = &s_arenas[s_build_arena];
     const uint32_t packet_qw = reg_count + 1u;
-    if (arena->used_qw > arena->capacity_qw ||
-        packet_qw > arena->capacity_qw - arena->used_qw) {
+    if (arena->open_tag_qw != PS2_GS_NATIVE_SEGMENT_NONE &&
+        arena->open_qw + packet_qw > PS2_VIF_DIRECT_MAX_QW) {
+        ps2GsNativeCloseSegment(arena);
+    }
+    const uint32_t tag_qw =
+        arena->open_tag_qw == PS2_GS_NATIVE_SEGMENT_NONE ? 1u : 0u;
+    if (arena->used_qw + PS2_GS_NATIVE_TAIL_QW > arena->capacity_qw ||
+        packet_qw + tag_qw >
+            arena->capacity_qw - PS2_GS_NATIVE_TAIL_QW - arena->used_qw) {
         if (!arena->overflowed) {
             sysLogPrintf(LOG_ERROR,
                 "GS native queue: overflow used=%u request=%u capacity=%u QW",
@@ -306,13 +383,58 @@ extern "C" struct Ps2GsPackedReg *ps2GsNativeQueueReserveAd(uint32_t reg_count)
         }
         return NULL;
     }
+    if (tag_qw) {
+        arena->open_tag_qw = arena->used_qw++;
+        arena->open_qw = 0u;
+    }
 
     uint64_t *packet = arena->ucab + (size_t)arena->used_qw * 2u;
     packet[0] = ps2GifPackedAdTag(reg_count);
     packet[1] = PS2_GIF_REG_AD;
 
     arena->used_qw += packet_qw;
+    arena->open_qw += packet_qw;
     return (struct Ps2GsPackedReg *)(packet + 2);
+}
+
+extern "C" uint32_t *ps2GsNativeQueueReserveVu1Batch(uint32_t input_qw,
+    uint32_t program_address)
+{
+    if (!s_initialized || input_qw == 0u || input_qw > 256u) {
+        return NULL;
+    }
+    struct Ps2GsNativeArena *arena = &s_arenas[s_build_arena];
+    ps2GsNativeCloseSegment(arena);
+    const uint32_t need_qw = input_qw + 2u;
+    if (arena->used_qw + PS2_GS_NATIVE_TAIL_QW > arena->capacity_qw ||
+        need_qw > arena->capacity_qw - PS2_GS_NATIVE_TAIL_QW -
+            arena->used_qw) {
+        return NULL; /* caller falls back to PATH2 or flushes */
+    }
+
+    uint64_t *unpack = arena->ucab + (size_t)arena->used_qw * 2u;
+    ps2GsNativeWriteTag(unpack, input_qw, PS2_DMA_TAG_ID_CNT,
+        ps2VifCode(0x0101u, 0u, PS2_VIF_STCYCL),
+        ps2VifCode(PS2_VIF_UNPACK_FLAG_TOPS, input_qw == 256u ? 0u : input_qw,
+            PS2_VIF_UNPACK_V4_32));
+    uint64_t *mscal = unpack + 2u + (size_t)input_qw * 2u;
+    ps2GsNativeWriteTag(mscal, 0u, PS2_DMA_TAG_ID_CNT,
+        ps2VifCode(0u, 0u,
+            arena->has_gif_since_vu1 ? PS2_VIF_FLUSHA : PS2_VIF_NOP),
+        ps2VifCode(program_address, 0u, PS2_VIF_MSCAL));
+    arena->used_qw += need_qw;
+    arena->last_was_vu1 = true;
+    arena->has_gif_since_vu1 = false;
+    return (uint32_t *)(unpack + 2u);
+}
+
+/* Bounded wait for the VIF1 chain, VU1 and their GIF hand-off to finish. */
+static bool ps2GsNativeWaitVif1Idle(void)
+{
+    if (!ps2GsVu1QueueWaitIdle()) {
+        return false;
+    }
+    return dmaKit_wait(DMA_CHANNEL_VIF1, 0) >= 0;
 }
 
 static bool ps2GsNativeQueueUploadTextureInternal(GSGLOBAL *gs,
@@ -533,7 +655,7 @@ static bool ps2GsNativeQueueUploadTextureInternal(GSGLOBAL *gs,
      */
     const uint64_t upload_wait_start = ps2RendererTraceIsCapturing()
         ? sysGetMicroseconds() : 0u;
-    const bool upload_vu1_idle = ps2GsVu1QueueWaitIdle();
+    const bool upload_vu1_idle = ps2GsNativeWaitVif1Idle();
     const int upload_gif_wait = upload_vu1_idle
         ? dmaKit_wait(DMA_CHANNEL_GIF, 0) : -1;
     if (ps2RendererTraceIsCapturing()) {
@@ -714,42 +836,43 @@ static bool ps2GsNativeQueueSubmitInternal(bool *vif_idle_after_submit)
     }
 
     /*
-     * Ownership barrier only for the GIF DMA channel. Unlike current gsKit
-     * queue_exec this does not append or wait for GS FINISH. With two arenas,
-     * EE packet construction can proceed in the other buffer while PATH3 owns
-     * this one. A busy channel is waited only when a new submit actually needs
-     * to claim it. Texture IMAGE transfers use the same rule, so their TEXFLUSH
-     * is ordered before any dependent draw chain submitted here.
+     * The previous arena's chain must have been fetched before its storage
+     * flips back, and any PATH3 IMAGE transfer must be fully handed to GIF
+     * before PATH2 draws that sample it can start. Neither waits on the GS.
      */
+    ps2GsNativeCloseSegment(arena);
+    ps2GsNativeWriteTag(arena->ucab + (size_t)arena->used_qw * 2u, 0u,
+        PS2_DMA_TAG_ID_END, ps2VifCode(0u, 0u, PS2_VIF_FLUSH),
+        ps2VifCode(0u, 0u, PS2_VIF_NOP));
+    const uint32_t chain_qw = arena->used_qw + 1u;
+
     const uint64_t submit_wait_start = ps2RendererTraceIsCapturing()
         ? sysGetMicroseconds() : 0u;
-    const bool submit_vu1_idle = ps2GsVu1QueueWaitIdle();
-    const int submit_gif_wait = submit_vu1_idle
+    const bool submit_vif_idle = ps2GsNativeWaitVif1Idle();
+    const int submit_gif_wait = submit_vif_idle
         ? dmaKit_wait(DMA_CHANNEL_GIF, 0) : -1;
     if (ps2RendererTraceIsCapturing()) {
         const uint64_t submit_wait_end = sysGetMicroseconds();
         ps2RendererTraceRecord(PS2_TRACE_QUEUE_WAIT,
             (uint16_t)(0u |
-                ((!submit_vu1_idle || submit_gif_wait < 0)
+                ((!submit_vif_idle || submit_gif_wait < 0)
                     ? PS2_TRACE_FLAG_DROPPED : 0u)),
             submit_wait_end - submit_wait_start,
-            arena->used_qw, s_build_arena,
+            chain_qw, s_build_arena,
             vif_idle_after_submit ? 1u : 0u);
     }
-    if (!submit_vu1_idle || submit_gif_wait < 0) {
+    if (!submit_vif_idle || submit_gif_wait < 0) {
         return false;
     }
     if (vif_idle_after_submit) {
         *vif_idle_after_submit = true;
     }
 
-    /* Copy before handing ownership to DMAC. Diagnostic capture is one frame
-     * and intentionally pays this cost so the host decoder sees the exact
-     * ordered PATH3 stream consumed by GIF. */
-    ps2RendererTraceRecordPath3Qwords(arena->ucab, arena->used_qw);
     ps2GsNativeQueueWaitPendingFlip();
-    dmaKit_send_ucab(DMA_CHANNEL_GIF, arena->ucab, arena->used_qw);
+    ps2GsVu1QueueMarkPending();
+    dmaKit_send_chain_ucab(DMA_CHANNEL_VIF1, arena->ucab);
     s_build_arena ^= 1u;
+    ps2GsNativeResetArena(&s_arenas[s_build_arena]);
     return true;
 }
 
@@ -781,7 +904,7 @@ extern "C" bool ps2GsNativeQueueWaitGs(void)
      */
     const bool trace_capture = ps2RendererTraceIsCapturing();
     const uint64_t wait_start = trace_capture ? sysGetMicroseconds() : 0u;
-    const bool vu1_idle = ps2GsVu1QueueWaitIdle();
+    const bool vu1_idle = ps2GsNativeWaitVif1Idle();
     const int ownership_wait = vu1_idle
         ? dmaKit_wait(DMA_CHANNEL_GIF, 0) : -1;
     const uint64_t ownership_end =
@@ -884,7 +1007,7 @@ extern "C" bool ps2GsNativeQueuePresent(GSGLOBAL *gs)
     }
 
     /* Own the tiny dynamic packet before rewriting its UCAB storage. */
-    if (!ps2GsVu1QueueWaitIdle() ||
+    if (!ps2GsNativeWaitVif1Idle() ||
         dmaKit_wait(DMA_CHANNEL_GIF, 0) < 0) {
         return false;
     }
@@ -949,7 +1072,3 @@ extern "C" uint32_t ps2GsNativeQueueCapacityQwords(void)
     return s_initialized ? s_arenas[s_build_arena].capacity_qw : 0;
 }
 
-extern "C" bool ps2GsNativeQueueOverflowed(void)
-{
-    return s_initialized && s_arenas[s_build_arena].overflowed;
-}

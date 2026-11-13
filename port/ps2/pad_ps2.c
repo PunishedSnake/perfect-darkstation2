@@ -361,25 +361,6 @@ bool ps2PadInit(void)
     return s_pad_initialized;
 }
 
-void ps2PadShutdown(void)
-{
-    if (!s_pad_rpc_initialized) {
-        return;
-    }
-
-    for (int player = 0; player < PS2_PAD_MAX_PLAYERS; ++player) {
-        if (s_ports[player].opened) {
-            ps2PadSetRumble(player, 0, 0);
-            padPortClose(player, 0);
-            s_ports[player].opened = false;
-        }
-    }
-
-    padEnd();
-    s_pad_rpc_initialized = false;
-    s_pad_initialized = false;
-}
-
 void ps2PadUpdate(void)
 {
     if (!s_pad_initialized) {
@@ -397,29 +378,6 @@ const struct Ps2PadState *ps2PadGetState(int player)
         return NULL;
     }
     return &s_ports[player].state;
-}
-
-bool ps2PadGetDiagnostics(int player, struct Ps2PadDiagnostics *diagnostics)
-{
-    if (!diagnostics || player < 0 || player >= PS2_PAD_MAX_PLAYERS) {
-        return false;
-    }
-
-    const struct Ps2PadPort *port = &s_ports[player];
-    diagnostics->backend_initialized = s_pad_rpc_initialized;
-    diagnostics->port_open = port->opened;
-    diagnostics->transport_ready =
-        port->stage == PS2_PAD_STAGE_READY &&
-        (port->last_libpad_state == PAD_STATE_STABLE ||
-         port->last_libpad_state == PAD_STATE_FINDCTP1);
-    diagnostics->read_ok = port->read_ok;
-    diagnostics->libpad_state = port->last_libpad_state;
-    diagnostics->configure_stage = (uint8_t)port->stage;
-    diagnostics->successful_reads = port->successful_reads;
-    diagnostics->raw_held = port->state.held;
-    diagnostics->sio2_module_result = s_sio2_module_result;
-    diagnostics->pad_module_result = s_pad_module_result;
-    return true;
 }
 
 void ps2PadSetRumble(int player, uint8_t small_motor, uint8_t large_motor)

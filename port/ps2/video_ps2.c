@@ -14,6 +14,7 @@
 #include "gfx_ps2.h"
 #include "gfx_window_ps2.h"
 #include "gs_core.h"
+#include "pad_ps2.h"
 
 /*
  * Perfect Dark video API for PlayStation 2.
@@ -50,8 +51,61 @@ static s32 s_detail_textures = true;
 static f32 s_glare_brightness = 1.0f;
 static f32 s_overexposure_scale = 1.0f;
 
-static displaymode s_display_modes[2];
-static s32 s_display_mode_count = 1;
+static s32 s_output_mode = PS2_GS_OUTPUT_480I;
+static s32 s_active_output_mode = PS2_GS_OUTPUT_480I;
+
+/*
+ * Escape hatch for a TV that cannot show the configured 480p/1080i signal:
+ * holding START+TRIANGLE on pad 1 while the game boots forces 480i. Pads
+ * need a few hundred milliseconds after open, so poll briefly.
+ */
+static bool ps2VideoSafeModeHeld(void)
+{
+    const u64 deadline = sysGetMicroseconds() + 800000u;
+    do {
+        ps2PadUpdate();
+        const struct Ps2PadState *pad = ps2PadGetState(0);
+        if (pad && pad->connected &&
+            (pad->held & (PS2_PAD_START | PS2_PAD_TRIANGLE)) ==
+                (PS2_PAD_START | PS2_PAD_TRIANGLE)) {
+            return true;
+        }
+        const u64 wait_until = sysGetMicroseconds() + 16000u;
+        while (sysGetMicroseconds() < wait_until) {
+        }
+    } while (sysGetMicroseconds() < deadline);
+    return false;
+}
+
+s32 videoPs2OutputModeCount(void)
+{
+    return PS2_GS_OUTPUT_COUNT;
+}
+
+const char *videoPs2OutputModeName(s32 mode)
+{
+    static const char *names[PS2_GS_OUTPUT_COUNT] = {
+        "480i (Composite)", "480p (Component)", "1080i (Component)",
+    };
+    return mode >= 0 && mode < PS2_GS_OUTPUT_COUNT ? names[mode] : "";
+}
+
+s32 videoPs2GetOutputMode(void)
+{
+    return s_output_mode;
+}
+
+s32 videoPs2GetActiveOutputMode(void)
+{
+    return s_active_output_mode;
+}
+
+void videoPs2SetOutputMode(s32 mode)
+{
+    if (mode >= 0 && mode < PS2_GS_OUTPUT_COUNT) {
+        s_output_mode = mode; /* takes effect at the next boot */
+    }
+}
 
 static f64 s_last_frame_time;
 static f64 s_fps_deadline;
@@ -70,21 +124,6 @@ static void ps2VideoApplyAspect(void)
     gfxPs2WindowSetDisplayAspect(ps2VideoAspectValue());
 }
 
-static void ps2VideoRefreshModeList(void)
-{
-    s_display_modes[0].width = 0;
-    s_display_modes[0].height = 0;
-    s_display_mode_count = 1;
-
-    if (!ps2GsCoreIsReady()) {
-        return;
-    }
-
-    s_display_modes[1].width = ps2GsCoreGetWidth();
-    s_display_modes[1].height = ps2GsCoreGetHeight();
-    s_display_mode_count = 2;
-}
-
 s32 videoInit(void)
 {
     /* VI starts blank and explicitly unblacks after the first scheduled task. */
@@ -92,12 +131,19 @@ s32 videoInit(void)
     ps2ScreenLogStop();
 
     if (!ps2GsCoreIsReady()) {
+        if (s_output_mode != PS2_GS_OUTPUT_480I && ps2VideoSafeModeHeld()) {
+            sysLogPrintf(LOG_WARNING,
+                "VideoPS2: START+TRIANGLE held at boot, falling back to 480i");
+            s_output_mode = PS2_GS_OUTPUT_480I;
+        }
         const struct Ps2GsCreateInfo gs_info = {
             PS2_GS_PSM_CT16,
             PS2_GS_PSMZ_16,
             true,
             true,
+            s_output_mode,
         };
+        s_active_output_mode = s_output_mode;
 
         if (!ps2GsCoreInit(&gs_info)) {
             sysLogPrintf(LOG_ERROR, "VideoPS2: GS core initialisation failed");
@@ -148,8 +194,6 @@ s32 videoInit(void)
     gfx_set_texture_filter((enum FilteringMode)s_texture_filter);
     gfx_set_mipmap_filter(MIPMAP_DISABLED);
     gfx_ps2_api.set_anisotropy_level(1);
-
-    ps2VideoRefreshModeList();
 
     /* PS2 presentation currently owns one VBlank wait per displayed frame. */
     gfx_window_ps2_api.set_swap_interval(1);
@@ -232,17 +276,6 @@ void videoEndFrame(void)
     }
 }
 
-void videoClearScreen(void)
-{
-    if (!s_init_done) {
-        return;
-    }
-
-    gfx_start_frame();
-    gfx_ps2_api.clear_framebuffer(true, true);
-    gfx_end_frame();
-}
-
 void videoSetBlack(s32 black)
 {
     const bool next = black != 0;
@@ -256,11 +289,6 @@ void videoSetBlack(s32 black)
         sysLogPrintf(LOG_NOTE, "VideoPS2: VI output %s",
             s_blackout ? "blanked" : "unblanked");
     }
-}
-
-void *videoGetWindowHandle(void)
-{
-    return NULL;
 }
 
 void videoUpdateNativeResolution(s32 w, s32 h)
@@ -304,29 +332,9 @@ s32 videoGetAspectMode(void)
     return s_aspect_mode;
 }
 
-s32 videoGetFullscreen(void)
-{
-    return true;
-}
-
-s32 videoGetFullscreenMode(void)
-{
-    return true;
-}
-
-s32 videoGetMaximizeWindow(void)
-{
-    return true;
-}
-
 void videoSetMaximizeWindow(s32 fs)
 {
     (void)fs;
-}
-
-s32 videoGetCenterWindow(void)
-{
-    return true;
 }
 
 void videoSetCenterWindow(s32 center)
@@ -344,59 +352,14 @@ s32 videoGetTextureFilter2D(void)
     return s_texture_filter_2d;
 }
 
-u32 videoGetAnisotropicFilter(void)
-{
-    return 1;
-}
-
-u32 videoGetMaxAnisotropyLevel(void)
-{
-    return 1;
-}
-
 s32 videoGetDetailTextures(void)
 {
     return s_detail_textures;
 }
 
-s32 videoGetDisplayModeIndex(void)
-{
-    return s_display_mode_count > 1 ? 1 : 0;
-}
-
-s32 videoGetDisplayMode(displaymode *out, const s32 index)
-{
-    if (!out || index < 0 || index >= s_display_mode_count) {
-        return false;
-    }
-
-    *out = s_display_modes[index];
-    return true;
-}
-
-s32 videoGetNumDisplayModes(void)
-{
-    return s_display_mode_count;
-}
-
-s32 videoGetVsync(void)
-{
-    return 1;
-}
-
-s32 videoGetFramerateLimit(void)
-{
-    return s_framerate_limit;
-}
-
 s32 videoGetDisplayFPS(void)
 {
     return s_display_fps;
-}
-
-s32 videoGetMSAA(void)
-{
-    return 1;
 }
 
 f32 videoGetGlareBrightness(void)
@@ -484,16 +447,6 @@ void videoSetDetailTextures(s32 detail)
     gfx_detail_textures_enabled = (bool)s_detail_textures;
 }
 
-void videoSetDisplayMode(const s32 index)
-{
-    /*
-     * CURRENT IMPLEMENTATION: only the already-active GS mode is exposed.
-     * Runtime CRT/VRAM reconfiguration is deliberately not faked here; a mode
-     * selector is added once gs_core owns a transactional mode switch.
-     */
-    (void)index;
-}
-
 void videoSetVsync(const s32 vsync)
 {
     (void)vsync;
@@ -548,10 +501,6 @@ s32 videoCreateFramebuffer(u32 w, u32 h, s32 upscale, s32 autoresize)
 void videoSetFramebuffer(s32 target)
 {
     (void)target;
-}
-
-void videoResetFramebuffer(void)
-{
 }
 
 /*
@@ -614,6 +563,8 @@ void videoShutdown(void)
 
 PD_CONSTRUCTOR static void videoPs2ConfigInit(void)
 {
+    configRegisterInt("Video.OutputMode", &s_output_mode,
+        PS2_GS_OUTPUT_480I, PS2_GS_OUTPUT_COUNT - 1);
     configRegisterInt("Video.AspectRatio", &s_aspect_mode,
         VIDEO_ASPECT_4_3, VIDEO_ASPECT_16_9);
     configRegisterInt("Video.FramerateLimit", &s_framerate_limit, 0, VIDEO_MAX_FPS);

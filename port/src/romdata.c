@@ -781,19 +781,6 @@ static inline void romdataInitFiles(void)
 #endif
 }
 
-static inline struct romfile *romdataGetSeg(const char *name)
-{
-	if (!name || !name[0]) {
-		return NULL;
-	}
-
-	struct romfile *seg = romSegs;
-	while (seg->name && strcmp(name, seg->name)) {
-		++seg;
-	}
-	return seg->name ? seg : NULL;
-}
-
 s32 romdataInit(void)
 {
 
@@ -1074,24 +1061,6 @@ void romdataFilePreprocess(s32 fileNum, s32 loadType, u8 *data, u32 size, u32 *o
 	}
 }
 
-void romdataFileFree(s32 fileNum)
-{
-	if (fileNum < 1 || fileNum >= ROMDATA_MAX_FILES) {
-		sysLogPrintf(LOG_ERROR, "romdataFileFree: invalid file num %d", fileNum);
-		return;
-	}
-
-	if (fileSlots[fileNum].owned) {
-		sysMemFree(fileSlots[fileNum].data);
-		fileSlots[fileNum].data = NULL;
-		fileSlots[fileNum].owned = 0;
-	}
-
-	fileSlots[fileNum].size = fileSlots[fileNum].romsize;
-
-	fileSlots[fileNum].source = SRC_UNLOADED;
-}
-
 const char *romdataFileGetName(s32 fileNum)
 {
 	if (fileNum < 1 || fileNum >= ROMDATA_MAX_FILES) {
@@ -1113,39 +1082,6 @@ s32 romdataFileGetNumForName(const char *name)
 	}
 
 	return -1;
-}
-
-u8 *romdataSegGetData(const char *segName)
-{
-	struct romfile *seg = romdataGetSeg(segName);
-	if (!seg) {
-		sysLogPrintf(LOG_ERROR, "romdataSegGetData: unknown segment %s",
-			segName ? segName : "(null)");
-		return NULL;
-	}
-	return seg->data;
-}
-
-u8 *romdataSegGetDataEnd(const char *segName)
-{
-	struct romfile *seg = romdataGetSeg(segName);
-	if (!seg) {
-		sysLogPrintf(LOG_ERROR, "romdataSegGetDataEnd: unknown segment %s",
-			segName ? segName : "(null)");
-		return NULL;
-	}
-	return seg->data + seg->size;
-}
-
-u32 romdataSegGetSize(const char *segName)
-{
-	struct romfile *seg = romdataGetSeg(segName);
-	if (!seg) {
-		sysLogPrintf(LOG_ERROR, "romdataSegGetSize: unknown segment %s",
-			segName ? segName : "(null)");
-		return 0;
-	}
-	return seg->size;
 }
 
 u32 romdataFileGetEstimatedSize(const u32 size, const u32 loadtype)

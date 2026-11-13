@@ -4255,9 +4255,23 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
         const bool defer_textured_path3 = vu1_transform_eligible &&
             plain_textured &&
             ps2GsCoreVu1TexturedTransformCandidate((uint32_t)batch_vertices);
+        /*
+         * Opaque trilerp whose taps share texture and sampler state is one
+         * textured pass (see ps2_draw_opaque_trilerp); hand the projection
+         * and packing of those batches to VU1 as well.
+         */
+        const bool defer_trilerp_path3 = vu1_transform_eligible &&
+            opaque_trilerp &&
+            s_selected_texture[0] == s_selected_texture[1] &&
+            s_sampler_cms[0] == s_sampler_cms[1] &&
+            s_sampler_cmt[0] == s_sampler_cmt[1] &&
+            s_sampler_linear[0] == s_sampler_linear[1] &&
+            ps2GsCoreVu1TexturedTransformCandidate((uint32_t)batch_vertices);
 #else
         const bool defer_textured_path3 = false;
+        const bool defer_trilerp_path3 = false;
 #endif
+        const bool defer_path3 = defer_textured_path3 || defer_trilerp_path3;
 
         const bool trace_texture_coords = ps2RendererTraceIsCapturing();
         float trace_min_u[2] = { FLT_MAX, FLT_MAX };
@@ -4355,7 +4369,7 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
             float sx = 0.0f;
             float sy = 0.0f;
             int iz = 0;
-            if (!defer_textured_path3) {
+            if (!defer_path3) {
                 ps2_project_screen(clip_x, clip_y, clip_z, clip_w, inv_w,
                     &sx, &sy, &iz);
             }
@@ -4460,7 +4474,7 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
             }
 #endif
 #else
-            if (defer_textured_path3) {
+            if (defer_path3) {
                 packed_position.value = 0u;
                 packed_position.reg = PS2_GS_REG_XYZ2;
             } else if (s_shader->features.opt_fog) {
@@ -4654,9 +4668,34 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
                     shade_b = ps2_modulate_component(input[1][2]);
                 }
 
-                const uint8_t lod = ps2_modulate_component(input[0][0]);
                 trilerp_same_uv = trilerp_same_uv &&
                     tex_u[0] == tex_u[1] && tex_v[0] == tex_v[1];
+#if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
+                if (defer_trilerp_path3) {
+                    struct Ps2GsVu1TransformVertex *vu_vertex =
+                        &s_vu1_transform_vertices[i];
+                    vu_vertex->clip[0] = clip_x;
+                    vu_vertex->clip[1] = clip_y;
+                    vu_vertex->clip[2] = clip_z;
+                    vu_vertex->clip[3] = clip_w;
+                    vu_vertex->texcoord.s = tex_u[0];
+                    vu_vertex->texcoord.t = tex_v[0];
+                    vu_vertex->texcoord.q = 1.0f;
+                    vu_vertex->texcoord.xyz_control =
+                        s_shader->features.opt_fog
+                        ? (uint32_t)ps2_fog_coefficient(fog_factor) << 4
+                        : 0u;
+                    vu_vertex->rgba[0] = shade_r;
+                    vu_vertex->rgba[1] = shade_g;
+                    vu_vertex->rgba[2] = shade_b;
+                    vu_vertex->rgba[3] = 0x80u;
+                    if (!(clip_w >= FLT_MIN && clip_w <= FLT_MAX)) {
+                        vu1_transform_eligible = false;
+                    }
+                    continue;
+                }
+#endif
+                const uint8_t lod = ps2_modulate_component(input[0][0]);
                 s_stq_vertices[0][i].rgbaq =
                     ps2_pack_rgbaq(shade_r, shade_g, shade_b, 0x80, inv_w);
                 s_stq_vertices[0][i].st =
@@ -4813,6 +4852,26 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
             (void)ps2_draw_trilerp_independent_alpha(
                 (uint32_t)batch_vertices);
         } else if (opaque_trilerp) {
+#if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
+            if (defer_trilerp_path3) {
+                /* Same texture and sampler: one base pass (lerp(T,T)==T). */
+                ps2_trilerp_set_base_state();
+                const bool submitted = vu1_transform_eligible &&
+                    ps2GsCoreTryDrawTexturedTrianglesTransform(
+                        s_selected_texture[0], s_vu1_transform_vertices,
+                        (uint32_t)batch_vertices,
+                        transform_scale, transform_offset);
+                if (!submitted) {
+                    ps2_pack_textured_from_vu1_input(
+                        s_vu1_transform_vertices, s_stq_vertices[0],
+                        (uint32_t)batch_vertices,
+                        s_shader->features.opt_fog);
+                    ps2GsCoreDrawTexturedTriangles(s_selected_texture[0],
+                        s_stq_vertices[0], (uint32_t)batch_vertices);
+                }
+                ps2_trilerp_restore_state();
+            } else
+#endif
             ps2_draw_opaque_trilerp((uint32_t)batch_vertices,
                 trilerp_same_uv);
         } else if (opaque_input1_tex0_lerp) {
@@ -5427,13 +5486,6 @@ static void ps2_log_renderer_stats(
     }
 }
 
-extern "C" void gfxPs2LogRendererStats(int checkpoint)
-{
-    struct Ps2RendererStats stats;
-    ps2RendererStatsGet(&stats);
-    ps2_log_renderer_stats(stats, checkpoint != 0);
-}
-
 static void ps2_end_frame(void)
 {
     ps2GsCoreSubmit();
@@ -5647,16 +5699,37 @@ static void ps2_fb_capture_screen(struct Ps2GfxFramebuffer *fb)
     const float max_t = (float)screen_h / (float)page_h;
     const float w = (float)PS2_GFX_FB_CAPTURE_WIDTH;
     const float h = (float)PS2_GFX_FB_CAPTURE_HEIGHT;
+
+    /*
+     * Box-filter the 10:1 downscale like the N64's averaged 40x30 capture:
+     * a single bilinear tap per texel aliases badly. 4x4 jittered bilinear
+     * taps spread over each destination texel's footprint are accumulated
+     * with weight As/128 = 8/128 into a cleared target.
+     */
+    enum { TAPS_PER_AXIS = 4 };
+    const float step_s = max_s / w / (float)TAPS_PER_AXIS;
+    const float step_t = max_t / h / (float)TAPS_PER_AXIS;
     static const uint8_t corner[6][2] = {
         { 0, 0 }, { 1, 0 }, { 0, 1 }, { 1, 0 }, { 1, 1 }, { 0, 1 },
     };
-    struct Ps2GsTexturedVertex quad[6];
-    for (uint32_t i = 0u; i < 6u; ++i) {
-        quad[i].rgbaq = ps2_pack_rgbaq(0x80u, 0x80u, 0x80u, 0x80u, 1.0f);
-        quad[i].st = ps2_pack_st(
-            corner[i][0] ? max_s : 0.0f, corner[i][1] ? max_t : 0.0f);
-        quad[i].xyz2 = ps2_pack_xyz2(
-            corner[i][0] ? w : 0.0f, corner[i][1] ? h : 0.0f, 0);
+    struct Ps2GsTexturedVertex quad[6u * TAPS_PER_AXIS * TAPS_PER_AXIS];
+    uint32_t count = 0u;
+    for (int ty = 0; ty < TAPS_PER_AXIS; ++ty) {
+        for (int tx = 0; tx < TAPS_PER_AXIS; ++tx) {
+            const float ds = ((float)tx - 1.5f) * step_s;
+            const float dt = ((float)ty - 1.5f) * step_t;
+            for (uint32_t i = 0u; i < 6u; ++i) {
+                quad[count].rgbaq = ps2_pack_rgbaq(
+                    0x80u, 0x80u, 0x80u,
+                    0x80u / (TAPS_PER_AXIS * TAPS_PER_AXIS), 1.0f);
+                quad[count].st = ps2_pack_st(
+                    (corner[i][0] ? max_s : 0.0f) + ds,
+                    (corner[i][1] ? max_t : 0.0f) + dt);
+                quad[count].xyz2 = ps2_pack_xyz2(
+                    corner[i][0] ? w : 0.0f, corner[i][1] ? h : 0.0f, 0);
+                ++count;
+            }
+        }
     }
 
     ps2GsCoreSetScissor(0, 0,
@@ -5664,13 +5737,18 @@ static void ps2_fb_capture_screen(struct Ps2GfxFramebuffer *fb)
     ps2GsCoreSetAlphaTest(false, 0u);
     ps2GsCoreSetFog(false, 0u, 0u, 0u);
     ps2GsCoreSetDepthMode(false, false, false, false);
-    ps2GsCoreSetAlphaBlend(false);
     ps2GsCoreSetFramebufferAlphaForce(false);
     ps2GsCoreSetColorWrite(true);
     ps2GsCoreSetAlphaWrite(true);
     ps2GsCoreSetTextureAlpha(false);
-    fb->has_capture = ps2GsCoreDrawPresentedScreenTriangles(quad, 6u, true) &&
+    ps2GsCoreSetAlphaBlend(false);
+    ps2GsCoreClear(true, false);
+    /* Equation after enabling: SetAlphaBlend(true) resets it to SOURCE_OVER. */
+    ps2GsCoreSetAlphaBlend(true);
+    ps2GsCoreSetAlphaBlendEquation(PS2_GS_ALPHA_BLEND_SOURCE_ALPHA_ACCUMULATE);
+    fb->has_capture = ps2GsCoreDrawPresentedScreenTriangles(quad, count, true) &&
         ps2GsCoreMarkRenderTargetWritten(fb->target);
+    ps2GsCoreSetAlphaBlendEquation(PS2_GS_ALPHA_BLEND_SOURCE_OVER);
 
     ps2GsCoreBindDefaultRenderTarget();
     ps2_restore_alpha_trilerp_state();

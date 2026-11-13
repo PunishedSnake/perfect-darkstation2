@@ -274,4 +274,24 @@ const char *inputGetClipboard(void);
 // returns keymod values
 u32 inputGetKeyModState(void);
 
+#ifdef PLATFORM_PS2
+// DualShock 2 control schemes (Input.PlayerN.ControlScheme)
+enum {
+	PS2_INPUT_SCHEME_MODERN = 0,
+	PS2_INPUT_SCHEME_SHOOTER,
+	PS2_INPUT_SCHEME_N64,
+	PS2_INPUT_SCHEME_CUSTOM,
+	PS2_INPUT_SCHEME_COUNT
+};
+s32 inputPs2SchemeCount(void);
+const char *inputPs2SchemeName(s32 scheme);
+s32 inputPs2GetScheme(s32 cidx);
+void inputPs2SetScheme(s32 cidx, s32 scheme);
+// bind exactly one DualShock 2 button (joy index, -1 clears); switches to Custom
+void inputPs2BindButton(s32 cidx, u32 ck, s32 joyindex);
+const char *inputPs2DescribeBind(s32 cidx, u32 ck);
+// joy index of the newest button press since inputClearLastKey(), or -1
+s32 inputPs2GetLastButton(void);
+#endif
+
 #endif

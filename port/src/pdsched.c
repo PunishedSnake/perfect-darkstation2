@@ -111,32 +111,9 @@ s32 g_BlurFb = -1;
 s32 g_BlurFbCapTimer = -1;
 bool g_BlurFbDirty = true;
 
-void schedSetCrashEnable1(bool enable)
-{
-	g_SchedCrashEnable1 = enable;
-}
-
-void schedSetCrashedUnexpectedly(bool enable)
-{
-	g_SchedCrashedUnexpectedly = enable;
-}
-
 void schedSetCrashEnable2(bool enable)
 {
 	g_SchedCrashEnable2 = enable;
-}
-
-void schedSetCrashRenderInterval(u32 cycles)
-{
-	g_SchedCrashRenderInterval = cycles;
-}
-
-void schedRenderCrashOnBuffer(void *framebuffer)
-{
-	if ((g_SchedCrashEnable2 && g_SchedCrashEnable1) || g_SchedCrashedUnexpectedly) {
-		// crashRenderFrame(framebuffer);
-		g_SchedCrashLastRendered = osGetCount();
-	}
 }
 
 void schedRenderCrashPeriodically(u32 framecount)
@@ -196,11 +173,6 @@ void osScAddClient(OSSched *sc, OSScClient *c, OSMesgQueue *msgQ, bool is30fps)
 	c->is30fps = is30fps;
 	c->next = sc->clientList;
 	sc->clientList = c;
-}
-
-OSMesgQueue *osScGetCmdQ(OSSched *sc)
-{
-	return &sc->cmdQ;
 }
 
 void __scUpdateViMode(void)
@@ -341,20 +313,6 @@ void schedEndFrame(OSSched *sc)
 	__scUpdateViMode();
 }
 
-void schedInitArtifacts(void)
-{
-	s32 i;
-	s32 j;
-
-	for (i = 0; i < 3; i++) {
-		for (j = 0; j < MAX_ARTIFACTS; j++) {
-			g_ArtifactLists[i][j].type = ARTIFACTTYPE_FREE;
-		}
-
-		g_SchedSpecialArtifactIndexes[i] = 0;
-	}
-}
-
 /**
  * The write list is an artifact list that is not currently being displayed on
  * the screen. Update logic can write here to put artifacts on the next frame.
@@ -374,16 +332,6 @@ struct artifact *schedGetFrontArtifacts(void)
 	return g_ArtifactLists[g_SchedFrontArtifactsIndex];
 }
 
-/**
- * The pending list is possibly misnamed. I'm not sure how this list works.
- *
- * @TODO: Investigate.
- */
-struct artifact *schedGetPendingArtifacts(void)
-{
-	return g_ArtifactLists[g_SchedPendingArtifactsIndex];
-}
-
 void schedIncrementWriteArtifacts(void)
 {
 	g_SchedWriteArtifactsIndex = (g_SchedWriteArtifactsIndex + 1) % 3;
@@ -394,22 +342,11 @@ void schedIncrementFrontArtifacts(void)
 	g_SchedFrontArtifactsIndex = (g_SchedFrontArtifactsIndex + 1) % 3;
 }
 
-void schedIncrementPendingArtifacts(void)
-{
-	g_SchedPendingArtifactsIndex = (g_SchedPendingArtifactsIndex + 1) % 3;
-}
-
 void schedResetArtifacts(void)
 {
 	g_SchedWriteArtifactsIndex = 0;
 	g_SchedFrontArtifactsIndex = 1;
 	g_SchedPendingArtifactsIndex = 0;
-}
-
-void schedUpdatePendingArtifacts(void)
-{
-	g_SchedSpecialArtifactIndexes[g_SchedPendingArtifactsIndex] = 0;
-	schedIncrementPendingArtifacts();
 }
 
 void schedConsiderScreenshot(void)

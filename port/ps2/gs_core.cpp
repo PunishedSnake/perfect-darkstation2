@@ -756,6 +756,7 @@ extern "C" bool ps2GsCoreInit(const struct Ps2GsCreateInfo *info)
         PS2_GS_PSMZ_16,
         true,
         true,
+        PS2_GS_OUTPUT_480I,
     };
     const struct Ps2GsCreateInfo *config = info ? info : &defaults;
 
@@ -771,6 +772,30 @@ extern "C" bool ps2GsCoreInit(const struct Ps2GsCreateInfo *info)
 
     gs->PSM = config->color_psm;
     gs->PSMZ = config->depth_psm;
+
+    /*
+     * Progressive and HD scan-out keep the 640x448 render target; the GS CRTC
+     * magnifies it (gsKit derives MAGH/MAGV from the mode's display size), so
+     * neither costs VRAM nor fill rate. The cable decides what the TV gets.
+     */
+    switch (config->output_mode) {
+        case PS2_GS_OUTPUT_480P:
+            gs->Mode = GS_MODE_DTV_480P;
+            gs->Interlace = GS_NONINTERLACED;
+            gs->Field = GS_FRAME;
+            gs->Width = 640;
+            gs->Height = 448;
+            break;
+        case PS2_GS_OUTPUT_1080I:
+            gs->Mode = GS_MODE_DTV_1080I;
+            gs->Interlace = GS_INTERLACED;
+            gs->Field = GS_FIELD;
+            gs->Width = 640;
+            gs->Height = 448;
+            break;
+        default:
+            break;
+    }
     gs->ZBuffering = config->z_buffering ? GS_SETTING_ON : GS_SETTING_OFF;
     gs->Dithering = config->dithering ? GS_SETTING_ON : GS_SETTING_OFF;
 
@@ -1951,50 +1976,6 @@ extern "C" void ps2GsCoreBindDefaultRenderTarget(void)
     ps2GsCoreEmitRenderTargetState();
 }
 
-extern "C" bool ps2GsCoreReleaseRenderTarget(
-    Ps2GsRenderTargetHandle handle)
-{
-    struct Ps2GsRenderTargetSlot *slot = ps2GsCoreRenderTargetSlot(handle);
-    if (!slot || handle == s_active_render_target) {
-        return false;
-    }
-    if (!ps2GsCoreEnsureRetireCapacity(1u)) {
-        sysLogPrintf(LOG_ERROR,
-            "GS core: render-target retirement fence failed id=%u",
-            (unsigned int)handle);
-        ps2LogCheckpoint();
-        return false;
-    }
-
-    ps2RendererTraceRecord(PS2_TRACE_RESOURCE_OP, 12u,
-        handle, ps2GsCoreTracePair(slot->vram, slot->layout.bytes),
-        ps2GsCoreTracePair(slot->layout.width, slot->layout.height),
-        slot->layout.fbw);
-    ps2GsCoreRetireVram(slot->vram, slot->layout.bytes);
-    memset(slot, 0, sizeof(*slot));
-    return true;
-}
-
-extern "C" uint32_t ps2GsCoreGetRenderTargetWidth(
-    Ps2GsRenderTargetHandle handle)
-{
-    if (handle == PS2_GS_RENDER_TARGET_DEFAULT) {
-        return s_gs ? (uint32_t)s_gs->Width : 0u;
-    }
-    struct Ps2GsRenderTargetSlot *slot = ps2GsCoreRenderTargetSlot(handle);
-    return slot ? slot->layout.width : 0u;
-}
-
-extern "C" uint32_t ps2GsCoreGetRenderTargetHeight(
-    Ps2GsRenderTargetHandle handle)
-{
-    if (handle == PS2_GS_RENDER_TARGET_DEFAULT) {
-        return s_gs ? (uint32_t)s_gs->Height : 0u;
-    }
-    struct Ps2GsRenderTargetSlot *slot = ps2GsCoreRenderTargetSlot(handle);
-    return slot ? slot->layout.height : 0u;
-}
-
 extern "C" Ps2GsTextureHandle ps2GsCoreCreateTexture(void)
 {
     for (uint32_t i = 0; i < PS2_GS_MAX_TEXTURES; ++i) {
@@ -2015,11 +1996,6 @@ extern "C" bool ps2GsCoreTextureEvicted(Ps2GsTextureHandle handle)
 {
     struct Ps2GsTextureSlot *slot = ps2GsCoreTextureSlot(handle);
     return slot && slot->evicted;
-}
-
-extern "C" uint32_t ps2GsCoreTextureEvictionCount(void)
-{
-    return s_texture_evictions;
 }
 
 extern "C" bool ps2GsCoreTextureExists(Ps2GsTextureHandle handle)
@@ -2855,34 +2831,6 @@ extern "C" void ps2GsCoreDrawColorTriangles(const struct Ps2GsColorVertex *verti
     const bool emit_prim = ps2GsStateShadowNeedsWrite(
         &s_state_shadow, PS2_GS_STATE_PRIM, prim);
 
-    if (ps2GsCoreVu1AdTransportEnabled() &&
-        ps2GsVu1QueueEnabled() &&
-        ps2GsVu1BatchWorthwhile(vertex_count)) {
-        const struct Ps2GsPackedReg prim_record = { prim, GS_PRIM };
-        if (ps2GsVu1QueueSubmitColor(
-                &prim_record, emit_prim, vertices, vertex_count)) {
-            if (emit_prim) {
-                ps2GsStateShadowCommit(
-                    &s_state_shadow, PS2_GS_STATE_PRIM, prim);
-            }
-            const uint32_t trace_register_count =
-                vertex_count * 2u + (emit_prim ? 1u : 0u);
-            ps2RendererStatsRecordPath1(
-                false, vertex_count, trace_register_count);
-            ps2GsCoreTraceDraw(false, true, 0u,
-                vertex_count, trace_register_count,
-                prim, 0u, 0u, 0u);
-            ps2GsCoreMarkActiveRenderTargetWritten();
-            return;
-        }
-        ps2RendererStatsRecordVu1Reject(vertex_count);
-        if (!s_logged_vu1_color_fallback) {
-            sysLogPrintf(LOG_WARNING,
-                "GS core: VU1 color batch rejected; preserving PATH3 fallback");
-            ps2LogCheckpoint();
-            s_logged_vu1_color_fallback = true;
-        }
-    }
 
     const uint32_t register_count =
         (emit_prim ? 1u : 0u) + vertex_count * 2u;
@@ -3799,18 +3747,3 @@ extern "C" bool ps2GsCoreBlitRenderTargetChannelSpansToActiveAlpha(
         span_x0, span_x1, span_count);
 }
 
-extern "C" bool ps2GsCoreBlitRenderTargetChannelToActiveAlpha(
-    Ps2GsRenderTargetHandle source, enum Ps2GsCt32Channel channel)
-{
-    struct Ps2GsRenderTargetSlot *slot =
-        ps2GsCoreRenderTargetSlot(source);
-    return slot && ps2GsCoreBlitRenderTargetChannelRectToActiveAlpha(
-        source, channel, slot->layout.width, slot->layout.height);
-}
-
-extern "C" bool ps2GsCoreBlitRenderTargetRedToActiveAlpha(
-    Ps2GsRenderTargetHandle source)
-{
-    return ps2GsCoreBlitRenderTargetChannelToActiveAlpha(
-        source, PS2_GS_CT32_CHANNEL_RED);
-}

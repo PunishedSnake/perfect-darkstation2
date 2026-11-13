@@ -16,7 +16,6 @@ extern "C" {
 bool ps2GsVu1QueueInit(void);
 bool ps2GsVu1QueueEnabled(void);
 /* Diagnostic A/B switch. Drains pending PATH1 work before changing mode. */
-bool ps2GsVu1QueueSetEnabled(bool enabled);
 
 /*
  * Complete a pending validation batch before a later PATH3 claimant may alter
@@ -24,6 +23,8 @@ bool ps2GsVu1QueueSetEnabled(bool enabled);
  * proves that the microprogram and its PATH1 packet have drained.
  */
 bool ps2GsVu1QueueWaitIdle(void);
+/* A VIF1 chain was kicked; the next WaitIdle must observe it finishing. */
+void ps2GsVu1QueueMarkPending(void);
 
 /* Submit one complete GIF PACKED A+D packet through VIF1/VU1/PATH1. */
 bool ps2GsVu1QueueSubmitAd(
@@ -31,9 +32,7 @@ bool ps2GsVu1QueueSubmitAd(
     const struct Ps2GsPackedReg *records, uint32_t record_count,
     const struct Ps2GsPackedReg *suffix, uint32_t suffix_count);
 
-bool ps2GsVu1QueueSubmitColor(
-    const struct Ps2GsPackedReg *prim, bool emit_prim,
-    const struct Ps2GsColorVertex *vertices, uint32_t vertex_count);
+
 
 bool ps2GsVu1QueueSubmitTexturedTransform(
     const float scale[4], const float offset[4], uint32_t flags,

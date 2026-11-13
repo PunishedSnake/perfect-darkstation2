@@ -158,22 +158,6 @@ void configRegisterFloat(const char *key, f32 *var, f32 min, f32 max)
 	}
 }
 
-void configRegisterString(const char *key, char *var, u32 maxstr)
-{
-	if (!var || maxstr == 0) {
-		sysLogPrintf(LOG_ERROR, "configRegisterString: invalid buffer for %s",
-			key ? key : "(null)");
-		return;
-	}
-
-	struct configentry *cfg = configFindOrAddEntry(key);
-	if (cfg) {
-		cfg->type = CFG_STR;
-		cfg->ptr = var;
-		cfg->max_str = maxstr;
-	}
-}
-
 static void configSetFromString(const char *key, const char *val)
 {
 	if (!key || !val) {

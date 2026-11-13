@@ -89,7 +89,8 @@ bool ps2InputMapPad(const struct Ps2PadState *source,
         return false;
     }
 
-    destination->button = ps2InputMapButtons(source->held);
+    destination->button = config->skip_button_map
+        ? 0u : ps2InputMapButtons(source->held);
 
     const int32_t physical[4] = {
         source->lx, source->ly, source->rx, source->ry,
