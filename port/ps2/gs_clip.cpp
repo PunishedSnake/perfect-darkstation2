@@ -120,6 +120,18 @@ void ps2GsClipSetGuardBand(float guard_x, float guard_y)
     s_guard_y = guard_y >= 1.0f ? guard_y : 1.0f;
 }
 
+unsigned int ps2GsClipVertexCodes(const float *vertex)
+{
+    if (!std::isfinite(vertex[0]) || !std::isfinite(vertex[1]) ||
+        !std::isfinite(vertex[2]) || !std::isfinite(vertex[3])) {
+        return PS2_GS_CLIP_CODE_NONFINITE;
+    }
+    const unsigned int exact = clipCode(vertex);
+    const unsigned int guard = s_guard_x == 1.0f && s_guard_y == 1.0f
+        ? exact : guardCode(vertex);
+    return exact | (guard << 8);
+}
+
 enum Ps2GsClipClass ps2GsClipClassifyTriangle(
     const float *triangle, size_t stride)
 {

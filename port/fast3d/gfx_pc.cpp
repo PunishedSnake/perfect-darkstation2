@@ -387,7 +387,67 @@ static constexpr float clampf(const float x, const float min, const float max) {
     return (x < min) ? min : (x > max) ? max : x;
 }
 
+#if defined(PLATFORM_PS2) && defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
+#define GFX_PS2_DIRECT 1
+#include <cfloat>
+#include "gs_clip.h"
+#include "gs_vu1_transform.h"
+
+enum { GFX_PS2_DIRECT_MAX_VERTICES = 81 }; /* PS2_GS_VU1_MAX_TEXTURED_VERTICES */
+
+struct GfxPs2DirectKey {
+    struct GfxPs2DirectContext ctx;
+    uint8_t z_is_from_0_to_1;
+    uint8_t invert_y;
+    uint8_t in_kind[2][3];
+    uint8_t in_const_u8[3][4];
+    float u_scale, u_bias, v_scale, v_bias;
+};
+
+#if defined(PD_PS2_DIRECT_VERIFY)
+extern "C" {
+struct Ps2GsVu1TransformVertex gfx_ps2_direct_verify_records[MAX_BUFFERED * 3];
+uint8_t gfx_ps2_direct_verify_valid[MAX_BUFFERED];
+const float* gfx_ps2_direct_verify_vbo;
+}
+#endif
+
+static struct {
+    bool active;
+    uint32_t serial; /* bumped whenever the key changes; 0 = never valid */
+    struct GfxPs2DirectKey key;
+    uint32_t tag[MAX_VERTICES];
+    uint32_t codes[MAX_VERTICES];
+    bool w_ok[MAX_VERTICES];
+    struct Ps2GsVu1TransformVertex records[MAX_VERTICES] __attribute__((aligned(16)));
+    struct Ps2GsVu1TransformVertex batch[GFX_PS2_DIRECT_MAX_VERTICES] __attribute__((aligned(16)));
+    uint32_t batch_count;
+    bool batch_trilerp;
+    bool batch_w_ok;
+    uint8_t batch_fog[3];
+} gfx_ps2_direct;
+
+static void gfx_ps2_direct_flush(void) {
+    if (gfx_ps2_direct.batch_count == 0) {
+        return;
+    }
+    gfxPs2DirectDraw(gfx_ps2_direct.batch, gfx_ps2_direct.batch_count,
+                     gfx_ps2_direct.batch_trilerp, gfx_ps2_direct.batch_w_ok, gfx_ps2_direct.batch_fog);
+    gfx_ps2_direct.batch_count = 0;
+}
+
+static inline void gfx_ps2_direct_invalidate_vertices(size_t first, size_t count) {
+    for (size_t i = 0; i < count && first + i < MAX_VERTICES; ++i) {
+        gfx_ps2_direct.tag[first + i] = 0;
+    }
+}
+
+#endif
+
 static void gfx_flush(void) {
+#if defined(GFX_PS2_DIRECT)
+    gfx_ps2_direct_flush();
+#endif
     if (buf_vbo_len > 0) {
         gfx_rapi->draw_triangles(buf_vbo, buf_vbo_len, buf_vbo_num_tris);
         buf_vbo_len = 0;
@@ -1496,6 +1556,9 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx* verti
         }
     }
 
+#if defined(GFX_PS2_DIRECT)
+    gfx_ps2_direct_invalidate_vertices(dest_index, n_vertices);
+#endif
     for (size_t i = 0; i < n_vertices; i++, dest_index++) {
         const Vtx* v = &vertices[i];
         struct LoadedVertex* d = &rsp.loaded_vertices[dest_index];
@@ -1659,6 +1722,9 @@ static void gfx_sp_modify_vertex(uint16_t vtx_idx, uint8_t where, uint32_t val) 
     struct LoadedVertex* v = &rsp.loaded_vertices[vtx_idx];
     v->u = s;
     v->v = t;
+#if defined(GFX_PS2_DIRECT)
+    gfx_ps2_direct_invalidate_vertices(vtx_idx, 1);
+#endif
 }
 
 static inline int gfx_lod_tile_offset(const int i) {
@@ -1691,6 +1757,7 @@ struct GfxTriSetup {
     float tex_clamp_s[2], tex_clamp_t[2];
     uint8_t in_kind[2][7];
     float in_const[7][4];
+    uint8_t in_const_u8[7][4]; /* the bytes in_const was built from */
 };
 
 static struct GfxTriSetup gfx_tri_setup_cache;
@@ -1992,12 +2059,216 @@ static void gfx_tri_setup(struct GfxTriSetup* S, bool is_rect) {
                 S->in_const[j][0] = gfx_u8_unit[tmp.r];
                 S->in_const[j][1] = gfx_u8_unit[tmp.g];
                 S->in_const[j][2] = gfx_u8_unit[tmp.b];
+                S->in_const_u8[j][0] = tmp.r;
+                S->in_const_u8[j][1] = tmp.g;
+                S->in_const_u8[j][2] = tmp.b;
             } else {
                 S->in_const[j][3] = gfx_u8_unit[tmp.a];
+                S->in_const_u8[j][3] = tmp.a;
             }
         }
     }
 }
+
+#if defined(GFX_PS2_DIRECT)
+/*
+ * Shared-vertex fast path (PS2). Each loaded vertex is turned into its VU1
+ * transform input record and clip outcodes once per (vertex, state) pair;
+ * triangles then copy three records. Guard-band-accepted triangles of the
+ * eligible shaders go straight to gfxPs2DirectDraw; everything else (rects,
+ * triangles that need clipping, other shaders) keeps the float-VBO path.
+ * The two buffers are never both non-empty, so draw order is preserved.
+ */
+/* Re-evaluated whenever the triangle setup is rebuilt. */
+static void gfx_ps2_direct_refresh(const struct GfxTriSetup* S) {
+    struct GfxPs2DirectKey key;
+    memset(&key, 0, sizeof(key));
+    bool ok = !S->depth_source_prim && !S->use_grayscale && S->used_textures[0] &&
+              !S->clamp_s[0] && !S->clamp_t[0] && !S->clamp_s[1] && !S->clamp_t[1] && S->num_inputs <= 3 &&
+              gfxPs2DirectQuery(&key.ctx);
+    if (ok) {
+        ok = key.ctx.num_inputs == S->num_inputs && (key.ctx.use_alpha != 0) == S->use_alpha &&
+             (key.ctx.fog != 0) == S->use_fog;
+    }
+    gfx_ps2_direct.active = ok;
+    if (!ok) {
+        return;
+    }
+    key.z_is_from_0_to_1 = S->z_is_from_0_to_1;
+    key.invert_y = S->invert_y;
+    for (int j = 0; j < S->num_inputs; ++j) {
+        key.in_kind[0][j] = S->in_kind[0][j];
+        key.in_kind[1][j] = S->use_alpha ? S->in_kind[1][j] : 0;
+        memcpy(key.in_const_u8[j], S->in_const_u8[j], 4);
+        if (!S->use_alpha) {
+            key.in_const_u8[j][3] = 0;
+        }
+    }
+    key.u_scale = S->u_scale[0];
+    key.u_bias = S->u_bias[0];
+    key.v_scale = S->v_scale[0];
+    key.v_bias = S->v_bias[0];
+
+    const bool fog_differs = key.ctx.fog && gfx_ps2_direct.batch_count != 0 &&
+        memcmp(gfx_ps2_direct.batch_fog, &rdp.fog_color, 3) != 0;
+    if (memcmp(&key, &gfx_ps2_direct.key, sizeof(key)) != 0 || fog_differs) {
+        /* Buffered triangles were built for the old state. */
+        gfx_ps2_direct_flush();
+        gfx_ps2_direct.key = key;
+        if (++gfx_ps2_direct.serial == 0) {
+            gfx_ps2_direct.serial = 1;
+        }
+    }
+}
+
+/* Byte value of combiner input j for one vertex; channel 3 is alpha. */
+static inline void gfx_ps2_direct_input(const struct GfxTriSetup* S, const struct LoadedVertex* V, int j,
+                                        uint8_t out[4]) {
+    if (j < 0 || j >= S->num_inputs) {
+        out[0] = out[1] = out[2] = out[3] = 255; /* backend default 1.0 */
+        return;
+    }
+    uint8_t lod = 0;
+    if (S->in_kind[0][j] == GFX_TRI_IN_LOD || (S->use_alpha && S->in_kind[1][j] == GFX_TRI_IN_LOD)) {
+        const float distance_frac = std::max(0.f, std::min(V->w / 1024.f, 1.f));
+        lod = (uint8_t)((0.7f + distance_frac * 0.3f) * 255.f);
+    }
+    switch (S->in_kind[0][j]) {
+        case GFX_TRI_IN_SHADE:
+            out[0] = V->color.r; out[1] = V->color.g; out[2] = V->color.b;
+            break;
+        case GFX_TRI_IN_SHADE_ALPHA:
+            out[0] = out[1] = out[2] = V->color.a;
+            break;
+        case GFX_TRI_IN_LOD:
+            out[0] = out[1] = out[2] = lod;
+            break;
+        default:
+            out[0] = S->in_const_u8[j][0]; out[1] = S->in_const_u8[j][1]; out[2] = S->in_const_u8[j][2];
+            break;
+    }
+    if (!S->use_alpha) {
+        out[3] = 255;
+        return;
+    }
+    switch (S->in_kind[1][j]) {
+        case GFX_TRI_IN_SHADE: out[3] = V->color.a; break;
+        case GFX_TRI_IN_SHADE_ALPHA: out[3] = 0; break;
+        case GFX_TRI_IN_LOD: out[3] = lod; break;
+        default: out[3] = S->in_const_u8[j][3]; break;
+    }
+}
+
+static inline uint32_t gfx_ps2_direct_vertex(const struct GfxTriSetup* S, uint8_t idx) {
+    if (gfx_ps2_direct.tag[idx] == gfx_ps2_direct.serial) {
+        return gfx_ps2_direct.codes[idx];
+    }
+    const struct GfxPs2DirectContext* C = &gfx_ps2_direct.key.ctx;
+    const struct LoadedVertex* V = &rsp.loaded_vertices[idx];
+    struct Ps2GsVu1TransformVertex* R = &gfx_ps2_direct.records[idx];
+
+    /* Same arithmetic as the VBO writer in gfx_sp_tri1 followed by the
+     * backend translator; see ps2_draw_triangles_unclipped. */
+    float z = V->z;
+    const float w = V->w;
+    if (S->z_is_from_0_to_1) {
+        z = (z + w) / 2.0f;
+    }
+    R->clip[0] = V->x;
+    R->clip[1] = S->invert_y ? -V->y : V->y;
+    R->clip[2] = z;
+    R->clip[3] = w;
+    const float vbo_u = V->u * S->u_scale[0] + S->u_bias[0];
+    const float vbo_v = V->v * S->v_scale[0] + S->v_bias[0];
+    R->texcoord.s = vbo_u * C->scale_s;
+    R->texcoord.t = vbo_v * C->scale_t;
+    R->texcoord.q = 1.0f;
+    R->texcoord.xyz_control = C->fog ? C->fog_lut[V->fog] : 0u;
+
+    uint8_t in[4];
+    if (C->rgb_input >= 0) {
+        gfx_ps2_direct_input(S, V, C->rgb_input, in);
+        R->rgba[0] = C->rgb_lut[in[0]];
+        R->rgba[1] = C->rgb_lut[in[1]];
+        R->rgba[2] = C->rgb_lut[in[2]];
+    } else {
+        R->rgba[0] = R->rgba[1] = R->rgba[2] = C->rgb_const;
+    }
+    if (C->alpha_input >= 0) {
+        if (C->alpha_input != C->rgb_input) {
+            gfx_ps2_direct_input(S, V, C->alpha_input, in);
+        }
+        R->rgba[3] = C->alpha_lut[in[3]];
+    } else {
+        R->rgba[3] = C->alpha_const;
+    }
+
+    /* DIV on VU treats subnormal W as zero; such batches stay on the EE. */
+    gfx_ps2_direct.w_ok[idx] = w >= FLT_MIN && w <= FLT_MAX;
+    const uint32_t codes = ps2GsClipVertexCodes(R->clip);
+    gfx_ps2_direct.codes[idx] = codes;
+    gfx_ps2_direct.tag[idx] = gfx_ps2_direct.serial;
+    return codes;
+}
+
+static inline void gfx_ps2_direct_copy_record(struct Ps2GsVu1TransformVertex* dst,
+                                              const struct Ps2GsVu1TransformVertex* src) {
+#if defined(_EE)
+    __asm__ __volatile__("lq $8, 0(%1)\n\t"
+                         "lq $9, 16(%1)\n\t"
+                         "lq $10, 32(%1)\n\t"
+                         "sq $8, 0(%0)\n\t"
+                         "sq $9, 16(%0)\n\t"
+                         "sq $10, 32(%0)\n\t"
+                         :
+                         : "r"(dst), "r"(src)
+                         : "$8", "$9", "$10", "memory");
+#else
+    *dst = *src;
+#endif
+}
+
+/* True when the triangle was consumed (buffered or rejected). */
+static bool gfx_ps2_direct_tri(const struct GfxTriSetup* S, uint8_t a, uint8_t b, uint8_t c) {
+    if (a >= MAX_VERTICES || b >= MAX_VERTICES || c >= MAX_VERTICES) {
+        gfx_ps2_direct_flush();
+        return false;
+    }
+    const uint32_t ca = gfx_ps2_direct_vertex(S, a);
+    const uint32_t cb = gfx_ps2_direct_vertex(S, b);
+    const uint32_t cc = gfx_ps2_direct_vertex(S, c);
+    switch (ps2GsClipClassifyCodes(ca, cb, cc)) {
+        case PS2_GS_CLIP_REJECT:
+            return true;
+        case PS2_GS_CLIP_PARTIAL:
+            gfx_ps2_direct_flush();
+            return false;
+        default:
+            break;
+    }
+    if (buf_vbo_len > 0) {
+        gfx_flush();
+    }
+    if (gfx_ps2_direct.batch_count == 0) {
+        gfx_ps2_direct.batch_trilerp = gfx_ps2_direct.key.ctx.trilerp != 0;
+        gfx_ps2_direct.batch_w_ok = true;
+        gfx_ps2_direct.batch_fog[0] = rdp.fog_color.r;
+        gfx_ps2_direct.batch_fog[1] = rdp.fog_color.g;
+        gfx_ps2_direct.batch_fog[2] = rdp.fog_color.b;
+    }
+    struct Ps2GsVu1TransformVertex* out = &gfx_ps2_direct.batch[gfx_ps2_direct.batch_count];
+    gfx_ps2_direct_copy_record(&out[0], &gfx_ps2_direct.records[a]);
+    gfx_ps2_direct_copy_record(&out[1], &gfx_ps2_direct.records[b]);
+    gfx_ps2_direct_copy_record(&out[2], &gfx_ps2_direct.records[c]);
+    gfx_ps2_direct.batch_w_ok = gfx_ps2_direct.batch_w_ok && gfx_ps2_direct.w_ok[a] &&
+                                gfx_ps2_direct.w_ok[b] && gfx_ps2_direct.w_ok[c];
+    gfx_ps2_direct.batch_count += 3;
+    if (gfx_ps2_direct.batch_count + 3 > GFX_PS2_DIRECT_MAX_VERTICES) {
+        gfx_ps2_direct_flush();
+    }
+    return true;
+}
+#endif
 
 static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx, bool is_rect) {
     struct LoadedVertex* v1 = &rsp.loaded_vertices[vtx1_idx];
@@ -2058,7 +2329,33 @@ static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx, bo
     } else if (!gfx_tri_setup_cache.valid) {
         gfx_tri_setup(&gfx_tri_setup_cache, false);
         gfx_tri_setup_cache.valid = true;
+#if defined(GFX_PS2_DIRECT)
+        gfx_ps2_direct_refresh(&gfx_tri_setup_cache);
+#endif
     }
+#if defined(GFX_PS2_DIRECT) && defined(PD_PS2_DIRECT_VERIFY)
+    /* Verification build: draw through the VBO, but record what the direct
+     * path would have produced for the backend to compare against. */
+    gfx_ps2_direct_verify_valid[buf_vbo_num_tris] = 0;
+    if (!is_rect && gfx_ps2_direct.active && vtx1_idx < MAX_VERTICES && vtx2_idx < MAX_VERTICES &&
+        vtx3_idx < MAX_VERTICES) {
+        const uint32_t ca = gfx_ps2_direct_vertex(&gfx_tri_setup_cache, vtx1_idx);
+        const uint32_t cb = gfx_ps2_direct_vertex(&gfx_tri_setup_cache, vtx2_idx);
+        const uint32_t cc = gfx_ps2_direct_vertex(&gfx_tri_setup_cache, vtx3_idx);
+        const enum Ps2GsClipClass cls = ps2GsClipClassifyCodes(ca, cb, cc);
+        gfx_ps2_direct_verify_valid[buf_vbo_num_tris] = (uint8_t)(cls == PS2_GS_CLIP_ACCEPT ? 1 : 2 + (int)cls);
+        gfx_ps2_direct_verify_records[buf_vbo_num_tris * 3 + 0] = gfx_ps2_direct.records[vtx1_idx];
+        gfx_ps2_direct_verify_records[buf_vbo_num_tris * 3 + 1] = gfx_ps2_direct.records[vtx2_idx];
+        gfx_ps2_direct_verify_records[buf_vbo_num_tris * 3 + 2] = gfx_ps2_direct.records[vtx3_idx];
+    }
+    gfx_ps2_direct_verify_vbo = buf_vbo;
+#elif defined(GFX_PS2_DIRECT)
+    if (!is_rect && gfx_ps2_direct.active &&
+        gfx_ps2_direct_tri(&gfx_tri_setup_cache, vtx1_idx, vtx2_idx, vtx3_idx)) {
+        return;
+    }
+    gfx_ps2_direct_flush();
+#endif
 
     const bool use_alpha = S->use_alpha;
     const int num_inputs = S->num_inputs;
