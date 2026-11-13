@@ -2525,6 +2525,84 @@ static inline void gfx_ps2_direct_copy_record(struct Ps2GsVu1TransformVertex* ds
 #endif
 }
 
+/*
+ * Triangles that cross the near/far planes or leave the guard band are
+ * clipped here, on the 11 values the record carries (clip XYZW, S, T, fog
+ * coefficient, RGBA), with the same homogeneous clipper and guard band the
+ * VBO path uses on its full vertex. New vertices interpolate the converted
+ * colour/fog values rather than the combiner inputs; both conversions are
+ * linear, so they agree to the last rounding step.
+ */
+static void gfx_ps2_direct_begin_batch(void) {
+    if (gfx_ps2_direct.batch_count == 0) {
+        gfx_ps2_direct.batch_trilerp = gfx_ps2_direct.key.ctx.trilerp != 0;
+        gfx_ps2_direct.batch_w_ok = true;
+        gfx_ps2_direct.batch_fog[0] = rdp.fog_color.r;
+        gfx_ps2_direct.batch_fog[1] = rdp.fog_color.g;
+        gfx_ps2_direct.batch_fog[2] = rdp.fog_color.b;
+    }
+}
+
+static bool gfx_ps2_direct_clip_tri(uint8_t a, uint8_t b, uint8_t c) {
+    enum { STRIDE = 11 };
+    float in[3 * STRIDE];
+    const uint8_t idx[3] = { a, b, c };
+    for (int k = 0; k < 3; ++k) {
+        const struct Ps2GsVu1TransformVertex* r = &gfx_ps2_direct.records[idx[k]];
+        float* o = &in[k * STRIDE];
+        o[0] = r->clip[0];
+        o[1] = r->clip[1];
+        o[2] = r->clip[2];
+        o[3] = r->clip[3];
+        o[4] = r->texcoord.s;
+        o[5] = r->texcoord.t;
+        o[6] = (float)(r->texcoord.xyz_control >> 4);
+        o[7] = (float)r->rgba[0];
+        o[8] = (float)r->rgba[1];
+        o[9] = (float)r->rgba[2];
+        o[10] = (float)r->rgba[3];
+    }
+    float out[PS2_GS_CLIP_MAX_OUTPUT_VERTICES * STRIDE];
+    size_t count = 0;
+    if (!ps2GsClipTriangle(in, STRIDE, out, PS2_GS_CLIP_MAX_OUTPUT_VERTICES, &count)) {
+        gfx_ps2_direct_flush();
+        return false; /* let the VBO path handle it */
+    }
+    if (count == 0) {
+        return true;
+    }
+    if (buf_vbo_len > 0) {
+        gfx_flush();
+    }
+    if (gfx_ps2_direct.batch_count + count > GFX_PS2_DIRECT_MAX_VERTICES) {
+        gfx_ps2_direct_flush();
+    }
+    gfx_ps2_direct_begin_batch();
+    const bool fog = gfx_ps2_direct.key.ctx.fog != 0;
+    for (size_t k = 0; k < count; ++k) {
+        const float* o = &out[k * STRIDE];
+        struct Ps2GsVu1TransformVertex* r = &gfx_ps2_direct.batch[gfx_ps2_direct.batch_count++];
+        r->clip[0] = o[0];
+        r->clip[1] = o[1];
+        r->clip[2] = o[2];
+        r->clip[3] = o[3];
+        r->texcoord.s = o[4];
+        r->texcoord.t = o[5];
+        r->texcoord.q = 1.0f;
+        r->texcoord.xyz_control = fog ? (uint32_t)(int)(o[6] + 0.5f) << 4 : 0u;
+        for (int ch = 0; ch < 4; ++ch) {
+            r->rgba[ch] = (uint32_t)(int)(o[7 + ch] + 0.5f);
+        }
+        if (!(o[3] >= FLT_MIN && o[3] <= FLT_MAX)) {
+            gfx_ps2_direct.batch_w_ok = false;
+        }
+    }
+    if (gfx_ps2_direct.batch_count + 3 > GFX_PS2_DIRECT_MAX_VERTICES) {
+        gfx_ps2_direct_flush();
+    }
+    return true;
+}
+
 /* True when the triangle was consumed (buffered or rejected). */
 static bool gfx_ps2_direct_tri(const struct GfxTriSetup* S, uint8_t a, uint8_t b, uint8_t c) {
     if (a >= MAX_VERTICES || b >= MAX_VERTICES || c >= MAX_VERTICES) {
@@ -2538,21 +2616,14 @@ static bool gfx_ps2_direct_tri(const struct GfxTriSetup* S, uint8_t a, uint8_t b
         case PS2_GS_CLIP_REJECT:
             return true;
         case PS2_GS_CLIP_PARTIAL:
-            gfx_ps2_direct_flush();
-            return false;
+            return gfx_ps2_direct_clip_tri(a, b, c);
         default:
             break;
     }
     if (buf_vbo_len > 0) {
         gfx_flush();
     }
-    if (gfx_ps2_direct.batch_count == 0) {
-        gfx_ps2_direct.batch_trilerp = gfx_ps2_direct.key.ctx.trilerp != 0;
-        gfx_ps2_direct.batch_w_ok = true;
-        gfx_ps2_direct.batch_fog[0] = rdp.fog_color.r;
-        gfx_ps2_direct.batch_fog[1] = rdp.fog_color.g;
-        gfx_ps2_direct.batch_fog[2] = rdp.fog_color.b;
-    }
+    gfx_ps2_direct_begin_batch();
     struct Ps2GsVu1TransformVertex* out = &gfx_ps2_direct.batch[gfx_ps2_direct.batch_count];
     gfx_ps2_direct_copy_record(&out[0], &gfx_ps2_direct.records[a]);
     gfx_ps2_direct_copy_record(&out[1], &gfx_ps2_direct.records[b]);
