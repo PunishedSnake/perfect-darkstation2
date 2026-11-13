@@ -253,7 +253,27 @@ extern "C" bool gfxRdpTmemWriteTlut(struct GfxRdpTmem *tmem,
         return true;
     }
 
-    /* Each entry fills its word as four big-endian copies: hi,lo,hi,lo... */
+    /*
+     * Reloading the palette TMEM already holds (the common case: the same
+     * TLUT before every draw that uses it) changes nothing observable, as
+     * for identical LoadBlocks: keep generations and load records intact.
+     * Each entry fills its word as four copies of hi,lo; compare against that
+     * pattern directly and stop at the first difference.
+     */
+    uint32_t same = 0u;
+    for (; same < entry_count; ++same) {
+        const uint32_t word = first_tmem_word + same;
+        const uint64_t pattern = (uint64_t)(((uint32_t)(entries[same] >> 8) & 0xffu) |
+            (((uint32_t)entries[same] & 0xffu) << 8)) * UINT64_C(0x0001000100010001);
+        if (tmem->word_valid[word] == 0u || tmem->word_linear[word] != 0u ||
+            gfxRdpTmemLoad64(&tmem->bytes[word * GFX_RDP_TMEM_WORD_BYTES]) != pattern) {
+            break;
+        }
+    }
+    if (same == entry_count) {
+        return true;
+    }
+
     uint8_t words[GFX_RDP_TMEM_WORDS][GFX_RDP_TMEM_WORD_BYTES];
     for (uint32_t i = 0; i < entry_count; ++i) {
         const uint8_t hi = (uint8_t)(entries[i] >> 8);
@@ -262,27 +282,6 @@ extern "C" bool gfxRdpTmemWriteTlut(struct GfxRdpTmem *tmem,
             words[i][copy * 2u] = hi;
             words[i][copy * 2u + 1u] = lo;
         }
-    }
-
-    /*
-     * Reloading the palette TMEM already holds (the common case: the same
-     * TLUT before every draw that uses it) changes nothing observable, as
-     * for identical LoadBlocks: keep generations and load records intact.
-     */
-    uint32_t same = 0u;
-    for (; same < entry_count; ++same) {
-        const uint32_t word = first_tmem_word + same;
-        const uint32_t dst_byte = word * GFX_RDP_TMEM_WORD_BYTES;
-        if (gfxRdpTmemLoad64(&tmem->bytes[dst_byte]) !=
-                gfxRdpTmemLoad64(words[same]) ||
-            gfxRdpTmemLoad64(&tmem->byte_valid[dst_byte]) !=
-                k_gfx_rdp_tmem_ones ||
-            tmem->word_linear[word] != 0u) {
-            break;
-        }
-    }
-    if (same == entry_count) {
-        return true;
     }
 
     const uint32_t generation = gfxRdpTmemNextGeneration(tmem);
