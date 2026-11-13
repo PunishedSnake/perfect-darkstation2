@@ -1551,57 +1551,39 @@ static inline int gfx_lod_tile_offset(const int i) {
     return (rdp.tex_lod ? rdp.tex_detail : i);
 }
 
-static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx, bool is_rect) {
-    struct LoadedVertex* v1 = &rsp.loaded_vertices[vtx1_idx];
-    struct LoadedVertex* v2 = &rsp.loaded_vertices[vtx2_idx];
-    struct LoadedVertex* v3 = &rsp.loaded_vertices[vtx3_idx];
-    struct LoadedVertex* v_arr[3] = { v1, v2, v3 };
+/*
+ * Everything gfx_sp_tri1 derives from RDP/RSP state rather than from the
+ * triangle's vertices. Display lists issue long runs of G_VTX/G_TRI* with no
+ * state change, so the result is cached and only rebuilt after a command that
+ * can change state (gfx_run_dl invalidates on every other opcode).
+ */
+enum { GFX_TRI_IN_CONST, GFX_TRI_IN_SHADE, GFX_TRI_IN_SHADE_ALPHA, GFX_TRI_IN_LOD };
 
-    if ((rsp.extra_geometry_mode & G_NO_CLIPPING_EXT) == 0) {
-        if (v1->clip_rej & v2->clip_rej & v3->clip_rej) {
-            // The whole triangle lies outside the visible area
-            return;
-        }
-    }
+struct GfxTriSetup {
+    bool valid;
+    bool depth_source_prim;
+    bool z_is_from_0_to_1;
+    bool invert_y;
+    bool use_alpha;
+    bool use_fog;
+    bool use_grayscale;
+    bool used_textures[2];
+    bool clamp_s[2];
+    bool clamp_t[2];
+    uint8_t num_inputs;
+    float u_scale[2], u_bias[2], v_scale[2], v_bias[2];
+    float tex_clamp_s[2], tex_clamp_t[2];
+    uint8_t in_kind[2][7];
+    float in_const[7][4];
+};
 
-    if ((rsp.geometry_mode & G_CULL_BOTH) != 0) {
-        /* v2's projection is shared by both edges; compute it once. */
-        const float x2 = v2->x / (v2->w);
-        const float y2 = v2->y / (v2->w);
-        float dx1 = v1->x / (v1->w) - x2;
-        float dy1 = v1->y / (v1->w) - y2;
-        float dx2 = v3->x / (v3->w) - x2;
-        float dy2 = v3->y / (v3->w) - y2;
-        float cross = dx1 * dy2 - dy1 * dx2;
+static struct GfxTriSetup gfx_tri_setup_cache;
 
-        if ((v1->w < 0) ^ (v2->w < 0) ^ (v3->w < 0)) {
-            // If one vertex lies behind the eye, negating cross will give the correct result.
-            // If all vertices lie behind the eye, the triangle will be rejected anyway.
-            cross = -cross;
-        }
+static inline void gfx_tri_setup_invalidate(void) {
+    gfx_tri_setup_cache.valid = false;
+}
 
-        // If inverted culling is requested, negate the cross
-        // if ((rsp.extra_geometry_mode & G_EX_INVERT_CULLING) == 1) {
-        //     cross = -cross;
-        // }
-
-        switch (rsp.geometry_mode & G_CULL_BOTH) {
-            case G_CULL_FRONT:
-                if (cross <= 0) {
-                    return;
-                }
-                break;
-            case G_CULL_BACK:
-                if (cross >= 0) {
-                    return;
-                }
-                break;
-            case G_CULL_BOTH:
-                // Why is this even an option?
-                return;
-        }
-    }
-
+static void gfx_tri_setup(struct GfxTriSetup* S, bool is_rect) {
     bool depth_test = ((rsp.geometry_mode & G_ZBUFFER) == G_ZBUFFER || (rdp.other_mode_l & G_ZS_PRIM) == G_ZS_PRIM) &&
                       ((rdp.other_mode_h & G_CYC_1CYCLE) == G_CYC_1CYCLE || (rdp.other_mode_h & G_CYC_2CYCLE) == G_CYC_2CYCLE);
     bool depth_update = (rdp.other_mode_l & Z_UPD) == Z_UPD;
@@ -1803,159 +1785,248 @@ static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx, bo
         }
     }
 
+
+    S->depth_source_prim = depth_source_prim;
+    S->z_is_from_0_to_1 = clip_parameters.z_is_from_0_to_1;
+    S->invert_y = clip_parameters.invert_y;
+    S->use_alpha = use_alpha;
+    S->use_fog = use_fog;
+    S->use_grayscale = use_grayscale;
+    S->num_inputs = num_inputs;
+    for (int t = 0; t < 2; t++) {
+        S->used_textures[t] = used_textures[t];
+        S->clamp_s[t] = (tm & (1 << 2 * t)) != 0;
+        S->clamp_t[t] = (tm & (1 << (2 * t + 1))) != 0;
+        S->tex_clamp_s[t] = tex_clamp_s[t];
+        S->tex_clamp_t[t] = tex_clamp_t[t];
+        if (!used_textures[t]) {
+            continue;
+        }
+        // TODO: fix this; for now just ignore smaller mips
+        const auto* tt = &rdp.texture_tile[rdp.first_tile_index + gfx_lod_tile_offset(t)];
+        const int shifts = tt->shifts;
+        const int shiftt = tt->shiftt;
+        const float su = shifts == 0 ? 1.0f
+            : (shifts <= 10 ? gfx_pow2_reciprocal[shifts] : (float)(1 << (16 - shifts)));
+        const float sv = shiftt == 0 ? 1.0f
+            : (shiftt <= 10 ? gfx_pow2_reciprocal[shiftt] : (float)(1 << (16 - shiftt)));
+        float half = 1.0f;
+        float add = 0.0f;
+        if (!is_rect) {
+            if (!(rdp.other_mode_h & G_TP_PERSP)) {
+                half = 0.5f;
+            }
+            if ((rdp.other_mode_h & (3U << G_MDSFT_TEXTFILT)) != G_TF_POINT) {
+                // Linear filter adds 0.5f to the coordinates
+                add = 0.5f;
+            }
+        }
+        const float rw = tex_width_rcp[t] != 0.0f ? tex_width_rcp[t] : 1.0f / tex_width[t];
+        const float rh = tex_height_rcp[t] != 0.0f ? tex_height_rcp[t] : 1.0f / tex_height[t];
+        /* u' = ((u / 32 * su - uls / 4) * half + add) / width, folded. */
+        S->u_scale[t] = su / 32.0f * half * rw;
+        S->u_bias[t] = (add - tt->uls / 4.0f * half) * rw;
+        S->v_scale[t] = sv / 32.0f * half * rh;
+        S->v_bias[t] = (add - tt->ult / 4.0f * half) * rh;
+    }
+
+    for (int j = 0; j < num_inputs; j++) {
+        for (int k = 0; k < 1 + (use_alpha ? 1 : 0); k++) {
+            struct RGBA tmp = { 0 };
+            uint8_t kind = GFX_TRI_IN_CONST;
+            switch (comb->shader_input_mapping[k][j]) {
+                    // Note: CCMUX constants and ACMUX constants used here have same value, which is why this works
+                    // (except LOD fraction).
+                case G_CCMUX_PRIMITIVE:
+                    tmp = rdp.prim_color;
+                    break;
+                case G_CCMUX_SHADE:
+                    kind = GFX_TRI_IN_SHADE;
+                    break;
+                case G_CCMUX_SHADE_ALPHA:
+                    kind = GFX_TRI_IN_SHADE_ALPHA;
+                    break;
+                case G_CCMUX_ENVIRONMENT:
+                    tmp = rdp.env_color;
+                    break;
+                case G_CCMUX_PRIMITIVE_ALPHA:
+                    tmp.r = tmp.g = tmp.b = rdp.prim_color.a;
+                    break;
+                case G_CCMUX_ENV_ALPHA:
+                    tmp.r = tmp.g = tmp.b = rdp.env_color.a;
+                    break;
+                case G_CCMUX_PRIM_LOD_FRAC:
+                    tmp.r = tmp.g = tmp.b = rdp.prim_lod_fraction;
+                    break;
+                case G_CCMUX_LOD_FRACTION:
+                    if (rdp.other_mode_h & G_TL_LOD) {
+                        kind = GFX_TRI_IN_LOD;
+                    } else {
+                        tmp.r = tmp.g = tmp.b = tmp.a = 255;
+                    }
+                    break;
+                case G_ACMUX_PRIM_LOD_FRAC:
+                    tmp.a = rdp.prim_lod_fraction;
+                    break;
+                default:
+                    break;
+            }
+            S->in_kind[k][j] = kind;
+            if (k == 0) {
+                S->in_const[j][0] = gfx_u8_unit[tmp.r];
+                S->in_const[j][1] = gfx_u8_unit[tmp.g];
+                S->in_const[j][2] = gfx_u8_unit[tmp.b];
+            } else {
+                S->in_const[j][3] = gfx_u8_unit[tmp.a];
+            }
+        }
+    }
+}
+
+static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx, bool is_rect) {
+    struct LoadedVertex* v1 = &rsp.loaded_vertices[vtx1_idx];
+    struct LoadedVertex* v2 = &rsp.loaded_vertices[vtx2_idx];
+    struct LoadedVertex* v3 = &rsp.loaded_vertices[vtx3_idx];
+    struct LoadedVertex* v_arr[3] = { v1, v2, v3 };
+
+    if ((rsp.extra_geometry_mode & G_NO_CLIPPING_EXT) == 0) {
+        if (v1->clip_rej & v2->clip_rej & v3->clip_rej) {
+            // The whole triangle lies outside the visible area
+            return;
+        }
+    }
+
+    if ((rsp.geometry_mode & G_CULL_BOTH) != 0) {
+        /* v2's projection is shared by both edges; compute it once. */
+        const float x2 = v2->x / (v2->w);
+        const float y2 = v2->y / (v2->w);
+        float dx1 = v1->x / (v1->w) - x2;
+        float dy1 = v1->y / (v1->w) - y2;
+        float dx2 = v3->x / (v3->w) - x2;
+        float dy2 = v3->y / (v3->w) - y2;
+        float cross = dx1 * dy2 - dy1 * dx2;
+
+        if ((v1->w < 0) ^ (v2->w < 0) ^ (v3->w < 0)) {
+            // If one vertex lies behind the eye, negating cross will give the correct result.
+            // If all vertices lie behind the eye, the triangle will be rejected anyway.
+            cross = -cross;
+        }
+
+        // If inverted culling is requested, negate the cross
+        // if ((rsp.extra_geometry_mode & G_EX_INVERT_CULLING) == 1) {
+        //     cross = -cross;
+        // }
+
+        switch (rsp.geometry_mode & G_CULL_BOTH) {
+            case G_CULL_FRONT:
+                if (cross <= 0) {
+                    return;
+                }
+                break;
+            case G_CULL_BACK:
+                if (cross >= 0) {
+                    return;
+                }
+                break;
+            case G_CULL_BOTH:
+                // Why is this even an option?
+                return;
+        }
+    }
+
+    struct GfxTriSetup rect_setup;
+    const struct GfxTriSetup* S = &gfx_tri_setup_cache;
+    if (is_rect) {
+        gfx_tri_setup(&rect_setup, true);
+        S = &rect_setup;
+    } else if (!gfx_tri_setup_cache.valid) {
+        gfx_tri_setup(&gfx_tri_setup_cache, false);
+        gfx_tri_setup_cache.valid = true;
+    }
+
+    const bool use_alpha = S->use_alpha;
+    const int num_inputs = S->num_inputs;
     for (int i = 0; i < 3; i++) {
-        float z = v_arr[i]->z, w = v_arr[i]->w;
-        if (depth_source_prim) {
+        const struct LoadedVertex* V = v_arr[i];
+        float z = V->z, w = V->w;
+        if (S->depth_source_prim) {
             z = gfx_primitive_depth_to_clip_z(rdp.primitive_depth_z, w);
         }
-        if (clip_parameters.z_is_from_0_to_1) {
+        if (S->z_is_from_0_to_1) {
             z = (z + w) / 2.0f;
         }
 
-        buf_vbo[buf_vbo_len++] = v_arr[i]->x;
-        buf_vbo[buf_vbo_len++] = clip_parameters.invert_y ? -v_arr[i]->y : v_arr[i]->y;
-        buf_vbo[buf_vbo_len++] = z;
-        buf_vbo[buf_vbo_len++] = w;
+        float* out = &buf_vbo[buf_vbo_len];
+        *out++ = V->x;
+        *out++ = S->invert_y ? -V->y : V->y;
+        *out++ = z;
+        *out++ = w;
 
         for (int t = 0; t < 2; t++) {
-            if (!used_textures[t]) {
+            if (!S->used_textures[t]) {
                 continue;
             }
-
-            // TODO: fix this; for now just ignore smaller mips
-            const uint32_t tile = gfx_lod_tile_offset(t);
-
-            float u = v_arr[i]->u / 32.0f;
-            float v = v_arr[i]->v / 32.0f;
-
-            int shifts = rdp.texture_tile[rdp.first_tile_index + tile].shifts;
-            int shiftt = rdp.texture_tile[rdp.first_tile_index + tile].shiftt;
-            if (shifts != 0) {
-                if (shifts <= 10) {
-                    u *= gfx_pow2_reciprocal[shifts];
-                } else {
-                    u *= 1 << (16 - shifts);
-                }
+            *out++ = V->u * S->u_scale[t] + S->u_bias[t];
+            *out++ = V->v * S->v_scale[t] + S->v_bias[t];
+            if (S->clamp_s[t]) {
+                *out++ = S->tex_clamp_s[t];
             }
-            if (shiftt != 0) {
-                if (shiftt <= 10) {
-                    v *= gfx_pow2_reciprocal[shiftt];
-                } else {
-                    v *= 1 << (16 - shiftt);
-                }
-            }
-
-            u -= rdp.texture_tile[rdp.first_tile_index + tile].uls / 4.0f;
-            v -= rdp.texture_tile[rdp.first_tile_index + tile].ult / 4.0f;
-
-            if (!is_rect) {
-                if (!(rdp.other_mode_h & G_TP_PERSP)) {
-                    u *= 0.5f;
-                    v *= 0.5f;
-                }
-
-                if ((rdp.other_mode_h & (3U << G_MDSFT_TEXTFILT)) != G_TF_POINT) {
-                    // Linear filter adds 0.5f to the coordinates
-                    u += 0.5f;
-                    v += 0.5f;
-                }
-            }
-
-            buf_vbo[buf_vbo_len++] = tex_width_rcp[t] != 0.0f
-                ? u * tex_width_rcp[t] : u / tex_width[t];
-            buf_vbo[buf_vbo_len++] = tex_height_rcp[t] != 0.0f
-                ? v * tex_height_rcp[t] : v / tex_height[t];
-
-            bool clampS = tm & (1 << 2 * t);
-            bool clampT = tm & (1 << (2 * t + 1));
-
-            if (clampS) {
-                buf_vbo[buf_vbo_len++] = tex_clamp_s[t];
-            }
-            if (clampT) {
-                buf_vbo[buf_vbo_len++] = tex_clamp_t[t];
+            if (S->clamp_t[t]) {
+                *out++ = S->tex_clamp_t[t];
             }
         }
 
-        if (use_fog) {
-            buf_vbo[buf_vbo_len++] = gfx_u8_unit[rdp.fog_color.r];
-            buf_vbo[buf_vbo_len++] = gfx_u8_unit[rdp.fog_color.g];
-            buf_vbo[buf_vbo_len++] = gfx_u8_unit[rdp.fog_color.b];
-            buf_vbo[buf_vbo_len++] = gfx_u8_unit[v_arr[i]->fog]; // fog factor
+        if (S->use_fog) {
+            *out++ = gfx_u8_unit[rdp.fog_color.r];
+            *out++ = gfx_u8_unit[rdp.fog_color.g];
+            *out++ = gfx_u8_unit[rdp.fog_color.b];
+            *out++ = gfx_u8_unit[V->fog]; // fog factor
         }
 
-        if (use_grayscale) {
-            buf_vbo[buf_vbo_len++] = gfx_u8_unit[rdp.grayscale_color.r];
-            buf_vbo[buf_vbo_len++] = gfx_u8_unit[rdp.grayscale_color.g];
-            buf_vbo[buf_vbo_len++] = gfx_u8_unit[rdp.grayscale_color.b];
-            buf_vbo[buf_vbo_len++] = gfx_u8_unit[rdp.grayscale_color.a]; // lerp interpolation factor (not alpha)
+        if (S->use_grayscale) {
+            *out++ = gfx_u8_unit[rdp.grayscale_color.r];
+            *out++ = gfx_u8_unit[rdp.grayscale_color.g];
+            *out++ = gfx_u8_unit[rdp.grayscale_color.b];
+            *out++ = gfx_u8_unit[rdp.grayscale_color.a]; // lerp interpolation factor (not alpha)
         }
 
         for (int j = 0; j < num_inputs; j++) {
-            struct RGBA* color = 0;
-            struct RGBA tmp = { 0 };
             for (int k = 0; k < 1 + (use_alpha ? 1 : 0); k++) {
-                switch (comb->shader_input_mapping[k][j]) {
-                        // Note: CCMUX constants and ACMUX constants used here have same value, which is why this works
-                        // (except LOD fraction).
-                    case G_CCMUX_PRIMITIVE:
-                        color = &rdp.prim_color;
+                uint8_t r, g, b, a;
+                switch (S->in_kind[k][j]) {
+                    case GFX_TRI_IN_SHADE:
+                        r = V->color.r; g = V->color.g; b = V->color.b; a = V->color.a;
                         break;
-                    case G_CCMUX_SHADE:
-                        color = &v_arr[i]->color;
+                    case GFX_TRI_IN_SHADE_ALPHA:
+                        r = g = b = V->color.a; a = 0;
                         break;
-                    case G_CCMUX_SHADE_ALPHA:
-                        tmp.r = tmp.g = tmp.b = v_arr[i]->color.a;
-                        color = &tmp;
-                        break;
-                    case G_CCMUX_ENVIRONMENT:
-                        color = &rdp.env_color;
-                        break;
-                    case G_CCMUX_PRIMITIVE_ALPHA: {
-                        tmp.r = tmp.g = tmp.b = rdp.prim_color.a;
-                        color = &tmp;
+                    case GFX_TRI_IN_LOD: {
+                        // HACK: very roughly eyeballed based on the carpets in Defection
+                        // this is actually supposed to be calculated per pixel
+                        const float distance_frac = std::max(0.f, std::min(w / 1024.f, 1.f));
+                        r = g = b = a = (uint8_t)((0.7f + distance_frac * 0.3f) * 255.f);
                         break;
                     }
-                    case G_CCMUX_ENV_ALPHA: {
-                        tmp.r = tmp.g = tmp.b = rdp.env_color.a;
-                        color = &tmp;
-                        break;
-                    }
-                    case G_CCMUX_PRIM_LOD_FRAC: {
-                        tmp.r = tmp.g = tmp.b = rdp.prim_lod_fraction;
-                        color = &tmp;
-                        break;
-                    }
-                    case G_CCMUX_LOD_FRACTION: {
-                        if (rdp.other_mode_h & G_TL_LOD) {
-                            // HACK: very roughly eyeballed based on the carpets in Defection
-                            // this is actually supposed to be calculated per pixel
-                            const float distance_frac = std::max(0.f, std::min(w / 1024.f, 1.f));
-                            tmp.r = tmp.g = tmp.b = tmp.a = (0.7f + distance_frac * 0.3f) * 255.f;
-                        } else {
-                            tmp.r = tmp.g = tmp.b = tmp.a = 255;
-                        }
-                        color = &tmp;
-                        break;
-                    }
-                    case G_ACMUX_PRIM_LOD_FRAC:
-                        tmp.a = rdp.prim_lod_fraction;
-                        color = &tmp;
-                        break;
                     default:
-                        memset(&tmp, 0, sizeof(tmp));
-                        color = &tmp;
-                        break;
+                        if (k == 0) {
+                            *out++ = S->in_const[j][0];
+                            *out++ = S->in_const[j][1];
+                            *out++ = S->in_const[j][2];
+                        } else {
+                            *out++ = S->in_const[j][3];
+                        }
+                        continue;
                 }
                 if (k == 0) {
-                    buf_vbo[buf_vbo_len++] = gfx_u8_unit[color->r];
-                    buf_vbo[buf_vbo_len++] = gfx_u8_unit[color->g];
-                    buf_vbo[buf_vbo_len++] = gfx_u8_unit[color->b];
+                    *out++ = gfx_u8_unit[r];
+                    *out++ = gfx_u8_unit[g];
+                    *out++ = gfx_u8_unit[b];
                 } else {
-                    buf_vbo[buf_vbo_len++] = gfx_u8_unit[color->a];
+                    *out++ = gfx_u8_unit[a];
                 }
             }
         }
+        buf_vbo_len = (size_t)(out - buf_vbo);
     }
 
     if (++buf_vbo_num_tris == MAX_BUFFERED) {
@@ -2662,6 +2733,11 @@ static void gfx_run_dl(Gfx* cmd) {
     for (;;) {
         uint32_t opcode = cmd->words.w0 >> 24;
         // gfx_print_cmd(cmd);
+        if (opcode != G_VTX && opcode != G_TRI1 && opcode != G_TRI4 &&
+            opcode != G_COL && opcode != G_MTX && opcode != (uint8_t)G_POPMTX &&
+            opcode != G_NOOP) {
+            gfx_tri_setup_invalidate();
+        }
         switch (opcode) {
                 // RSP commands:
             case G_NOOP:
@@ -3097,6 +3173,7 @@ extern "C" void gfx_run(Gfx* commands) {
     rdp.viewport_or_scissor_changed = true;
     rendering_state.viewport = {};
     rendering_state.scissor = {};
+    gfx_tri_setup_invalidate();
     gfx_run_dl(commands);
     gfx_flush();
     gfxFramebuffer = 0;

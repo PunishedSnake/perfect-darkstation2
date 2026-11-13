@@ -1281,21 +1281,33 @@ static float ps2_clampf(float v, float lo, float hi)
     return v < lo ? lo : (v > hi ? hi : v);
 }
 
-static uint8_t ps2_u8_component(float v)
+/*
+ * Branchless clamp to [0, 1]. The R5900 FPU has MAX.S/MIN.S; the per-vertex
+ * colour and depth conversions below otherwise pay two compare-and-branch
+ * pairs each. (The PS2 FPU has no NaN, so ordering semantics do not matter.)
+ */
+static inline float ps2_saturate(float v)
 {
-    int out = (int)(ps2_clampf(v, 0.0f, 1.0f) * 255.0f + 0.5f);
-    if (out < 0) out = 0;
-    if (out > 255) out = 255;
-    return (uint8_t)out;
+#if defined(_EE)
+    float r;
+    __asm__("max.s %0, %1, %2" : "=f"(r) : "f"(v), "f"(0.0f));
+    __asm__("min.s %0, %1, %2" : "=f"(r) : "f"(r), "f"(1.0f));
+    return r;
+#else
+    return ps2_clampf(v, 0.0f, 1.0f);
+#endif
 }
 
-static uint8_t ps2_modulate_component(float v)
+static inline uint8_t ps2_u8_component(float v)
+{
+    /* Saturated input keeps the result in 0..255 without integer clamps. */
+    return (uint8_t)(int)(ps2_saturate(v) * 255.0f + 0.5f);
+}
+
+static inline uint8_t ps2_modulate_component(float v)
 {
     /* GS texture MODULATE uses 0x80 as a 1.0 fragment multiplier. */
-    int out = (int)(ps2_clampf(v, 0.0f, 1.0f) * 128.0f + 0.5f);
-    if (out < 0) out = 0;
-    if (out > 128) out = 128;
-    return (uint8_t)out;
+    return (uint8_t)(int)(ps2_saturate(v) * 128.0f + 0.5f);
 }
 
 static uint8_t ps2_texture_alpha_fragment_component(float v)
@@ -1305,10 +1317,7 @@ static uint8_t ps2_texture_alpha_fragment_component(float v)
      * so Af=0x40 represents the compensation needed to map texel 0xff to the
      * GS-native opaque alpha neighbourhood without an upload-side repack.
      */
-    int out = (int)(ps2_clampf(v, 0.0f, 1.0f) * 64.0f + 0.5f);
-    if (out < 0) out = 0;
-    if (out > 64) out = 64;
-    return (uint8_t)out;
+    return (uint8_t)(int)(ps2_saturate(v) * 64.0f + 0.5f);
 }
 
 #if defined(PERFECT_DARK_PS2_MATERIAL_BASELINE)
@@ -1452,13 +1461,12 @@ static struct Ps2GsPackedReg ps2_pack_xyzf2(float x, float y, int z, uint8_t fog
     return out;
 }
 
-static int ps2_map_clip_depth(float z, float w)
+/* inv_w is ps2_clip_inv_w(w): 1/w, or 0 for w == 0 (maps to ndc 1). */
+static inline int ps2_map_clip_depth_inv(float z, float inv_w)
 {
-    float ndc = (w != 0.0f) ? (z / w) : 1.0f;
-    ndc = ps2_clampf(ndc, 0.0f, 1.0f);
-
-    float ranged = s_depth_near + ndc * (s_depth_far - s_depth_near);
-    ranged = ps2_clampf(ranged, 0.0f, 1.0f);
+    const float ndc = inv_w != 0.0f ? ps2_saturate(z * inv_w) : 1.0f;
+    const float ranged = ps2_saturate(
+        s_depth_near + ndc * (s_depth_far - s_depth_near));
 
     /* Current GS baseline uses GEQUAL: near is large, far is small. */
     const int depth = 1 + (int)((1.0f - ranged) * 65534.0f);
@@ -1485,7 +1493,8 @@ static inline void ps2_project_screen(
         (ndc_x * 0.5f + 0.5f) * (float)s_viewport.width;
     *sy = (float)s_viewport.y +
         (0.5f - ndc_y * 0.5f) * (float)s_viewport.height;
-    *iz = ps2_map_clip_depth(clip_z, clip_w);
+    (void)clip_w;
+    *iz = ps2_map_clip_depth_inv(clip_z, inv_w);
 }
 
 static inline struct Ps2GsPackedReg ps2_pack_screen_position(
