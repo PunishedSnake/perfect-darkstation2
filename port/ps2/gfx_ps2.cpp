@@ -1665,8 +1665,24 @@ static void ps2_input1_tex0_lerp_set_texture_state(void)
     ps2_apply_texture_clamp(0);
 }
 
-static void ps2_draw_opaque_trilerp(uint32_t vertex_count)
+static bool ps2_alpha_trilerp_sampler_states_match(void);
+
+static void ps2_draw_opaque_trilerp(uint32_t vertex_count, bool same_uv)
 {
+    /*
+     * lerp(T, T, lod) == T: when both taps are the same texture, sampler and
+     * coordinates (Fast3D maps plain mip LOD to one tile), the second pass
+     * only re-blends the first pass's own colour over itself. Draw once.
+     */
+    if (same_uv && s_sampler_linear[0] == s_sampler_linear[1] &&
+        ps2_alpha_trilerp_sampler_states_match()) {
+        ps2_trilerp_set_base_state();
+        ps2GsCoreDrawTexturedTriangles(
+            s_selected_texture[0], s_stq_vertices[0], vertex_count);
+        ps2_trilerp_restore_state();
+        return;
+    }
+
     /*
      * With a writing Z buffer, pass 0 establishes ownership for the complete
      * batch and pass 1 can safely use equal-depth rejection. Without that
@@ -4249,6 +4265,8 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
         float trace_max_u[2] = { -FLT_MAX, -FLT_MAX };
         float trace_max_v[2] = { -FLT_MAX, -FLT_MAX };
 
+        /* Opaque trilerp whose two samples are identical needs one pass. */
+        bool trilerp_same_uv = true;
         const uint64_t translation_start = sysGetMicroseconds();
         for (size_t i = 0; i < batch_vertices; ++i) {
             const float *src = &buf_vbo[(base_vertex + i) * stride];
@@ -4637,6 +4655,8 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
                 }
 
                 const uint8_t lod = ps2_modulate_component(input[0][0]);
+                trilerp_same_uv = trilerp_same_uv &&
+                    tex_u[0] == tex_u[1] && tex_v[0] == tex_v[1];
                 s_stq_vertices[0][i].rgbaq =
                     ps2_pack_rgbaq(shade_r, shade_g, shade_b, 0x80, inv_w);
                 s_stq_vertices[0][i].st =
@@ -4793,7 +4813,8 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
             (void)ps2_draw_trilerp_independent_alpha(
                 (uint32_t)batch_vertices);
         } else if (opaque_trilerp) {
-            ps2_draw_opaque_trilerp((uint32_t)batch_vertices);
+            ps2_draw_opaque_trilerp((uint32_t)batch_vertices,
+                trilerp_same_uv);
         } else if (opaque_input1_tex0_lerp) {
             ps2_draw_opaque_input1_tex0_lerp((uint32_t)batch_vertices);
         } else if (s_shader->plan.textured) {
