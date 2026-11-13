@@ -672,6 +672,8 @@ static MenuItemHandlerResult menuhandlerControlScheme(s32 operation, struct menu
 		return (intptr_t)inputPs2SchemeName(data->dropdown.value);
 	case MENUOP_SET:
 		inputPs2SetScheme(g_ExtMenuPlayer, data->dropdown.value);
+		// N64 roles need the original (non-extended) control logic
+		g_PlayerExtCfg[g_ExtMenuPlayer].extcontrols = data->dropdown.value != PS2_INPUT_SCHEME_N64;
 		break;
 	case MENUOP_GETSELECTEDINDEX:
 		data->dropdown.value = inputPs2GetScheme(g_ExtMenuPlayer);

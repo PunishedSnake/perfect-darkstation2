@@ -11,7 +11,6 @@
 #include "input.h"
 #include "platform.h"
 #include "system.h"
-#include "data.h"
 
 #include "input_ps2_map.h"
 #include "pad_ps2.h"
@@ -309,9 +308,7 @@ void inputPs2SetScheme(s32 controller, s32 scheme)
     }
     s_scheme[controller] = scheme;
     ps2InputApplyScheme(controller);
-    /* N64 roles need the original control logic and C-button look. */
-    g_PlayerExtCfg[controller].extcontrols =
-        scheme == PS2_INPUT_SCHEME_N64 ? 0 : 1;
+    /* N64 roles use C-button look; the menu also switches extcontrols. */
     s_dual_analog[controller] = scheme == PS2_INPUT_SCHEME_N64 ? 0 : 1;
 }
 
