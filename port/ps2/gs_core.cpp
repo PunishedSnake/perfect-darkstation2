@@ -94,6 +94,21 @@ static struct Ps2GsVramAllocator s_vram_allocator;
 static struct Ps2GsRetiredVramBlock
     s_retired_vram[PS2_GS_MAX_RETIRED_BLOCKS];
 static struct Ps2GsSharedClut s_shared_cluts[PS2_GS_SHARED_CLUT_COUNT];
+
+/*
+ * Small content-addressed pool of caller-built CT32 CLUTs for CI4 textures
+ * (two-palette text material). Entries are rewritten in place; GS processes
+ * the IMAGE transfer and later TEX0 loads in stream order.
+ */
+#define PS2_GS_CUSTOM_CLUT4_SLOTS 32u
+struct Ps2GsCustomClut4 {
+    bool valid;
+    uint32_t entries[16];
+    uint32_t last_use;
+};
+static struct Ps2GsCustomClut4 s_custom_clut4[PS2_GS_CUSTOM_CLUT4_SLOTS];
+static uint32_t s_custom_clut4_vram;
+static uint32_t s_custom_clut4_clock;
 static uint32_t s_shared_clut_staging[256] __attribute__((aligned(64)));
 static uint32_t s_retired_vram_count;
 static uint32_t s_texture_use_frame = 1u;
@@ -826,6 +841,9 @@ extern "C" bool ps2GsCoreInit(const struct Ps2GsCreateInfo *info)
     memset(s_render_targets, 0, sizeof(s_render_targets));
     memset(s_retired_vram, 0, sizeof(s_retired_vram));
     memset(s_shared_cluts, 0, sizeof(s_shared_cluts));
+    memset(s_custom_clut4, 0, sizeof(s_custom_clut4));
+    s_custom_clut4_vram = 0u;
+    s_custom_clut4_clock = 0u;
     s_retired_vram_count = 0;
 
     /* Match the previous gsKit Z-test baseline without queuing a gsKit packet. */
@@ -3181,6 +3199,84 @@ extern "C" bool ps2GsCoreDrawTextureAlphaMaskTriangles(
 
     GSTEXTURE view = slot->texture;
     view.VramClut = slot->alpha_mask_clut_vram;
+    view.ClutPSM = GS_PSM_CT32;
+    view.ClutStorageMode = 0;
+    return ps2GsCoreDrawTexturedTrianglesInternal(
+        &view, vertices, vertex_count, false, NULL,
+        NULL, NULL, NULL);
+}
+
+/* Returns the VRAM address of a CLUT holding exactly these entries. */
+static bool ps2GsCoreCustomClut4(const uint32_t entries[16], uint32_t *vram)
+{
+    /* One 256-byte block per CT32 8x2 CLUT. */
+    const uint32_t clut_bytes = gsKit_texture_size(8, 2, GS_PSM_CT32);
+    if (s_custom_clut4_vram == 0u) {
+        uint32_t base = 0u;
+        if (!ps2GsVramAllocatorAlloc(&s_vram_allocator,
+                clut_bytes * PS2_GS_CUSTOM_CLUT4_SLOTS, &base)) {
+            return false;
+        }
+        s_custom_clut4_vram = base;
+    }
+
+    uint32_t victim = 0u;
+    for (uint32_t i = 0u; i < PS2_GS_CUSTOM_CLUT4_SLOTS; ++i) {
+        struct Ps2GsCustomClut4 *slot = &s_custom_clut4[i];
+        if (slot->valid &&
+            memcmp(slot->entries, entries, sizeof(slot->entries)) == 0) {
+            slot->last_use = ++s_custom_clut4_clock;
+            *vram = s_custom_clut4_vram + i * clut_bytes;
+            return true;
+        }
+        if (!slot->valid ||
+            (s_custom_clut4[victim].valid &&
+             slot->last_use < s_custom_clut4[victim].last_use)) {
+            victim = i;
+        }
+    }
+
+    struct Ps2GsCustomClut4 *slot = &s_custom_clut4[victim];
+    memcpy(s_shared_clut_staging, entries, 16u * sizeof(uint32_t));
+    GSTEXTURE clut;
+    memset(&clut, 0, sizeof(clut));
+    clut.Width = 8;
+    clut.Height = 2;
+    clut.PSM = GS_PSM_CT32;
+    clut.Vram = s_custom_clut4_vram + victim * clut_bytes;
+    clut.Mem = (u32 *)(uintptr_t)s_shared_clut_staging;
+    slot->valid = false;
+    if (!ps2GsNativeQueueUploadTexture(
+            s_gs, &clut, PS2_GS_NATIVE_UPLOAD_RGBA32)) {
+        return false;
+    }
+    /* The GS may still hold this address in its CLUT buffer. */
+    ps2GsCoreInvalidateClutCache();
+    memcpy(slot->entries, entries, sizeof(slot->entries));
+    slot->valid = true;
+    slot->last_use = ++s_custom_clut4_clock;
+    *vram = clut.Vram;
+    return true;
+}
+
+extern "C" bool ps2GsCoreDrawTextureClut4Triangles(
+    Ps2GsTextureHandle handle, const uint32_t clut_ct32[16],
+    const struct Ps2GsTexturedVertex *vertices, uint32_t vertex_count)
+{
+    if (!s_gs || !s_frame_building || !vertices || !clut_ct32 ||
+        vertex_count == 0u) {
+        return false;
+    }
+
+    struct Ps2GsTextureSlot *slot = ps2GsCoreTextureSlot(handle);
+    uint32_t clut_vram = 0u;
+    if (!slot || !slot->uploaded || slot->texture.PSM != GS_PSM_T4 ||
+        !ps2GsCoreCustomClut4(clut_ct32, &clut_vram)) {
+        return false;
+    }
+
+    GSTEXTURE view = slot->texture;
+    view.VramClut = clut_vram;
     view.ClutPSM = GS_PSM_CT32;
     view.ClutStorageMode = 0;
     return ps2GsCoreDrawTexturedTrianglesInternal(

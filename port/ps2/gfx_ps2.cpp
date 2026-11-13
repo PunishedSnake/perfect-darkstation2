@@ -168,6 +168,9 @@ struct Ps2TextureSamplerState {
     uint64_t source_hash;
     uint64_t palette_hash;
     uint64_t content_identity;
+    /* CI4 only: palette alpha per index, as delivered to the GS. */
+    bool ci4_alpha_valid;
+    uint8_t ci4_alpha[16];
 };
 
 struct Ps2TextureRegionClampState {
@@ -571,6 +574,7 @@ static void ps2_record_texture_provenance(
     sampler->source_hash = source_hash;
     sampler->palette_hash = palette_hash;
     sampler->content_identity = content_identity;
+    sampler->ci4_alpha_valid = false;
 }
 
 static void ps2_apply_texture_clamp(int tile)
@@ -1149,6 +1153,16 @@ extern "C" bool gfxPs2UploadTmemTexture(
     ps2_record_texture_provenance(
         handle, format, size, palette_format, view->palette_count,
         source_hash, palette_hash, view->content_identity);
+    if (ci4 && handle < PS2_GFX_TEXTURE_STATE_SLOTS) {
+        struct Ps2TextureSamplerState *sampler = &s_texture_sampler[handle];
+        for (uint32_t i = 0u; i < 16u; ++i) {
+            /* Same alpha the colour CLUT delivers (see alpha-mask CLUT). */
+            sampler->ci4_alpha[i] = ia16_palette
+                ? (uint8_t)(view->palette[i] >> 8u)
+                : ((view->palette[i] & 1u) != 0u ? 0xffu : 0x00u);
+        }
+        sampler->ci4_alpha_valid = true;
+    }
     if (!*logged) {
         sysLogPrintf(LOG_NOTE,
             "GfxPS2 native texture path: exact N64 CI%u/%s TLUT -> GS PSMT%u/%s CSM1",
@@ -2471,6 +2485,83 @@ static bool ps2_draw_tex0_factor_lerp_tile(
     ps2GsCoreSetAlphaBlend(s_alpha_blend);
     return ps2GsCoreDrawRenderTargetTriangles(
         s_alpha_trilerp_color_target, composite, 3u, false);
+}
+
+/*
+ * Text material: colour = lerp(INPUT2, INPUT1, TEXEL1.a), alpha =
+ * TEXEL0.a * INPUT1.a. Perfect Dark's font renderer samples the same CI4
+ * indices through palette 0 (tile 0) and palette 1 (tile 1), so the whole
+ * combiner folds into one 16-entry CLUT per colour pair: RGB is the lerp at
+ * palette-1 alpha, A is palette-0 alpha. One ordinary textured GS pass then
+ * replaces the tiled pass graph. Any batch that does not fit that shape
+ * returns false and takes the exact graph.
+ */
+static bool ps2_draw_text_blend_clut(uint32_t vertex_count)
+{
+    if (s_shader->plan.pass_graph != PS2_PASS_GRAPH_TEX1_ALPHA_FACTOR_LERP ||
+        s_shader->features.opt_fog || s_modulate || vertex_count == 0u) {
+        return false;
+    }
+    const Ps2GsTextureHandle h0 = s_selected_texture[0];
+    const Ps2GsTextureHandle h1 = s_selected_texture[1];
+    if (h0 >= PS2_GFX_TEXTURE_STATE_SLOTS ||
+        h1 >= PS2_GFX_TEXTURE_STATE_SLOTS) {
+        return false;
+    }
+    const struct Ps2TextureSamplerState *t0 = &s_texture_sampler[h0];
+    const struct Ps2TextureSamplerState *t1 = &s_texture_sampler[h1];
+    if (!t0->ci4_alpha_valid || !t1->ci4_alpha_valid ||
+        t0->source_hash != t1->source_hash ||
+        t0->logical_width != t1->logical_width ||
+        t0->logical_height != t1->logical_height ||
+        s_sampler_cms[0] != s_sampler_cms[1] ||
+        s_sampler_cmt[0] != s_sampler_cmt[1] ||
+        s_sampler_linear[0] != s_sampler_linear[1]) {
+        return false;
+    }
+
+    const struct Ps2Tex0FactorLerpVertex *v = s_tex0_factor_vertices;
+    for (uint32_t i = 0u; i < vertex_count; ++i) {
+        if (v[i].tex_u[0] != v[i].tex_u[1] ||
+            v[i].tex_v[0] != v[i].tex_v[1] ||
+            memcmp(v[i].input1, v[0].input1, 3u) != 0 ||
+            memcmp(v[i].input2, v[0].input2, 3u) != 0) {
+            return false;
+        }
+    }
+
+    uint32_t clut[16];
+    for (uint32_t i = 0u; i < 16u; ++i) {
+        const uint32_t f = t1->ci4_alpha[i];
+        uint32_t rgb = 0u;
+        for (uint32_t c = 0u; c < 3u; ++c) {
+            const uint32_t lerp = ((uint32_t)v[0].input2[c] * (255u - f) +
+                (uint32_t)v[0].input1[c] * f + 127u) / 255u;
+            rgb |= lerp << (8u * c);
+        }
+        clut[i] = rgb | ((uint32_t)t0->ci4_alpha[i] << 24u);
+    }
+
+    struct Ps2GsTexturedVertex *out = s_stq_vertices[0];
+    for (uint32_t i = 0u; i < vertex_count; ++i) {
+        out[i].rgbaq = ps2_pack_rgbaq(
+            0x80u, 0x80u, 0x80u, v[i].tex0_alpha_input, v[i].inv_w);
+        out[i].st = ps2_pack_st(
+            v[i].tex_u[0] * v[i].inv_w, v[i].tex_v[0] * v[i].inv_w);
+        out[i].xyz2 = ps2_pack_xyz2(v[i].x, v[i].y, v[i].z);
+    }
+    ps2_apply_texture_clamp(0);
+    ps2GsCoreSetTextureAlpha(true);
+    if (!ps2GsCoreDrawTextureClut4Triangles(h0, clut, out, vertex_count)) {
+        return false;
+    }
+    static bool s_logged_text_clut;
+    if (!s_logged_text_clut) {
+        sysLogPrintf(LOG_NOTE,
+            "GfxPS2 two-palette text material uses one GS pass (CI4 CLUT)");
+        s_logged_text_clut = true;
+    }
+    return true;
 }
 
 static bool ps2_draw_tex0_factor_lerp(uint32_t vertex_count)
@@ -4683,8 +4774,10 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
             (void)ps2_draw_interference(
                 (uint32_t)batch_vertices);
         } else if (texture_factor_lerp) {
-            (void)ps2_draw_tex0_factor_lerp(
-                (uint32_t)batch_vertices);
+            if (!ps2_draw_text_blend_clut((uint32_t)batch_vertices)) {
+                (void)ps2_draw_tex0_factor_lerp(
+                    (uint32_t)batch_vertices);
+            }
         } else if (alpha_trilerp) {
             (void)ps2_draw_alpha_trilerp((uint32_t)batch_vertices);
         } else if (independent_alpha_trilerp) {
