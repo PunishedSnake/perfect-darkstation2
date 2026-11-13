@@ -1498,7 +1498,7 @@ static void gfx_adjust_width_height_for_scale(uint32_t& width, uint32_t& height)
     }
 }
 
-static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx* vertices) {
+static inline __attribute__((always_inline)) void gfx_sp_vertex_now(size_t n_vertices, size_t dest_index, const Vtx* vertices) {
     SUPPORT_CHECK(n_vertices <= MAX_VERTICES);
 
     /*
@@ -1712,6 +1712,303 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx* verti
         d->color.a = vcn->a; // can be required for SHADE_ALPHA even if fog is enabled
     }
 }
+
+#if defined(PLATFORM_PS2)
+/*
+ * Lazy vertex loads (PS2). The N64 RSP transformed every loaded vertex
+ * whether or not anything used it; about half of what Perfect Dark loads is
+ * off screen. A G_VTX whose source bounding box lies wholly outside one of
+ * the trivial-reject planes is not transformed: its slots only get that
+ * plane's clip_rej bit, which is a subset of the bits the full transform
+ * would produce, so every triangle that the AND test rejects with it would
+ * have been rejected anyway. A triangle that survives with such a vertex
+ * transforms it on demand. Any command that could change what the transform
+ * produces (matrices, lights, geometry mode, vertex colours, ...) first
+ * transforms every pending slot, so results are identical to eager loading.
+ */
+enum { GFX_LAZY_VTX_GROUPS = 16 };
+static struct {
+    const Vtx* src[MAX_VERTICES];
+    uint8_t group[MAX_VERTICES];
+    uint32_t pending; /* number of slots with src != NULL */
+    /* Per culled G_VTX: the matrix and vertex-colour table it was loaded
+     * under, so G_MTX / G_COL / segment writes need not settle it. */
+    struct {
+        float mp[4][4];
+        const struct NormalColor* colours;
+        uint32_t geometry_mode;
+        uint16_t tex_s, tex_t;
+        bool lit;
+    } groups[GFX_LAZY_VTX_GROUPS];
+    uint32_t next_group;
+    uint32_t lit_groups; /* pending groups loaded with G_LIGHTING */
+#if defined(PD_PS2_LAZY_VTX_VERIFY)
+    struct LoadedVertex shadow[MAX_VERTICES]; /* eager result at load time */
+    uint32_t checked, mismatched, bad_bits;
+#endif
+} gfx_lazy_vtx;
+
+static inline void gfx_lazy_vtx_clear_range(size_t first, size_t count) {
+    if (gfx_lazy_vtx.pending == 0) {
+        return;
+    }
+    for (size_t i = first; i < first + count && i < MAX_VERTICES; ++i) {
+        if (gfx_lazy_vtx.src[i] != NULL) {
+            gfx_lazy_vtx.src[i] = NULL;
+            --gfx_lazy_vtx.pending;
+        }
+    }
+}
+
+static __attribute__((noinline)) void gfx_sp_vertex_slow(size_t n, size_t dest, const Vtx* v) {
+    gfx_sp_vertex_now(n, dest, v);
+}
+
+/* Transform slots [idx, idx+count) of one group under its load-time state. */
+static void gfx_lazy_vtx_run(size_t idx, size_t count) {
+    const Vtx* v = gfx_lazy_vtx.src[idx];
+    const uint32_t g = gfx_lazy_vtx.group[idx];
+    for (size_t i = idx; i < idx + count; ++i) {
+        gfx_lazy_vtx.src[i] = NULL;
+    }
+    gfx_lazy_vtx.pending -= (uint32_t)count;
+    if (gfx_lazy_vtx.pending == 0) {
+        gfx_lazy_vtx.lit_groups = 0;
+    }
+    float saved_mp[4][4];
+    memcpy(saved_mp, rsp.MP_matrix, sizeof(saved_mp));
+    const struct NormalColor* saved_colours = rsp.vertex_colors;
+    const uint32_t saved_geometry = rsp.geometry_mode;
+    const uint16_t saved_s = rsp.texture_scaling_factor.s;
+    const uint16_t saved_t = rsp.texture_scaling_factor.t;
+    memcpy(rsp.MP_matrix, gfx_lazy_vtx.groups[g].mp, sizeof(saved_mp));
+    rsp.vertex_colors = gfx_lazy_vtx.groups[g].colours;
+    rsp.geometry_mode = gfx_lazy_vtx.groups[g].geometry_mode;
+    rsp.texture_scaling_factor.s = gfx_lazy_vtx.groups[g].tex_s;
+    rsp.texture_scaling_factor.t = gfx_lazy_vtx.groups[g].tex_t;
+    gfx_sp_vertex_slow(count, idx, v);
+#if defined(PD_PS2_LAZY_VTX_VERIFY)
+    for (size_t i = idx; i < idx + count; ++i) {
+        ++gfx_lazy_vtx.checked;
+        if (memcmp(&rsp.loaded_vertices[i], &gfx_lazy_vtx.shadow[i], sizeof(struct LoadedVertex)) != 0) {
+            if (gfx_lazy_vtx.mismatched++ < 8) {
+                sysLogPrintf(LOG_WARNING, "LAZYVERIFY mismatch slot=%u", (unsigned)i);
+            }
+        }
+    }
+#endif
+    memcpy(rsp.MP_matrix, saved_mp, sizeof(saved_mp));
+    rsp.vertex_colors = saved_colours;
+    rsp.geometry_mode = saved_geometry;
+    rsp.texture_scaling_factor.s = saved_s;
+    rsp.texture_scaling_factor.t = saved_t;
+}
+
+static inline void gfx_lazy_vtx_materialize(size_t idx) {
+    if (idx < MAX_VERTICES && gfx_lazy_vtx.src[idx] != NULL) {
+        gfx_lazy_vtx_run(idx, 1);
+    }
+}
+
+static void gfx_lazy_vtx_materialize_all(void) {
+    size_t i = 0;
+    while (gfx_lazy_vtx.pending != 0 && i < MAX_VERTICES) {
+        if (gfx_lazy_vtx.src[i] == NULL) {
+            ++i;
+            continue;
+        }
+        /* Runs of consecutive source vertices from one load. */
+        size_t n = 1;
+        while (i + n < MAX_VERTICES && gfx_lazy_vtx.src[i + n] == gfx_lazy_vtx.src[i] + n &&
+               gfx_lazy_vtx.group[i + n] == gfx_lazy_vtx.group[i]) {
+            ++n;
+        }
+        gfx_lazy_vtx_run(i, n);
+        i += n;
+    }
+    gfx_lazy_vtx.lit_groups = 0;
+}
+
+/*
+ * Commands that leave everything gfx_sp_vertex_now reads untouched; any
+ * other command settles pending vertices before it runs.
+ */
+static inline bool gfx_opcode_keeps_lazy_vertices(uint32_t opcode, const Gfx* cmd) {
+    switch (opcode) {
+        case (uint8_t)G_MTX:
+        case (uint8_t)G_POPMTX:
+            /* Unlit vertices only depend on the snapshotted MP matrix;
+             * lighting also reads the modelview stack. */
+            return gfx_lazy_vtx.lit_groups == 0;
+        case (uint8_t)G_MOVEWORD:
+            return ((cmd->words.w0 >> 0) & 0xff) == G_MW_SEGMENT;
+        case (uint8_t)G_TEXTURE:            /* scaling factor is snapshotted */
+        case (uint8_t)G_SETGEOMETRYMODE:   /* geometry mode is snapshotted */
+        case (uint8_t)G_CLEARGEOMETRYMODE:
+        case (uint8_t)G_COL:
+        case (uint8_t)G_VTX:
+        case (uint8_t)G_TRI1:
+        case (uint8_t)G_TRI4:
+        case (uint8_t)G_NOOP:
+        case (uint8_t)G_DL:
+        case (uint8_t)G_ENDDL:
+        case (uint8_t)G_SETOTHERMODE_L:
+        case (uint8_t)G_SETOTHERMODE_H:
+        case (uint8_t)G_RDPPIPESYNC:
+        case (uint8_t)G_RDPFULLSYNC:
+        case (uint8_t)G_RDPLOADSYNC:
+        case (uint8_t)G_RDPTILESYNC:
+        case (uint8_t)G_SETTIMG:
+        case (uint8_t)G_SETTILE:
+        case (uint8_t)G_SETTILESIZE:
+        case (uint8_t)G_LOADBLOCK:
+        case (uint8_t)G_LOADTILE:
+        case (uint8_t)G_LOADTLUT:
+        case (uint8_t)G_SETCOMBINE:
+        case (uint8_t)G_SETPRIMCOLOR:
+        case (uint8_t)G_SETENVCOLOR:
+        case (uint8_t)G_SETBLENDCOLOR:
+            return true;
+        default:
+            return false;
+    }
+}
+
+/*
+ * Trivial-reject plane (clip_rej bit) that the whole box of these vertices
+ * is outside of, or 0. Same planes and the same aspect correction as
+ * gfx_sp_vertex_now, with a relative margin far above float rounding so a
+ * vertex reported outside is outside after the real transform too.
+ */
+static uint8_t gfx_lazy_vtx_box_outside(size_t n, const Vtx* vertices) {
+    int32_t mn[3], mx[3];
+#if defined(_EE)
+    /* x, y, z are the first three halfwords of each 12-byte Vtx. */
+    uint64_t lo, hi;
+    {
+        const uint8_t* p = (const uint8_t*)vertices;
+        uint64_t first;
+        __asm__("ldl %0, 7(%1)\n\tldr %0, 0(%1)" : "=&r"(first) : "r"(p));
+        lo = hi = first;
+        for (size_t i = 1; i < n; ++i) {
+            uint64_t q;
+            __asm__("ldl %0, 7(%1)\n\tldr %0, 0(%1)" : "=&r"(q) : "r"(p + i * sizeof(Vtx)));
+            __asm__("pminh %0, %0, %1" : "+r"(lo) : "r"(q));
+            __asm__("pmaxh %0, %0, %1" : "+r"(hi) : "r"(q));
+        }
+    }
+    for (int k = 0; k < 3; ++k) {
+        mn[k] = (int16_t)(lo >> (16 * k));
+        mx[k] = (int16_t)(hi >> (16 * k));
+    }
+#else
+    for (int k = 0; k < 3; ++k) {
+        mn[k] = 32767;
+        mx[k] = -32768;
+    }
+    for (size_t i = 0; i < n; ++i) {
+        for (int k = 0; k < 3; ++k) {
+            const int32_t c = vertices[i].v[k];
+            mn[k] = c < mn[k] ? c : mn[k];
+            mx[k] = c > mx[k] ? c : mx[k];
+        }
+    }
+#endif
+    const float c0 = ((float)mn[0] + (float)mx[0]) * 0.5f, e0 = ((float)mx[0] - (float)mn[0]) * 0.5f;
+    const float c1 = ((float)mn[1] + (float)mx[1]) * 0.5f, e1 = ((float)mx[1] - (float)mn[1]) * 0.5f;
+    const float c2 = ((float)mn[2] + (float)mx[2]) * 0.5f, e2 = ((float)mx[2] - (float)mn[2]) * 0.5f;
+    const float a0 = fabsf(c0) + e0, a1 = fabsf(c1) + e1, a2 = fabsf(c2) + e2;
+
+    const float(*m)[4] = rsp.MP_matrix;
+    float rx[4], ry[4], rz[4], rw[4]; /* clip x (aspect corrected), y, z, w per row */
+    const bool aspect = !fbActive;
+    const float ofs = rsp.aspect_ofs;
+    const float k = aspect ? rsp.aspect_scale / gfx_current_dimensions.aspect_ratio : 1.0f;
+    for (int i = 0; i < 4; ++i) {
+        rx[i] = aspect ? (ofs * m[i][3] + m[i][0]) * k : m[i][0];
+        ry[i] = m[i][1];
+        rz[i] = m[i][2];
+        rw[i] = m[i][3];
+    }
+#define GFX_LAZY_PLANE(EXPR, BIT)                                                                    \
+    do {                                                                                             \
+        float pr[4];                                                                                 \
+        for (int i = 0; i < 4; ++i) {                                                                \
+            pr[i] = EXPR;                                                                            \
+        }                                                                                            \
+        const float center = pr[0] * c0 + pr[1] * c1 + pr[2] * c2 + pr[3];                           \
+        const float spread = fabsf(pr[0]) * e0 + fabsf(pr[1]) * e1 + fabsf(pr[2]) * e2;              \
+        const float scale = fabsf(pr[0]) * a0 + fabsf(pr[1]) * a1 + fabsf(pr[2]) * a2 + fabsf(pr[3]); \
+        if (center + spread < -1.0e-3f * scale) {                                                    \
+            return (BIT);                                                                            \
+        }                                                                                            \
+    } while (0)
+    /* Same planes as clip_rej: "inside" when the form is >= 0. */
+    GFX_LAZY_PLANE(rx[i] + rw[i], 1);  /* x < -w : left   */
+    GFX_LAZY_PLANE(rw[i] - rx[i], 2);  /* x >  w : right  */
+    GFX_LAZY_PLANE(ry[i] + rw[i], 4);  /* y < -w : bottom */
+    GFX_LAZY_PLANE(rw[i] - ry[i], 8);  /* y >  w : top    */
+    GFX_LAZY_PLANE(rw[i] - rz[i], 32); /* z >  w : far    */
+#undef GFX_LAZY_PLANE
+    return 0;
+}
+
+static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx* vertices) {
+    gfx_lazy_vtx_clear_range(dest_index, n_vertices);
+    if (n_vertices >= 8 && dest_index + n_vertices <= MAX_VERTICES) {
+        const uint8_t outside = gfx_lazy_vtx_box_outside(n_vertices, vertices);
+        if (outside != 0) {
+            /* Reuse the group ring; settle a group before overwriting it. */
+            const uint32_t g = gfx_lazy_vtx.next_group++ % GFX_LAZY_VTX_GROUPS;
+            for (size_t i = 0; gfx_lazy_vtx.pending != 0 && i < MAX_VERTICES; ++i) {
+                if (gfx_lazy_vtx.src[i] != NULL && gfx_lazy_vtx.group[i] == g) {
+                    gfx_lazy_vtx_materialize(i);
+                }
+            }
+            memcpy(gfx_lazy_vtx.groups[g].mp, rsp.MP_matrix, sizeof(rsp.MP_matrix));
+            gfx_lazy_vtx.groups[g].colours = rsp.vertex_colors;
+            gfx_lazy_vtx.groups[g].geometry_mode = rsp.geometry_mode;
+            gfx_lazy_vtx.groups[g].tex_s = rsp.texture_scaling_factor.s;
+            gfx_lazy_vtx.groups[g].tex_t = rsp.texture_scaling_factor.t;
+            gfx_lazy_vtx.groups[g].lit = (rsp.geometry_mode & G_LIGHTING) != 0;
+            if (gfx_lazy_vtx.groups[g].lit) {
+                ++gfx_lazy_vtx.lit_groups;
+            }
+#if defined(GFX_PS2_DIRECT)
+            gfx_ps2_direct_invalidate_vertices(dest_index, n_vertices);
+#endif
+#if defined(PD_PS2_LAZY_VTX_VERIFY)
+            gfx_sp_vertex_now(n_vertices, dest_index, vertices);
+            for (size_t i = 0; i < n_vertices; ++i) {
+                gfx_lazy_vtx.shadow[dest_index + i] = rsp.loaded_vertices[dest_index + i];
+                if ((rsp.loaded_vertices[dest_index + i].clip_rej & outside) == 0) {
+                    ++gfx_lazy_vtx.bad_bits;
+                }
+            }
+            {
+                static uint32_t calls;
+                if ((++calls & 4095u) == 0u) {
+                    sysLogPrintf(LOG_NOTE, "LAZYVERIFY checked=%u mismatched=%u bad_bits=%u", gfx_lazy_vtx.checked,
+                                 gfx_lazy_vtx.mismatched, gfx_lazy_vtx.bad_bits);
+                }
+            }
+#endif
+            for (size_t i = 0; i < n_vertices; ++i) {
+                rsp.loaded_vertices[dest_index + i].clip_rej = outside;
+                gfx_lazy_vtx.src[dest_index + i] = &vertices[i];
+                gfx_lazy_vtx.group[dest_index + i] = (uint8_t)g;
+            }
+            gfx_lazy_vtx.pending += (uint32_t)n_vertices;
+            return;
+        }
+    }
+    gfx_sp_vertex_now(n_vertices, dest_index, vertices);
+}
+#else
+static inline void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx* vertices) {
+    gfx_sp_vertex_now(n_vertices, dest_index, vertices);
+}
+#endif
 
 static void gfx_sp_modify_vertex(uint16_t vtx_idx, uint8_t where, uint32_t val) {
     SUPPORT_CHECK(where == G_MWO_POINT_ST);
@@ -2276,6 +2573,23 @@ static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx, bo
     struct LoadedVertex* v3 = &rsp.loaded_vertices[vtx3_idx];
     struct LoadedVertex* v_arr[3] = { v1, v2, v3 };
 
+#if defined(PLATFORM_PS2)
+    if (gfx_lazy_vtx.pending != 0 && !is_rect) {
+        const bool lazy = (vtx1_idx < MAX_VERTICES && gfx_lazy_vtx.src[vtx1_idx]) ||
+                          (vtx2_idx < MAX_VERTICES && gfx_lazy_vtx.src[vtx2_idx]) ||
+                          (vtx3_idx < MAX_VERTICES && gfx_lazy_vtx.src[vtx3_idx]);
+        if (lazy) {
+            /* Pending slots carry a subset of their real outcodes. */
+            if ((rsp.extra_geometry_mode & G_NO_CLIPPING_EXT) == 0 &&
+                (v1->clip_rej & v2->clip_rej & v3->clip_rej)) {
+                return;
+            }
+            gfx_lazy_vtx_materialize(vtx1_idx);
+            gfx_lazy_vtx_materialize(vtx2_idx);
+            gfx_lazy_vtx_materialize(vtx3_idx);
+        }
+    }
+#endif
     if ((rsp.extra_geometry_mode & G_NO_CLIPPING_EXT) == 0) {
         if (v1->clip_rej & v2->clip_rej & v3->clip_rej) {
             // The whole triangle lies outside the visible area
@@ -3189,6 +3503,11 @@ static void gfx_run_dl(Gfx* cmd) {
     for (;;) {
         uint32_t opcode = cmd->words.w0 >> 24;
         // gfx_print_cmd(cmd);
+#if defined(PLATFORM_PS2)
+        if (gfx_lazy_vtx.pending != 0 && !gfx_opcode_keeps_lazy_vertices(opcode, cmd)) {
+            gfx_lazy_vtx_materialize_all();
+        }
+#endif
         if (!gfx_opcode_keeps_tri_setup(opcode)) {
             gfx_tri_setup_invalidate();
         }
@@ -3629,6 +3948,10 @@ extern "C" void gfx_run(Gfx* commands) {
     rendering_state.scissor = {};
     gfx_tri_setup_invalidate();
     gfx_run_dl(commands);
+#if defined(PLATFORM_PS2)
+    /* Vertex source memory may change before the next frame. */
+    gfx_lazy_vtx_materialize_all();
+#endif
     gfx_flush();
     gfxFramebuffer = 0;
 
