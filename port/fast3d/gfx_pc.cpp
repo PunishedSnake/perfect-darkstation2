@@ -1310,6 +1310,52 @@ static void calculate_normal_dir(const struct NormalColor *vcn, float coeffs[3])
 }
 
 static void gfx_matrix_mul(float res[4][4], const float a[4][4], const float b[4][4]) {
+#if defined(PLATFORM_PS2) && defined(_EE)
+    /*
+     * VU0 macro mode: each result row is a[i].x*b0 + a[i].y*b1 + a[i].z*b2 +
+     * a[i].w*b3, one MULA/MADDA/MADDA/MADD chain per row instead of 64 FPU
+     * multiplies. LQC2/SQC2 need 16-byte alignment, so go through aligned
+     * copies (res may alias a or b).
+     */
+    float ta[4][4] __attribute__((aligned(16)));
+    float tb[4][4] __attribute__((aligned(16)));
+    float tr[4][4] __attribute__((aligned(16)));
+    memcpy(ta, a, sizeof(ta));
+    memcpy(tb, b, sizeof(tb));
+    __asm__ __volatile__(
+        "lqc2    $vf4, 0(%2)\n\t"
+        "lqc2    $vf5, 16(%2)\n\t"
+        "lqc2    $vf6, 32(%2)\n\t"
+        "lqc2    $vf7, 48(%2)\n\t"
+        "lqc2    $vf1, 0(%1)\n\t"
+        "lqc2    $vf2, 16(%1)\n\t"
+        "lqc2    $vf3, 32(%1)\n\t"
+        "lqc2    $vf8, 48(%1)\n\t"
+        "vmulax.xyzw  $ACC, $vf4, $vf1x\n\t"
+        "vmadday.xyzw $ACC, $vf5, $vf1y\n\t"
+        "vmaddaz.xyzw $ACC, $vf6, $vf1z\n\t"
+        "vmaddw.xyzw  $vf1, $vf7, $vf1w\n\t"
+        "vmulax.xyzw  $ACC, $vf4, $vf2x\n\t"
+        "vmadday.xyzw $ACC, $vf5, $vf2y\n\t"
+        "vmaddaz.xyzw $ACC, $vf6, $vf2z\n\t"
+        "vmaddw.xyzw  $vf2, $vf7, $vf2w\n\t"
+        "vmulax.xyzw  $ACC, $vf4, $vf3x\n\t"
+        "vmadday.xyzw $ACC, $vf5, $vf3y\n\t"
+        "vmaddaz.xyzw $ACC, $vf6, $vf3z\n\t"
+        "vmaddw.xyzw  $vf3, $vf7, $vf3w\n\t"
+        "vmulax.xyzw  $ACC, $vf4, $vf8x\n\t"
+        "vmadday.xyzw $ACC, $vf5, $vf8y\n\t"
+        "vmaddaz.xyzw $ACC, $vf6, $vf8z\n\t"
+        "vmaddw.xyzw  $vf8, $vf7, $vf8w\n\t"
+        "sqc2    $vf1, 0(%0)\n\t"
+        "sqc2    $vf2, 16(%0)\n\t"
+        "sqc2    $vf3, 32(%0)\n\t"
+        "sqc2    $vf8, 48(%0)\n\t"
+        :
+        : "r"(tr), "r"(ta), "r"(tb)
+        : "memory");
+    memcpy(res, tr, sizeof(tr));
+#else
     float tmp[4][4];
     for (int i = 0; i < 4; i++) {
         for (int j = 0; j < 4; j++) {
@@ -1317,6 +1363,7 @@ static void gfx_matrix_mul(float res[4][4], const float a[4][4], const float b[4
         }
     }
     memcpy(res, tmp, sizeof(tmp));
+#endif
 }
 
 static void gfx_sp_matrix(uint8_t parameters, const int32_t* addr) {
