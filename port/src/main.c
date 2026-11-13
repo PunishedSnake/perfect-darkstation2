@@ -106,6 +106,16 @@ static void cleanup(void)
 int main(int argc, const char **argv)
 {
 
+#if defined(PLATFORM_PS2) && defined(PD_PS2_DEBUG_BOOT_PATH)
+	/*
+	 * Emulator debugging: pretend the loader started us from this device
+	 * path (e.g. "mass:/PD/pd.elf") so the real USB/HDD storage stack and
+	 * save paths are exercised even though PCSX2 launched the ELF itself.
+	 */
+	static const char *debugArgv[] = { PD_PS2_DEBUG_BOOT_PATH, NULL };
+	argc = 1;
+	argv = debugArgv;
+#endif
 	sysInitArgs(argc, argv);
 
 	const s32 disable_crash_handler = sysArgCheck("--no-crash-handler");

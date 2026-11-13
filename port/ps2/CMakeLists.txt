@@ -413,6 +413,13 @@ if(PD_PS2_HOT_PATH_O2 AND PD_PS2_OPTIMIZATION STREQUAL "Og")
   set(PD_PS2_OPTIMIZATION_LABEL "Og+hotO2")
 endif()
 
+set(PD_PS2_DEBUG_BOOT_PATH "" CACHE STRING
+  "Debug: override argv[0] (e.g. mass:/PD/pd.elf) to exercise a real storage stack under PCSX2")
+
+if(PD_PS2_DEBUG_BOOT_PATH)
+  add_compile_definitions(PD_PS2_DEBUG_BOOT_PATH="${PD_PS2_DEBUG_BOOT_PATH}")
+endif()
+
 option(PD_PS2_EE_PROFILER
   "Debug: timer-interrupt EE PC sampler written to host:pd_ee_pcs.bin" OFF
 )

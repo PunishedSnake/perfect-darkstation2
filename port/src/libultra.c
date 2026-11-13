@@ -36,6 +36,10 @@ s32 osViClock = VI_NTSC_CLOCK;
 static u8 eeprom[EEPROM_SIZE];
 static char eepromPath[FS_MAXPATH + 1];
 static s32 eepromLoaded = 0;
+#ifdef PLATFORM_PS2
+static u32 eepromDirtyWrites = 0;
+static u64 eepromLastWriteUs = 0;
+#endif
 
 /* Time */
 
@@ -392,10 +396,39 @@ s32 osEepromLongWrite(OSMesgQueue *mq, u8 address, u8 *buffer, int nbytes)
 
 	memcpy(eeprom + address * 8, buffer, nbytes);
 
+#ifdef PLATFORM_PS2
+	/*
+	 * The game saves in bursts of small block writes, and each one used to
+	 * rewrite the whole file on the boot device. On a USB 1.1 stick that is
+	 * an open + FAT update + close per 8-byte block. Coalesce: mark dirty
+	 * and let the frame loop write once the burst has settled.
+	 */
+	eepromDirtyWrites++;
+	eepromLastWriteUs = sysGetMicroseconds();
+#else
 	osEeepromSave(eepromPath);
+#endif
 
 	return 0;
 }
+
+#ifdef PLATFORM_PS2
+void osEepromFlushPending(s32 force)
+{
+	if (eepromDirtyWrites == 0) {
+		return;
+	}
+	if (!force && sysGetMicroseconds() - eepromLastWriteUs < 300000ULL) {
+		return;
+	}
+	const u32 writes = eepromDirtyWrites;
+	eepromDirtyWrites = 0;
+	const u64 start = sysGetMicroseconds();
+	osEeepromSave(eepromPath);
+	sysLogPrintf(LOG_NOTE, "EEPROM: saved %u coalesced block writes in %u ms",
+		writes, (u32)((sysGetMicroseconds() - start) / 1000ULL));
+}
+#endif
 
 /* Pfs */
 

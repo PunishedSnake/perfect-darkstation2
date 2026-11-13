@@ -584,6 +584,7 @@ void mainLoop(void)
 				frameTimingTick += tickEnd - frameStart;
 				frameTimingEnd += frameEnd - tickEnd;
 				frameTimingFrames++;
+				osEepromFlushPending(0);
 				if (frameEnd >= 60000000ULL) {
 					ps2EeProfilerStart();
 				}
