@@ -420,6 +420,12 @@ if(PD_PS2_DEBUG_BOOT_PATH)
   add_compile_definitions(PD_PS2_DEBUG_BOOT_PATH="${PD_PS2_DEBUG_BOOT_PATH}")
 endif()
 
+set(PD_PS2_DEBUG_BOOT_STAGE "" CACHE STRING
+  "Debug: boot straight into this stage number (e.g. 0x30) for profiling")
+if(PD_PS2_DEBUG_BOOT_STAGE)
+  add_compile_definitions(PD_PS2_DEBUG_BOOT_STAGE=${PD_PS2_DEBUG_BOOT_STAGE})
+endif()
+
 option(PD_PS2_EE_PROFILER
   "Debug: timer-interrupt EE PC sampler written to host:pd_ee_pcs.bin" OFF
 )

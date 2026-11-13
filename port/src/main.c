@@ -302,6 +302,10 @@ int main(int argc, const char **argv)
 #endif
 
 	g_StageNum = sysArgGetInt("--boot-stage", STAGE_TITLE);
+#if defined(PLATFORM_PS2) && defined(PD_PS2_DEBUG_BOOT_STAGE)
+	/* Emulator profiling: boot straight into a level. */
+	g_StageNum = PD_PS2_DEBUG_BOOT_STAGE;
+#endif
 
 	if (g_StageNum == STAGE_TITLE && (sysArgCheck("--skip-intro") || g_SkipIntro)) {
 		// shorthand for --boot-stage 0x26
