@@ -85,6 +85,12 @@ void videoResetFramebuffer(void);
 void videoCopyFramebuffer(s32 dst, s32 src, s32 left, s32 top);
 #ifdef PLATFORM_PS2
 s32 videoPs2CreateCaptureFramebuffer(void);
+// GS output mode (Video.OutputMode): 0 = 480i, 1 = 480p, 2 = 1080i; boot-time only
+s32 videoPs2OutputModeCount(void);
+const char *videoPs2OutputModeName(s32 mode);
+s32 videoPs2GetOutputMode(void);
+s32 videoPs2GetActiveOutputMode(void);
+void videoPs2SetOutputMode(s32 mode);
 #endif
 void videoResizeFramebuffer(s32 target, u32 w, u32 h, s32 upscale, s32 autoresize);
 s32 videoFramebuffersSupported(void);

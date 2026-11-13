@@ -756,6 +756,7 @@ extern "C" bool ps2GsCoreInit(const struct Ps2GsCreateInfo *info)
         PS2_GS_PSMZ_16,
         true,
         true,
+        PS2_GS_OUTPUT_480I,
     };
     const struct Ps2GsCreateInfo *config = info ? info : &defaults;
 
@@ -771,6 +772,30 @@ extern "C" bool ps2GsCoreInit(const struct Ps2GsCreateInfo *info)
 
     gs->PSM = config->color_psm;
     gs->PSMZ = config->depth_psm;
+
+    /*
+     * Progressive and HD scan-out keep the 640x448 render target; the GS CRTC
+     * magnifies it (gsKit derives MAGH/MAGV from the mode's display size), so
+     * neither costs VRAM nor fill rate. The cable decides what the TV gets.
+     */
+    switch (config->output_mode) {
+        case PS2_GS_OUTPUT_480P:
+            gs->Mode = GS_MODE_DTV_480P;
+            gs->Interlace = GS_NONINTERLACED;
+            gs->Field = GS_FRAME;
+            gs->Width = 640;
+            gs->Height = 448;
+            break;
+        case PS2_GS_OUTPUT_1080I:
+            gs->Mode = GS_MODE_DTV_1080I;
+            gs->Interlace = GS_INTERLACED;
+            gs->Field = GS_FIELD;
+            gs->Width = 640;
+            gs->Height = 448;
+            break;
+        default:
+            break;
+    }
     gs->ZBuffering = config->z_buffering ? GS_SETTING_ON : GS_SETTING_OFF;
     gs->Dithering = config->dithering ? GS_SETTING_ON : GS_SETTING_OFF;
 

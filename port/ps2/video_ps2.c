@@ -14,6 +14,7 @@
 #include "gfx_ps2.h"
 #include "gfx_window_ps2.h"
 #include "gs_core.h"
+#include "pad_ps2.h"
 
 /*
  * Perfect Dark video API for PlayStation 2.
@@ -51,6 +52,61 @@ static f32 s_glare_brightness = 1.0f;
 static f32 s_overexposure_scale = 1.0f;
 
 static displaymode s_display_modes[2];
+static s32 s_output_mode = PS2_GS_OUTPUT_480I;
+static s32 s_active_output_mode = PS2_GS_OUTPUT_480I;
+
+/*
+ * Escape hatch for a TV that cannot show the configured 480p/1080i signal:
+ * holding START+TRIANGLE on pad 1 while the game boots forces 480i. Pads
+ * need a few hundred milliseconds after open, so poll briefly.
+ */
+static bool ps2VideoSafeModeHeld(void)
+{
+    const u64 deadline = sysGetMicroseconds() + 800000u;
+    do {
+        ps2PadUpdate();
+        const struct Ps2PadState *pad = ps2PadGetState(0);
+        if (pad && pad->connected &&
+            (pad->held & (PS2_PAD_START | PS2_PAD_TRIANGLE)) ==
+                (PS2_PAD_START | PS2_PAD_TRIANGLE)) {
+            return true;
+        }
+        const u64 wait_until = sysGetMicroseconds() + 16000u;
+        while (sysGetMicroseconds() < wait_until) {
+        }
+    } while (sysGetMicroseconds() < deadline);
+    return false;
+}
+
+s32 videoPs2OutputModeCount(void)
+{
+    return PS2_GS_OUTPUT_COUNT;
+}
+
+const char *videoPs2OutputModeName(s32 mode)
+{
+    static const char *names[PS2_GS_OUTPUT_COUNT] = {
+        "480i (Composite)", "480p (Component)", "1080i (Component)",
+    };
+    return mode >= 0 && mode < PS2_GS_OUTPUT_COUNT ? names[mode] : "";
+}
+
+s32 videoPs2GetOutputMode(void)
+{
+    return s_output_mode;
+}
+
+s32 videoPs2GetActiveOutputMode(void)
+{
+    return s_active_output_mode;
+}
+
+void videoPs2SetOutputMode(s32 mode)
+{
+    if (mode >= 0 && mode < PS2_GS_OUTPUT_COUNT) {
+        s_output_mode = mode; /* takes effect at the next boot */
+    }
+}
 static s32 s_display_mode_count = 1;
 
 static f64 s_last_frame_time;
@@ -92,12 +148,19 @@ s32 videoInit(void)
     ps2ScreenLogStop();
 
     if (!ps2GsCoreIsReady()) {
+        if (s_output_mode != PS2_GS_OUTPUT_480I && ps2VideoSafeModeHeld()) {
+            sysLogPrintf(LOG_WARNING,
+                "VideoPS2: START+TRIANGLE held at boot, falling back to 480i");
+            s_output_mode = PS2_GS_OUTPUT_480I;
+        }
         const struct Ps2GsCreateInfo gs_info = {
             PS2_GS_PSM_CT16,
             PS2_GS_PSMZ_16,
             true,
             true,
+            s_output_mode,
         };
+        s_active_output_mode = s_output_mode;
 
         if (!ps2GsCoreInit(&gs_info)) {
             sysLogPrintf(LOG_ERROR, "VideoPS2: GS core initialisation failed");
@@ -614,6 +677,8 @@ void videoShutdown(void)
 
 PD_CONSTRUCTOR static void videoPs2ConfigInit(void)
 {
+    configRegisterInt("Video.OutputMode", &s_output_mode,
+        PS2_GS_OUTPUT_480I, PS2_GS_OUTPUT_COUNT - 1);
     configRegisterInt("Video.AspectRatio", &s_aspect_mode,
         VIDEO_ASPECT_4_3, VIDEO_ASPECT_16_9);
     configRegisterInt("Video.FramerateLimit", &s_framerate_limit, 0, VIDEO_MAX_FPS);
