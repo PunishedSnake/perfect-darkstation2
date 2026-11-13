@@ -2083,12 +2083,13 @@ static void gfx_tri_setup(struct GfxTriSetup* S, bool is_rect) {
 static void gfx_ps2_direct_refresh(const struct GfxTriSetup* S) {
     struct GfxPs2DirectKey key;
     memset(&key, 0, sizeof(key));
-    bool ok = !S->depth_source_prim && !S->use_grayscale && S->used_textures[0] &&
+    bool ok = !S->depth_source_prim && !S->use_grayscale &&
               !S->clamp_s[0] && !S->clamp_t[0] && !S->clamp_s[1] && !S->clamp_t[1] && S->num_inputs <= 3 &&
               gfxPs2DirectQuery(&key.ctx);
     if (ok) {
         ok = key.ctx.num_inputs == S->num_inputs && (key.ctx.use_alpha != 0) == S->use_alpha &&
-             (key.ctx.fog != 0) == S->use_fog;
+             (key.ctx.fog != 0) == S->use_fog &&
+             (key.ctx.color_only ? !S->used_textures[0] && !S->used_textures[1] : S->used_textures[0]);
     }
     gfx_ps2_direct.active = ok;
     if (!ok) {
@@ -2104,10 +2105,12 @@ static void gfx_ps2_direct_refresh(const struct GfxTriSetup* S) {
             key.in_const_u8[j][3] = 0;
         }
     }
-    key.u_scale = S->u_scale[0];
-    key.u_bias = S->u_bias[0];
-    key.v_scale = S->v_scale[0];
-    key.v_bias = S->v_bias[0];
+    if (!key.ctx.color_only) {
+        key.u_scale = S->u_scale[0];
+        key.u_bias = S->u_bias[0];
+        key.v_scale = S->v_scale[0];
+        key.v_bias = S->v_bias[0];
+    }
 
     const bool fog_differs = key.ctx.fog && gfx_ps2_direct.batch_count != 0 &&
         memcmp(gfx_ps2_direct.batch_fog, &rdp.fog_color, 3) != 0;
@@ -2178,10 +2181,15 @@ static inline uint32_t gfx_ps2_direct_vertex(const struct GfxTriSetup* S, uint8_
     R->clip[1] = S->invert_y ? -V->y : V->y;
     R->clip[2] = z;
     R->clip[3] = w;
-    const float vbo_u = V->u * S->u_scale[0] + S->u_bias[0];
-    const float vbo_v = V->v * S->v_scale[0] + S->v_bias[0];
-    R->texcoord.s = vbo_u * C->scale_s;
-    R->texcoord.t = vbo_v * C->scale_t;
+    if (C->color_only) {
+        R->texcoord.s = 0.0f;
+        R->texcoord.t = 0.0f;
+    } else {
+        const float vbo_u = V->u * S->u_scale[0] + S->u_bias[0];
+        const float vbo_v = V->v * S->v_scale[0] + S->v_bias[0];
+        R->texcoord.s = vbo_u * C->scale_s;
+        R->texcoord.t = vbo_v * C->scale_t;
+    }
     R->texcoord.q = 1.0f;
     R->texcoord.xyz_control = C->fog ? C->fog_lut[V->fog] : 0u;
 

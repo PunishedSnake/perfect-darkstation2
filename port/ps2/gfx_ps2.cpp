@@ -4092,6 +4092,34 @@ static void ps2_direct_verify_batch(const float *vertices, size_t stride,
             ++s_verify_partial; /* direct path would have clipped it on EE */
             continue;
         }
+        if (path == 3 && expected_path == 3) {
+            /* Untextured: compare the packed GS vertices. */
+            for (uint32_t k = 0; k < 3u; ++k) {
+                const struct Ps2GsVu1TransformVertex *b =
+                    &gfx_ps2_direct_verify_records[(first_tri + t) * 3u + k];
+                const float inv_w = ps2_clip_inv_w(b->clip[3]);
+                const struct Ps2GsPackedReg rgbaq = ps2_pack_rgbaq(
+                    (uint8_t)b->rgba[0], (uint8_t)b->rgba[1],
+                    (uint8_t)b->rgba[2], (uint8_t)b->rgba[3], 0.0f);
+                const struct Ps2GsPackedReg xyz = ps2_pack_screen_position(
+                    b->clip[0], b->clip[1], b->clip[2], b->clip[3], inv_w,
+                    s_shader->features.opt_fog,
+                    (uint8_t)(b->texcoord.xyz_control >> 4));
+                ++s_verify_checked;
+                if (rgbaq.value != s_color_vertices[t * 3u + k].rgbaq.value ||
+                    xyz.value != s_color_vertices[t * 3u + k].xyz2.value) {
+                    if (s_verify_mismatch++ < 12u) {
+                        sysLogPrintf(LOG_WARNING,
+                            "DIRECTVERIFY colour mismatch rgbaq=%llx/%llx xyz=%llx/%llx",
+                            (unsigned long long)s_color_vertices[t * 3u + k].rgbaq.value,
+                            (unsigned long long)rgbaq.value,
+                            (unsigned long long)s_color_vertices[t * 3u + k].xyz2.value,
+                            (unsigned long long)xyz.value);
+                    }
+                }
+            }
+            continue;
+        }
         if (!has_records) {
             ++s_verify_unexpected;
             continue;
@@ -4836,7 +4864,7 @@ static void ps2_draw_triangles_unclipped(float buf_vbo[],
 #if defined(PD_PS2_DIRECT_VERIFY) && defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
         ps2_direct_verify_batch(buf_vbo, stride, base_vertex, batch_vertices,
             (defer_trilerp_path3 || (plain_textured && !opaque_trilerp)),
-            defer_trilerp_path3 ? 2 : 1);
+            defer_trilerp_path3 ? 2 : !s_shader->plan.textured ? 3 : 1);
 #endif
 
         if (trace_texture_coords) {
@@ -5388,8 +5416,13 @@ static void ps2_direct_init_luts(void)
 /* 0: not eligible, 1: plain textured, 2: same-tap opaque trilerp. */
 static int ps2_direct_shader_path(void)
 {
-    if (!s_shader || !s_shader->plan.supported || !s_shader->plan.textured) {
+    if (!s_shader || !s_shader->plan.supported) {
         return 0;
+    }
+    if (!s_shader->plan.textured) {
+        /* Plain vertex-colour triangles (the translator's last branch). */
+        return s_shader->features.used_textures[0] ||
+            s_shader->features.used_textures[1] ? 0 : 3;
     }
     const struct ShaderProgram *prg = s_shader;
     const bool alpha_trilerp = prg->plan.pass_graph ==
@@ -5446,7 +5479,7 @@ extern "C" bool gfxPs2DirectQuery(struct GfxPs2DirectContext *ctx)
         }
     }
     const Ps2GsTextureHandle handle = s_selected_texture[0];
-    if (handle >= PS2_GFX_TEXTURE_STATE_SLOTS) {
+    if (path != 3 && handle >= PS2_GFX_TEXTURE_STATE_SLOTS) {
         return false;
     }
     if (!s_direct_luts_ready) {
@@ -5454,12 +5487,13 @@ extern "C" bool gfxPs2DirectQuery(struct GfxPs2DirectContext *ctx)
     }
 
     ctx->trilerp = path == 2;
+    ctx->color_only = path == 3;
     ctx->fog = s_shader->features.opt_fog;
     ctx->use_alpha = s_shader->features.opt_alpha;
     ctx->num_inputs = (uint8_t)s_shader->features.num_inputs;
     ctx->fog_lut = s_direct_lut_fog;
-    ctx->scale_s = s_texture_sampler[handle].coordinate_scale_s;
-    ctx->scale_t = s_texture_sampler[handle].coordinate_scale_t;
+    ctx->scale_s = path == 3 ? 1.0f : s_texture_sampler[handle].coordinate_scale_s;
+    ctx->scale_t = path == 3 ? 1.0f : s_texture_sampler[handle].coordinate_scale_t;
     ctx->rgb_input = -1;
     ctx->alpha_input = -1;
     ctx->alpha_const = 0x80u;
@@ -5532,6 +5566,35 @@ extern "C" bool gfxPs2DirectQuery(struct GfxPs2DirectContext *ctx)
     return true;
 }
 
+/*
+ * Untextured direct batch: the translator's colour branch, from records.
+ * Same projection and packing (ps2_pack_screen_position), same constant-
+ * modulate special case.
+ */
+static void ps2_direct_draw_color(const struct Ps2GsVu1TransformVertex *v,
+    uint32_t count)
+{
+    const bool fog = s_shader->features.opt_fog;
+    for (uint32_t i = 0u; i < count; ++i) {
+        const float inv_w = ps2_clip_inv_w(v[i].clip[3]);
+        s_color_vertices[i].rgbaq = ps2_pack_rgbaq(
+            (uint8_t)v[i].rgba[0], (uint8_t)v[i].rgba[1],
+            (uint8_t)v[i].rgba[2], (uint8_t)v[i].rgba[3], 0.0f);
+        s_color_vertices[i].xyz2 = ps2_pack_screen_position(
+            v[i].clip[0], v[i].clip[1], v[i].clip[2], v[i].clip[3],
+            inv_w, fog, (uint8_t)(v[i].texcoord.xyz_control >> 4));
+    }
+    const bool texture_edge = s_shader->features.opt_texture_edge;
+    const bool invisible = s_shader->features.opt_invisible;
+    const bool constant_modulate = s_modulate && s_alpha_blend &&
+        !texture_edge && !invisible && !fog &&
+        s_shader->plan.color_recipe == PS2_COLOR_INPUT1 &&
+        ps2_draw_constant_modulate(count);
+    if (!constant_modulate) {
+        ps2GsCoreDrawColorTriangles(s_color_vertices, count);
+    }
+}
+
 extern "C" void gfxPs2DirectDraw(const struct Ps2GsVu1TransformVertex *vertices,
     uint32_t vertex_count, bool trilerp, bool w_ok, const uint8_t fog_rgb[3])
 {
@@ -5540,8 +5603,9 @@ extern "C" void gfxPs2DirectDraw(const struct Ps2GsVu1TransformVertex *vertices,
         return;
     }
     ps2_refresh_gs_offsets();
-    if (!ps2GsCoreTextureReady(s_selected_texture[0]) ||
-        (trilerp && !ps2GsCoreTextureReady(s_selected_texture[1]))) {
+    const bool color_only = !s_shader->plan.textured;
+    if (!color_only && (!ps2GsCoreTextureReady(s_selected_texture[0]) ||
+        (trilerp && !ps2GsCoreTextureReady(s_selected_texture[1])))) {
         return;
     }
 
@@ -5565,6 +5629,9 @@ extern "C" void gfxPs2DirectDraw(const struct Ps2GsVu1TransformVertex *vertices,
         ps2GsCoreSetFog(true, s_draw_fog_r, s_draw_fog_g, s_draw_fog_b);
     }
 
+    if (color_only) {
+        ps2_direct_draw_color(vertices, vertex_count);
+    } else {
     float transform_scale[4];
     float transform_offset[4];
     const bool mapped = w_ok && ps2GsVu1BuildViewportMapping(
@@ -5590,6 +5657,7 @@ extern "C" void gfxPs2DirectDraw(const struct Ps2GsVu1TransformVertex *vertices,
     }
     if (trilerp) {
         ps2_trilerp_restore_state();
+    }
     }
 
     if (texture_edge) {
