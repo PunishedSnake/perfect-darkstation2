@@ -15,6 +15,8 @@ enum Ps2GsAlphaBlendEquation {
     PS2_GS_ALPHA_BLEND_DESTINATION_RGB_TIMES_DESTINATION_ALPHA,
     PS2_GS_ALPHA_BLEND_DESTINATION_RGB_TIMES_SOURCE_ALPHA,
     PS2_GS_ALPHA_BLEND_SOURCE_PLUS_DESTINATION,
+    /* (Cs - 0) * As + Cd: weighted accumulation (box-filter taps). */
+    PS2_GS_ALPHA_BLEND_SOURCE_ALPHA_ACCUMULATE,
 };
 
 struct Ps2GsAlphaBlendFactors {

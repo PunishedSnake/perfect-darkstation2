@@ -5647,16 +5647,37 @@ static void ps2_fb_capture_screen(struct Ps2GfxFramebuffer *fb)
     const float max_t = (float)screen_h / (float)page_h;
     const float w = (float)PS2_GFX_FB_CAPTURE_WIDTH;
     const float h = (float)PS2_GFX_FB_CAPTURE_HEIGHT;
+
+    /*
+     * Box-filter the 10:1 downscale like the N64's averaged 40x30 capture:
+     * a single bilinear tap per texel aliases badly. 4x4 jittered bilinear
+     * taps spread over each destination texel's footprint are accumulated
+     * with weight As/128 = 8/128 into a cleared target.
+     */
+    enum { TAPS_PER_AXIS = 4 };
+    const float step_s = max_s / w / (float)TAPS_PER_AXIS;
+    const float step_t = max_t / h / (float)TAPS_PER_AXIS;
     static const uint8_t corner[6][2] = {
         { 0, 0 }, { 1, 0 }, { 0, 1 }, { 1, 0 }, { 1, 1 }, { 0, 1 },
     };
-    struct Ps2GsTexturedVertex quad[6];
-    for (uint32_t i = 0u; i < 6u; ++i) {
-        quad[i].rgbaq = ps2_pack_rgbaq(0x80u, 0x80u, 0x80u, 0x80u, 1.0f);
-        quad[i].st = ps2_pack_st(
-            corner[i][0] ? max_s : 0.0f, corner[i][1] ? max_t : 0.0f);
-        quad[i].xyz2 = ps2_pack_xyz2(
-            corner[i][0] ? w : 0.0f, corner[i][1] ? h : 0.0f, 0);
+    struct Ps2GsTexturedVertex quad[6u * TAPS_PER_AXIS * TAPS_PER_AXIS];
+    uint32_t count = 0u;
+    for (int ty = 0; ty < TAPS_PER_AXIS; ++ty) {
+        for (int tx = 0; tx < TAPS_PER_AXIS; ++tx) {
+            const float ds = ((float)tx - 1.5f) * step_s;
+            const float dt = ((float)ty - 1.5f) * step_t;
+            for (uint32_t i = 0u; i < 6u; ++i) {
+                quad[count].rgbaq = ps2_pack_rgbaq(
+                    0x80u, 0x80u, 0x80u,
+                    0x80u / (TAPS_PER_AXIS * TAPS_PER_AXIS), 1.0f);
+                quad[count].st = ps2_pack_st(
+                    (corner[i][0] ? max_s : 0.0f) + ds,
+                    (corner[i][1] ? max_t : 0.0f) + dt);
+                quad[count].xyz2 = ps2_pack_xyz2(
+                    corner[i][0] ? w : 0.0f, corner[i][1] ? h : 0.0f, 0);
+                ++count;
+            }
+        }
     }
 
     ps2GsCoreSetScissor(0, 0,
@@ -5664,13 +5685,18 @@ static void ps2_fb_capture_screen(struct Ps2GfxFramebuffer *fb)
     ps2GsCoreSetAlphaTest(false, 0u);
     ps2GsCoreSetFog(false, 0u, 0u, 0u);
     ps2GsCoreSetDepthMode(false, false, false, false);
-    ps2GsCoreSetAlphaBlend(false);
     ps2GsCoreSetFramebufferAlphaForce(false);
     ps2GsCoreSetColorWrite(true);
     ps2GsCoreSetAlphaWrite(true);
     ps2GsCoreSetTextureAlpha(false);
-    fb->has_capture = ps2GsCoreDrawPresentedScreenTriangles(quad, 6u, true) &&
+    ps2GsCoreSetAlphaBlend(false);
+    ps2GsCoreClear(true, false);
+    /* Equation after enabling: SetAlphaBlend(true) resets it to SOURCE_OVER. */
+    ps2GsCoreSetAlphaBlend(true);
+    ps2GsCoreSetAlphaBlendEquation(PS2_GS_ALPHA_BLEND_SOURCE_ALPHA_ACCUMULATE);
+    fb->has_capture = ps2GsCoreDrawPresentedScreenTriangles(quad, count, true) &&
         ps2GsCoreMarkRenderTargetWritten(fb->target);
+    ps2GsCoreSetAlphaBlendEquation(PS2_GS_ALPHA_BLEND_SOURCE_OVER);
 
     ps2GsCoreBindDefaultRenderTarget();
     ps2_restore_alpha_trilerp_state();
