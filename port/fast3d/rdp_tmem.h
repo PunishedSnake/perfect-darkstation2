@@ -143,6 +143,9 @@ bool gfxRdpTmemLoadBlockLinear(struct GfxRdpTmem *tmem,
  * first_tmem_word, keeping the block's line parity. Loading a block in
  * parts gives the same bytes as loading it whole.
  */
+/* Start a new source-memory epoch (source bytes may have changed). */
+void gfxRdpTmemSourceMemoNewEpoch(void);
+
 bool gfxRdpTmemLoadBlockLinearPart(struct GfxRdpTmem *tmem,
     uint32_t first_tmem_word, const uint8_t *block_source,
     uint32_t skip_words, uint32_t word_count, uint16_t dxt);

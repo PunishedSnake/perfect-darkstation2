@@ -2,6 +2,7 @@
 
 #include "rdp_tmem_trace.h"
 #include "rdp_tmem_live.h"
+#include "rdp_tmem.h"
 
 /*
  * gfx_pc.cpp is compiled on PS2 with gfx_run renamed to gfx_run_ps2_impl.
@@ -19,6 +20,8 @@ extern "C" void gfx_run(Gfx *commands)
 #if defined(PD_PS2_TMEM_SHADOW_REPLAY)
     gfxRdpTmemTraceDisplayList(commands);
 #endif
+    /* The game may have rewritten texture memory since the last run. */
+    gfxRdpTmemSourceMemoNewEpoch();
     gfx_run_ps2_impl(commands);
     /* Lazy block loads reference display-list source RAM; settle them
      * before the game can change it for the next frame. */

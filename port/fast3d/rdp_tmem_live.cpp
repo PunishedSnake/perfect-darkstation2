@@ -1,4 +1,5 @@
 #include "rdp_tmem_live.h"
+#include "rdp_tmem.h"
 #include "rdp_tmem_hash.h"
 
 #include <stddef.h>
@@ -346,6 +347,7 @@ static bool gfxRdpTmemLiveHashTextureRows(
 
 extern "C" void gfxRdpTmemLiveReset(void)
 {
+    gfxRdpTmemSourceMemoNewEpoch();
     memset(&s_live, 0, sizeof(s_live));
     gfxRdpTmemRuntimeReset(&s_live.runtime);
     s_live.initialized = true;
