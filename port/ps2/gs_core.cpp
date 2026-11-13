@@ -2831,34 +2831,6 @@ extern "C" void ps2GsCoreDrawColorTriangles(const struct Ps2GsColorVertex *verti
     const bool emit_prim = ps2GsStateShadowNeedsWrite(
         &s_state_shadow, PS2_GS_STATE_PRIM, prim);
 
-    if (ps2GsCoreVu1AdTransportEnabled() &&
-        ps2GsVu1QueueEnabled() &&
-        ps2GsVu1BatchWorthwhile(vertex_count)) {
-        const struct Ps2GsPackedReg prim_record = { prim, GS_PRIM };
-        if (ps2GsVu1QueueSubmitColor(
-                &prim_record, emit_prim, vertices, vertex_count)) {
-            if (emit_prim) {
-                ps2GsStateShadowCommit(
-                    &s_state_shadow, PS2_GS_STATE_PRIM, prim);
-            }
-            const uint32_t trace_register_count =
-                vertex_count * 2u + (emit_prim ? 1u : 0u);
-            ps2RendererStatsRecordPath1(
-                false, vertex_count, trace_register_count);
-            ps2GsCoreTraceDraw(false, true, 0u,
-                vertex_count, trace_register_count,
-                prim, 0u, 0u, 0u);
-            ps2GsCoreMarkActiveRenderTargetWritten();
-            return;
-        }
-        ps2RendererStatsRecordVu1Reject(vertex_count);
-        if (!s_logged_vu1_color_fallback) {
-            sysLogPrintf(LOG_WARNING,
-                "GS core: VU1 color batch rejected; preserving PATH3 fallback");
-            ps2LogCheckpoint();
-            s_logged_vu1_color_fallback = true;
-        }
-    }
 
     const uint32_t register_count =
         (emit_prim ? 1u : 0u) + vertex_count * 2u;
