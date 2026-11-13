@@ -85,14 +85,16 @@ def patch(source: str) -> str:
         "        // gfx_print_cmd(cmd);\n",
         "    for (;;) {\n"
         "        uint32_t opcode = cmd->words.w0 >> 24;\n"
-        "        uint32_t ps2_trace_entries = 1u;\n"
-        "        if (opcode == G_TEXRECT || opcode == G_TEXRECTFLIP ||\n"
-        "            opcode == G_TEXRECT_WIDE_EXT || opcode == G_IMAGERECT_EXT) {\n"
-        "            ps2_trace_entries = 3u;\n"
-        "        } else if (opcode == G_FILLRECT_WIDE_EXT) {\n"
-        "            ps2_trace_entries = 2u;\n"
+        "        if (g_ps2RendererTraceCapturing) {\n"
+        "            uint32_t ps2_trace_entries = 1u;\n"
+        "            if (opcode == G_TEXRECT || opcode == G_TEXRECTFLIP ||\n"
+        "                opcode == G_TEXRECT_WIDE_EXT || opcode == G_IMAGERECT_EXT) {\n"
+        "                ps2_trace_entries = 3u;\n"
+        "            } else if (opcode == G_FILLRECT_WIDE_EXT) {\n"
+        "                ps2_trace_entries = 2u;\n"
+        "            }\n"
+        "            gfxPs2TraceGfxCommandsImpl(cmd, ps2_trace_depth, ps2_trace_entries);\n"
         "        }\n"
-        "        gfxPs2TraceGfxCommands(cmd, ps2_trace_depth, ps2_trace_entries);\n"
         "        // gfx_print_cmd(cmd);\n",
         "raw display-list command stream",
     )

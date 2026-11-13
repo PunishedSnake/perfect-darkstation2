@@ -215,6 +215,37 @@ void gfxPs2TraceTmemTextureView(uint32_t texture_id,
     uint8_t format, uint8_t size, uint32_t palette_format);
 
 /* Full forensic hooks used only by the generated PS2 Fast3D frontend. */
+struct Ps2GsVu1TransformVertex;
+
+/*
+ * Shared-vertex fast path. When the current shader and backend state allow
+ * it, gfxPs2DirectQuery() describes how the frontend turns one loaded vertex
+ * into a VU1 transform input record (and sets the clip guard band); the
+ * frontend then submits batches of whole, guard-band-accepted triangles
+ * through gfxPs2DirectDraw(). Everything else keeps the float-VBO path.
+ */
+struct GfxPs2DirectContext {
+    uint8_t trilerp;     /* same-tap opaque trilerp submission */
+    uint8_t fog;         /* write the fog coefficient (fog_lut) */
+    uint8_t use_alpha;   /* shader parses an alpha per input */
+    uint8_t num_inputs;  /* shader combiner inputs */
+    int8_t rgb_input;    /* input feeding RGB through rgb_lut; -1: rgb_const */
+    int8_t alpha_input;  /* input feeding A through alpha_lut; -1: alpha_const */
+    uint8_t rgb_const;
+    uint8_t alpha_const;
+    const uint8_t *rgb_lut;    /* indexed by the input byte */
+    const uint8_t *alpha_lut;
+    const uint32_t *fog_lut;   /* xyz_control value per fog byte */
+    float scale_s;
+    float scale_t;
+    float guard_x;
+    float guard_y;
+};
+
+bool gfxPs2DirectQuery(struct GfxPs2DirectContext *ctx);
+void gfxPs2DirectDraw(const struct Ps2GsVu1TransformVertex *vertices,
+    uint32_t vertex_count, bool trilerp, bool w_ok, const uint8_t fog_rgb[3]);
+
 void gfxPs2TraceGfxCommandsImpl(
     const void *commands, uint32_t depth, uint32_t entry_count);
 extern int g_ps2RendererTraceCapturing;

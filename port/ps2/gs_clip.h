@@ -52,4 +52,26 @@ enum Ps2GsClipClass {
 enum Ps2GsClipClass ps2GsClipClassifyTriangle(
     const float *triangle, size_t stride);
 
+/*
+ * Per-vertex form of the classification, for callers that share vertices
+ * between triangles: bits 0..5 are the exact-frustum outcodes, bits 8..13
+ * the guard-band outcodes, PS2_GS_CLIP_CODE_NONFINITE marks a non-finite
+ * position. ps2GsClipClassifyCodes() on three such values returns exactly
+ * what ps2GsClipClassifyTriangle() returns for the triangle (under the same
+ * guard band).
+ */
+#define PS2_GS_CLIP_CODE_NONFINITE 0x10000u
+unsigned int ps2GsClipVertexCodes(const float *vertex);
+
+static inline enum Ps2GsClipClass ps2GsClipClassifyCodes(
+    unsigned int a, unsigned int b, unsigned int c)
+{
+    if (((a | b | c) & PS2_GS_CLIP_CODE_NONFINITE) != 0u ||
+        (a & b & c & 0x3fu) != 0u) {
+        return PS2_GS_CLIP_REJECT;
+    }
+    return ((a | b | c) & 0x3f00u) == 0u
+        ? PS2_GS_CLIP_ACCEPT : PS2_GS_CLIP_PARTIAL;
+}
+
 #endif

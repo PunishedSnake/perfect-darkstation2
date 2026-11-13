@@ -3,6 +3,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstdio>
+#include <cstdint>
 
 static unsigned int nextRandom(unsigned int *state)
 {
@@ -161,5 +162,33 @@ int main()
     }
 
     std::puts("GS homogeneous clip tests passed");
+    /* Per-vertex codes classify exactly like the whole-triangle test, for
+     * the exact frustum and a widened guard band, non-finite input included. */
+    {
+        uint32_t rng = 0x9e3779b9u;
+        const auto next = [&rng]() {
+            rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5;
+            return rng;
+        };
+        const float specials[] = { INFINITY, -INFINITY, NAN, 0.0f, -0.0f, 1e-30f };
+        for (int band = 0; band < 2; ++band) {
+            ps2GsClipSetGuardBand(band ? 3.5f : 1.0f, band ? 2.25f : 1.0f);
+            for (int it = 0; it < 200000; ++it) {
+                float tri[3u * 4u];
+                for (float &v : tri) {
+                    const uint32_t r = next();
+                    v = (r & 0xffu) == 0u ? specials[(r >> 8) % 6u]
+                        : ((float)(int32_t)r / 2147483648.0f) * ((r & 0x100u) ? 6.0f : 1.5f);
+                }
+                const unsigned a = ps2GsClipVertexCodes(&tri[0]);
+                const unsigned b = ps2GsClipVertexCodes(&tri[4]);
+                const unsigned c = ps2GsClipVertexCodes(&tri[8]);
+                assert(ps2GsClipClassifyCodes(a, b, c) ==
+                    ps2GsClipClassifyTriangle(tri, 4u));
+            }
+        }
+        ps2GsClipSetGuardBand(1.0f, 1.0f);
+    }
+
     return 0;
 }
