@@ -24,15 +24,34 @@ float planeDistance(const float *vertex, size_t plane)
     }
 }
 
-unsigned int clipCode(const float *vertex)
+inline unsigned int clipCode(const float *vertex)
 {
-    unsigned int code = 0u;
-    for (size_t plane = 0u; plane < kClipPlaneCount; ++plane) {
-        if (planeDistance(vertex, plane) < 0.0f) {
-            code |= 1u << plane;
+    const float x = vertex[0];
+    const float y = vertex[1];
+    const float z = vertex[2];
+    const float w = vertex[3];
+    /* Same tests as planeDistance(vertex, plane) < 0 for planes 0..5. */
+    return (x + w < 0.0f ? 1u : 0u) |
+        (w - x < 0.0f ? 2u : 0u) |
+        (y + w < 0.0f ? 4u : 0u) |
+        (w - y < 0.0f ? 8u : 0u) |
+        (z < 0.0f ? 16u : 0u) |
+        (w - z < 0.0f ? 32u : 0u);
+}
+
+/* Outcodes of a finite triangle; false if any position is non-finite. */
+inline bool triangleCodes(const float *triangle, size_t stride,
+    unsigned int codes[3])
+{
+    for (size_t vertex = 0u; vertex < 3u; ++vertex) {
+        const float *v = &triangle[vertex * stride];
+        if (!std::isfinite(v[0]) || !std::isfinite(v[1]) ||
+            !std::isfinite(v[2]) || !std::isfinite(v[3])) {
+            return false;
         }
+        codes[vertex] = clipCode(v);
     }
-    return code;
+    return true;
 }
 
 void copyVertex(float *destination, const float *source, size_t stride)
@@ -58,25 +77,23 @@ void intersectEdge(float *destination, const float *from, const float *to,
 
 } // namespace
 
+static enum Ps2GsClipClass classifyCodes(const unsigned int codes[3])
+{
+    if ((codes[0] & codes[1] & codes[2]) != 0u) {
+        return PS2_GS_CLIP_REJECT;
+    }
+    return (codes[0] | codes[1] | codes[2]) == 0u
+        ? PS2_GS_CLIP_ACCEPT : PS2_GS_CLIP_PARTIAL;
+}
+
 enum Ps2GsClipClass ps2GsClipClassifyTriangle(
     const float *triangle, size_t stride)
 {
-    for (size_t vertex = 0u; vertex < 3u; ++vertex) {
-        for (size_t component = 0u; component < 4u; ++component) {
-            if (!std::isfinite(triangle[vertex * stride + component])) {
-                return PS2_GS_CLIP_REJECT;
-            }
-        }
-    }
-
-    const unsigned int code0 = clipCode(&triangle[0u * stride]);
-    const unsigned int code1 = clipCode(&triangle[1u * stride]);
-    const unsigned int code2 = clipCode(&triangle[2u * stride]);
-    if ((code0 & code1 & code2) != 0u) {
+    unsigned int codes[3];
+    if (!triangleCodes(triangle, stride, codes)) {
         return PS2_GS_CLIP_REJECT;
     }
-    return (code0 | code1 | code2) == 0u
-        ? PS2_GS_CLIP_ACCEPT : PS2_GS_CLIP_PARTIAL;
+    return classifyCodes(codes);
 }
 
 bool ps2GsClipTriangle(const float *triangle, size_t stride,
@@ -91,8 +108,10 @@ bool ps2GsClipTriangle(const float *triangle, size_t stride,
         return false;
     }
 
+    unsigned int codes[3];
     const enum Ps2GsClipClass clip_class =
-        ps2GsClipClassifyTriangle(triangle, stride);
+        triangleCodes(triangle, stride, codes)
+            ? classifyCodes(codes) : PS2_GS_CLIP_REJECT;
     if (clip_class == PS2_GS_CLIP_REJECT) {
         return true;
     }
@@ -112,10 +131,7 @@ bool ps2GsClipTriangle(const float *triangle, size_t stride,
      * is a convex combination of the inputs, so it cannot violate them
      * either. The result is identical to clipping against all six planes.
      */
-    const unsigned int crossed =
-        clipCode(&triangle[0u * stride]) |
-        clipCode(&triangle[1u * stride]) |
-        clipCode(&triangle[2u * stride]);
+    const unsigned int crossed = codes[0] | codes[1] | codes[2];
     constexpr size_t kPoolVertices = 2u * kClipPlaneCount;
     float pool[kPoolVertices][PS2_GS_CLIP_MAX_VERTEX_FLOATS];
     size_t pool_used = 0u;
