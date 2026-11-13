@@ -187,7 +187,11 @@ static uint64_t run_lazy_stream(bool eager, uint8_t *final_bytes,
             /* LoadBlock of 4b/8b/16b data at a few TMEM addresses. */
             const uint32_t siz = lazy_rand() % 3u; /* 4b, 8b, 16b */
             const uint32_t words = 1u + lazy_rand() % 48u;
-            const uint32_t tmem = (lazy_rand() % 4u) * 16u;
+            /* a few blocks start just below the palette half and spill
+             * into it, where later TLUT loads overwrite them */
+            const uint32_t tmem = (lazy_rand() % 3u) == 0u
+                ? 224u + (lazy_rand() % 4u) * 16u
+                : (lazy_rand() % 4u) * 16u;
             const uint32_t texels = (words * 8u * 8u) / (4u << siz);
             const uint8_t fmt = siz == 2u ? FMT_RGBA : FMT_CI;
             gfxRdpTmemLiveSetTextureImage(fmt, siz, 31u,
@@ -213,7 +217,8 @@ static uint64_t run_lazy_stream(bool eager, uint8_t *final_bytes,
             const uint8_t fmt = siz == 2u ? FMT_RGBA :
                 ((lazy_rand() & 1u) ? FMT_CI : FMT_RGBA);
             gfxRdpTmemLiveSetTile(fmt, siz, line,
-                (lazy_rand() % 4u) * 16u, 0u);
+                (lazy_rand() % 3u) == 0u ? 232u + (lazy_rand() % 4u) * 8u
+                                         : (lazy_rand() % 4u) * 16u, 0u);
             const uint32_t size_bytes = line * 8u * rows;
             if (lazy_rand() & 1u) {
                 uint64_t fp = 0u;

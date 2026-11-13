@@ -46,8 +46,10 @@ static const mmi_w4 k_mmi_min16 = {{-0x8000, -0x8000, -0x8000, -0x8000}};
 static int s_adpcm_book_entries;
 #if defined(PD_MIXER_MMI_SELFTEST)
 static int s_adpcm_force_scalar;
+static int s_envmix_force_scalar;
 #else
 #define s_adpcm_force_scalar 0
+#define s_envmix_force_scalar 0
 #endif
 
 static inline int mmiAligned(const void *a, const void *b)
@@ -63,34 +65,43 @@ static void mmiMixGeneral(int16_t *out, const int16_t *in, int16_t gain, int blo
         coef.h[k] = 0x7fff;
         coef.h[k + 1] = gain;
     }
-    for (int b = 0; b < blocks; ++b, out += 8, in += 8) {
-        __asm__ __volatile__(
-            "lq      $8, 0(%0)\n\t"        /* out */
-            "lq      $9, 0(%1)\n\t"        /* in */
-            "lq      $10, 0(%2)\n\t"       /* {0x7fff, gain} x4 */
-            "lq      $11, 0(%3)\n\t"       /* 0x4000 words */
-            "pextlh  $12, $9, $8\n\t"      /* {out0,in0,out1,in1,...} */
-            "pextuh  $13, $9, $8\n\t"      /* samples 4..7 */
-            "phmadh  $12, $12, $10\n\t"
-            "phmadh  $13, $13, $10\n\t"
-            "lq      $14, 0(%4)\n\t"       /* 32767 words */
-            "lq      $15, 0(%5)\n\t"       /* -32768 words */
-            "paddw   $12, $12, $11\n\t"
-            "paddw   $13, $13, $11\n\t"
-            "psraw   $12, $12, 15\n\t"
-            "psraw   $13, $13, 15\n\t"
-            "pminw   $12, $12, $14\n\t"
-            "pminw   $13, $13, $14\n\t"
-            "pmaxw   $12, $12, $15\n\t"
-            "pmaxw   $13, $13, $15\n\t"
-            "ppach   $12, $13, $12\n\t"
-            "sq      $12, 0(%0)\n\t"
-            :
-            : "r"(out), "r"(in), "r"(&coef), "r"(&k_mmi_round),
-              "r"(&k_mmi_max16), "r"(&k_mmi_min16)
-            : "$8", "$9", "$10", "$11", "$12", "$13", "$14", "$15",
-              "hi", "lo", "memory");
+    if (blocks <= 0) {
+        return;
     }
+    /* constants stay in registers across the whole buffer */
+    __asm__ __volatile__(
+        "lq      $10, 0(%3)\n\t"       /* {0x7fff, gain} x4 */
+        "lq      $11, 0(%4)\n\t"       /* 0x4000 words */
+        "lq      $14, 0(%5)\n\t"       /* 32767 words */
+        "lq      $15, 0(%6)\n\t"       /* -32768 words */
+        ".set    push\n\t"
+        ".set    noreorder\n\t"
+        "1:\n\t"
+        "lq      $8, 0(%0)\n\t"        /* out */
+        "lq      $9, 0(%1)\n\t"        /* in */
+        "addiu   %2, %2, -1\n\t"
+        "pextlh  $12, $9, $8\n\t"      /* {out0,in0,out1,in1,...} */
+        "pextuh  $13, $9, $8\n\t"      /* samples 4..7 */
+        "phmadh  $12, $12, $10\n\t"
+        "phmadh  $13, $13, $10\n\t"
+        "addiu   %1, %1, 16\n\t"
+        "paddw   $12, $12, $11\n\t"
+        "paddw   $13, $13, $11\n\t"
+        "psraw   $12, $12, 15\n\t"
+        "psraw   $13, $13, 15\n\t"
+        "pminw   $12, $12, $14\n\t"
+        "pminw   $13, $13, $14\n\t"
+        "pmaxw   $12, $12, $15\n\t"
+        "pmaxw   $13, $13, $15\n\t"
+        "ppach   $12, $13, $12\n\t"
+        "sq      $12, 0(%0)\n\t"
+        "bgtz    %2, 1b\n\t"
+        "addiu   %0, %0, 16\n\t"       /* delay slot */
+        ".set    pop\n\t"
+        : "+r"(out), "+r"(in), "+r"(blocks)
+        : "r"(&coef), "r"(&k_mmi_round), "r"(&k_mmi_max16), "r"(&k_mmi_min16)
+        : "$8", "$9", "$10", "$11", "$12", "$13", "$14", "$15",
+          "hi", "lo", "memory");
 }
 
 /* out[i] = clamp16(out[i] - in[i]) */
@@ -120,25 +131,77 @@ static void mmiMixScaledAdd(int16_t *out, const int16_t *in, int16_t g, int bloc
         coef.h[k] = g;
         coef.h[k + 1] = 0;
     }
-    for (int b = 0; b < blocks; ++b, out += 8, in += 8) {
-        __asm__ __volatile__(
-            "lq      $8, 0(%0)\n\t"        /* out */
-            "lq      $9, 0(%1)\n\t"        /* in */
-            "lq      $10, 0(%2)\n\t"       /* {g, 0} x4 */
-            "pextlh  $12, $0, $9\n\t"      /* {in0,0,in1,0,...} */
-            "pextuh  $13, $0, $9\n\t"
-            "phmadh  $12, $12, $10\n\t"    /* in*g words */
-            "phmadh  $13, $13, $10\n\t"
-            "psraw   $12, $12, 15\n\t"
-            "psraw   $13, $13, 15\n\t"
-            "ppach   $12, $13, $12\n\t"
-            "paddsh  $8, $8, $12\n\t"
-            "sq      $8, 0(%0)\n\t"
-            :
-            : "r"(out), "r"(in), "r"(&coef)
-            : "$8", "$9", "$10", "$12", "$13", "hi", "lo", "memory");
+    if (blocks <= 0) {
+        return;
     }
+    __asm__ __volatile__(
+        "lq      $10, 0(%3)\n\t"       /* {g, 0} x4 */
+        ".set    push\n\t"
+        ".set    noreorder\n\t"
+        "1:\n\t"
+        "lq      $8, 0(%0)\n\t"        /* out */
+        "lq      $9, 0(%1)\n\t"        /* in */
+        "addiu   %2, %2, -1\n\t"
+        "pextlh  $12, $0, $9\n\t"      /* {in0,0,in1,0,...} */
+        "pextuh  $13, $0, $9\n\t"
+        "phmadh  $12, $12, $10\n\t"    /* in*g words */
+        "phmadh  $13, $13, $10\n\t"
+        "addiu   %1, %1, 16\n\t"
+        "psraw   $12, $12, 15\n\t"
+        "psraw   $13, $13, 15\n\t"
+        "ppach   $12, $13, $12\n\t"
+        "paddsh  $8, $8, $12\n\t"
+        "sq      $8, 0(%0)\n\t"
+        "bgtz    %2, 1b\n\t"
+        "addiu   %0, %0, 16\n\t"       /* delay slot */
+        ".set    pop\n\t"
+        : "+r"(out), "+r"(in), "+r"(blocks)
+        : "r"(&coef)
+        : "$8", "$9", "$10", "$12", "$13", "hi", "lo", "memory");
 }
+
+/*
+ * One 8-sample block of the ramping envelope mixer:
+ *   g[k]   = clamp16((vol[k] * V + 0x4000) >> 15)
+ *   out[k] = clamp16(out[k] + ((in[k] * g[k]) >> 15))
+ * vcoef = {V, 0} x4. With vol and V int16, g >= -32767, so it never hits the
+ * -0x8000 case a saturating halfword add would get wrong; the only overflow
+ * is +32768 (both -0x8000), which pminw clamps.
+ */
+static inline void mmiEnvMixLanes(int16_t *out, const int16_t *in, const mmi_h8 *vol,
+                                  const mmi_h8 *vcoef)
+{
+    __asm__ __volatile__(
+        "lq      $11, 0(%2)\n\t"      /* vol */
+        "lq      $14, 0(%3)\n\t"      /* {V,0} x4 */
+        "lq      $15, 0(%4)\n\t"      /* 0x4000 words */
+        "pextlh  $10, $0, $11\n\t"
+        "pextuh  $11, $0, $11\n\t"
+        "phmadh  $10, $10, $14\n\t"
+        "phmadh  $11, $11, $14\n\t"
+        "lq      $14, 0(%5)\n\t"      /* 0x7fff words */
+        "paddw   $10, $10, $15\n\t"
+        "paddw   $11, $11, $15\n\t"
+        "psraw   $10, $10, 15\n\t"
+        "psraw   $11, $11, 15\n\t"
+        "pminw   $10, $10, $14\n\t"
+        "pminw   $11, $11, $14\n\t"
+        "lq      $8, 0(%0)\n\t"       /* out */
+        "lq      $9, 0(%1)\n\t"       /* in */
+        "pextlh  $12, $0, $9\n\t"
+        "pextuh  $13, $0, $9\n\t"
+        "phmadh  $12, $12, $10\n\t"   /* g words keep their sign in the low half */
+        "phmadh  $13, $13, $11\n\t"
+        "psraw   $12, $12, 15\n\t"
+        "psraw   $13, $13, 15\n\t"
+        "ppach   $12, $13, $12\n\t"
+        "paddsh  $8, $8, $12\n\t"
+        "sq      $8, 0(%0)\n\t"
+        :
+        : "r"(out), "r"(in), "r"(vol), "r"(vcoef), "r"(&k_mmi_round), "r"(&k_mmi_max16)
+        : "$8", "$9", "$10", "$11", "$12", "$13", "$14", "$15", "hi", "lo", "memory");
+}
+
 #else
 #define HAS_MMI 0
 #endif
@@ -890,6 +953,16 @@ void aEnvMixerImpl(uint8_t flags, ENVMIX_STATE state, int16_t rvol) {
     int16_t *outs[4] = {dry[0], dry[1], wet[0], wet[1]};
     int16_t gain[4] = {0, 0, 0, 0};
     int i = 0;
+#if HAS_MMI
+    mmi_h8 vcoef[2];
+    for (int k = 0; k < 8; k += 2) {
+        vcoef[0].h[k] = voldry;
+        vcoef[1].h[k] = volwet;
+        vcoef[0].h[k + 1] = vcoef[1].h[k + 1] = 0;
+    }
+    const int blocks_ok = mmiAligned(in, outs[0]) && mmiAligned(outs[1], outs[2])
+        && mmiAligned(outs[3], outs[3]);
+#endif
 
     // Per-sample envelope while either side is still ramping. Once both rates
     // are zero the envelope is frozen (t is either at its target or above a
@@ -898,6 +971,50 @@ void aEnvMixerImpl(uint8_t flags, ENVMIX_STATE state, int16_t rvol) {
     // even sample so the XOR-swizzled index set stays identical.
     for (; i < nsamples; ++i) {
         int16_t vol[2];
+
+#if HAS_MMI
+        // 8-sample blocks in which neither side reaches its target: the
+        // envelope is then a plain linear ramp (no clamp, no int32 wrap), so
+        // the per-sample gains are computed up front and the four outputs are
+        // mixed with per-lane gains. The XOR swizzle only swaps lane pairs
+        // inside the block, so gains are stored at lane s ^ XOR.
+        if (!s_envmix_force_scalar && (i & 7) == 0 && i + 8 <= nsamples) {
+            int safe = 1;
+            for (int j = 0; j < 2; ++j) {
+                const int64_t end = (int64_t)t[j] + 8 * (int64_t)rate[j];
+                if (rate[j] > 0 ? end >= tgt[j] : end <= tgt[j]) {
+                    safe = 0;
+                }
+            }
+            if (safe && blocks_ok) {
+                mmi_h8 vols[2];
+                for (int s = 0; s < 8; ++s) {
+                    t[0] += rate[0];
+                    t[1] += rate[1];
+                    vols[0].h[s ^ XOR] = (int16_t)(t[0] >> 16);
+                    vols[1].h[s ^ XOR] = (int16_t)(t[1] >> 16);
+                }
+                for (int j = 0; j < 4; ++j) {
+                    if (vcoef[j >> 1].h[0] != 0) {
+                        mmiEnvMixLanes(outs[j] + i, in + i, &vols[j & 1], &vcoef[j >> 1]);
+                    }
+                }
+                // the frozen tail below mixes with the last sample's gains
+                vol[0] = t[0] >> 16;
+                vol[1] = t[1] >> 16;
+                gain[0] = clamp16((vol[0] * voldry + 0x4000) >> 15);
+                gain[1] = clamp16((vol[1] * voldry + 0x4000) >> 15);
+                gain[2] = clamp16((vol[0] * volwet + 0x4000) >> 15);
+                gain[3] = clamp16((vol[1] * volwet + 0x4000) >> 15);
+                i += 7;
+                if (rate[0] == 0 && rate[1] == 0) {
+                    ++i;
+                    break;
+                }
+                continue;
+            }
+        }
+#endif
 
         for (int j = 0; j < 2; ++j) {
             t[j] += rate[j];
@@ -1273,6 +1390,69 @@ void mixerMmiSelfTest(void)
         s_adpcm_matrix_entries = -1;
         sysLogPrintf(LOG_NOTE, "ADPCM decoder: mmi=%u us scalar=%u us (200 x 448 samples)",
             (unsigned)tt[0], (unsigned)tt[1]);
+    }
+    /* Envelope mixer: block ramp path against the per-sample loop. */
+    {
+        static int16_t ref[4][NUM_SAMPLES] __attribute__((aligned(16)));
+        static int16_t init[5][NUM_SAMPLES] __attribute__((aligned(16)));
+        static int32_t st[2][8] __attribute__((aligned(16)));
+        const int ofs[5] = {OFS_BASE, OFS_MAIN_L, OFS_MAIN_R, OFS_AUX_L, OFS_AUX_R};
+        uint64_t tt[2] = {0, 0}, tr[2] = {0, 0};
+        for (int it = 0; it < 3000; ++it) {
+            for (int b = 0; b < 5; ++b) {
+                for (int k = 0; k < NUM_SAMPLES; ++k) {
+                    seed = seed * 1664525u + 1013904223u;
+                    init[b][k] = (int16_t)(seed >> 8);
+                }
+            }
+            for (int j = 0; j < 2; ++j) {
+                seed = seed * 1664525u + 1013904223u;
+                rspa.vol[j] = (int16_t)(seed >> 8);
+                seed = seed * 1664525u + 1013904223u;
+                rspa.target[j] = (it & 3) == 0 ? rspa.vol[j] : (int16_t)(seed >> 8);
+                seed = seed * 1664525u + 1013904223u;
+                /* small rates ramp across many blocks, large ones hit target fast */
+                rspa.rate[j] = (it & 4) ? (int32_t)seed >> (8 + (seed & 15))
+                                        : (int32_t)seed >> 2;
+                if ((it % 5) == 0) rspa.rate[j] = 0;
+            }
+            seed = seed * 1664525u + 1013904223u;
+            rspa.vol_dry = (int16_t)(seed >> 8);
+            rspa.vol_wet = (it % 3) == 0 ? 0 : (int16_t)(seed >> 16);
+            if (it % 17 == 0) { rspa.vol[0] = -0x8000; rspa.vol_dry = -0x8000; }
+            const int16_t vol0[2] = {rspa.vol[0], rspa.vol[1]};
+            for (int mode = 1; mode >= 0; --mode) {
+                s_envmix_force_scalar = mode;
+                rspa.vol[0] = vol0[0];
+                rspa.vol[1] = vol0[1];
+                for (int b = 0; b < 5; ++b) {
+                    memcpy(BUF_S16(ofs[b]), init[b], sizeof(init[b]));
+                }
+                const uint64_t t0 = sysGetMicroseconds();
+                /* one A_INIT frame plus two continuation frames */
+                aEnvMixerImpl(A_INIT, (short *)st[mode], rspa.vol[1]);
+                aEnvMixerImpl(0, (short *)st[mode], rspa.vol[1]);
+                aEnvMixerImpl(0, (short *)st[mode], rspa.vol[1]);
+                tt[mode] += sysGetMicroseconds() - t0;
+                if ((it & 4) && (it % 5) != 0) tr[mode] += sysGetMicroseconds() - t0;
+                if (mode == 1) {
+                    for (int b = 0; b < 4; ++b) {
+                        memcpy(ref[b], BUF_S16(ofs[b + 1]), sizeof(ref[b]));
+                    }
+                }
+            }
+            ++cases;
+            int bad = memcmp(st[0], st[1], sizeof(st[0])) != 0;
+            for (int b = 0; b < 4; ++b) {
+                bad |= memcmp(ref[b], BUF_S16(ofs[b + 1]), sizeof(ref[b])) != 0;
+            }
+            if (bad && fails++ < 8) {
+                sysLogPrintf(LOG_ERROR, "MMI envmixer mismatch it=%d", it);
+            }
+        }
+        s_envmix_force_scalar = 0;
+        sysLogPrintf(LOG_NOTE, "Envelope mixer: mmi=%u us scalar=%u us (3000 x 3 frames), slow ramps mmi=%u us scalar=%u us",
+            (unsigned)tt[0], (unsigned)tt[1], (unsigned)tr[0], (unsigned)tr[1]);
     }
     sysLogPrintf(fails ? LOG_ERROR : LOG_NOTE, "MMI mixer selftest: %u/%u cases failed", fails, cases);
 }

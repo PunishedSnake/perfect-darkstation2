@@ -118,13 +118,44 @@ struct Ps2RendererTraceQword {
 /* Arm a one-frame capture. A later request replaces an earlier pending one. */
 void ps2RendererTraceRequest(uint32_t stage, uint32_t warmup_frames);
 void ps2RendererTraceBeginFrame(void);
-bool ps2RendererTraceIsCapturing(void);
-void ps2RendererTraceRecord(uint16_t type, uint16_t flags,
+/*
+ * Hot-path hooks: the capture flag is tested inline so an idle trace costs
+ * one load and a branch instead of a call per draw/command.
+ */
+extern int g_ps2RendererTraceCapturing;
+static inline bool ps2RendererTraceIsCapturing(void)
+{
+    return g_ps2RendererTraceCapturing != 0;
+}
+void ps2RendererTraceRecordImpl(uint16_t type, uint16_t flags,
     uint64_t a, uint64_t b, uint64_t c, uint64_t d);
-void ps2RendererTraceRecordPath3Qwords(const void *qwords, uint32_t count);
-void ps2RendererTraceRecordPath1Qwords(const void *qwords,
+void ps2RendererTraceRecordPath3QwordsImpl(const void *qwords, uint32_t count);
+void ps2RendererTraceRecordPath1QwordsImpl(const void *qwords,
     uint32_t chain_qwords,
     uint32_t register_count, uint32_t vertex_count, bool textured);
+static inline void ps2RendererTraceRecord(uint16_t type, uint16_t flags,
+    uint64_t a, uint64_t b, uint64_t c, uint64_t d)
+{
+    if (g_ps2RendererTraceCapturing) {
+        ps2RendererTraceRecordImpl(type, flags, a, b, c, d);
+    }
+}
+static inline void ps2RendererTraceRecordPath3Qwords(const void *qwords,
+    uint32_t count)
+{
+    if (g_ps2RendererTraceCapturing) {
+        ps2RendererTraceRecordPath3QwordsImpl(qwords, count);
+    }
+}
+static inline void ps2RendererTraceRecordPath1Qwords(const void *qwords,
+    uint32_t chain_qwords,
+    uint32_t register_count, uint32_t vertex_count, bool textured)
+{
+    if (g_ps2RendererTraceCapturing) {
+        ps2RendererTraceRecordPath1QwordsImpl(qwords, chain_qwords,
+            register_count, vertex_count, textured);
+    }
+}
 
 /*
  * Variable-size v2 payload storage. Offset is relative to the blob section.

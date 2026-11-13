@@ -140,6 +140,22 @@ extern "C" bool ps2GsVu1PlanTexturedTransform(uint32_t vertex_count,
     return true;
 }
 
+static inline void gfxPs2CopyQwords(void *dst, const void *src, size_t qwords)
+{
+#if defined(_EE)
+    if ((((uintptr_t)dst | (uintptr_t)src) & 15u) == 0u) {
+        typedef unsigned int ps2_qword __attribute__((mode(TI)));
+        ps2_qword *d = (ps2_qword *)dst;
+        const ps2_qword *q = (const ps2_qword *)src;
+        for (size_t i = 0; i < qwords; ++i) {
+            d[i] = q[i];
+        }
+        return;
+    }
+#endif
+    memcpy(dst, src, qwords * 16u);
+}
+
 extern "C" bool ps2GsVu1BuildTexturedTransformPayload(
     uint32_t *destination, uint32_t capacity_qw,
     const float scale[4], const float offset[4], uint32_t flags,
@@ -204,7 +220,13 @@ extern "C" bool ps2GsVu1BuildTexturedTransformPayload(
     memcpy(cursor, padded_prefix, sizeof(padded_prefix));
     cursor += sizeof(padded_prefix);
 
-    memcpy(cursor, vertices, (size_t)vertex_count * sizeof(*vertices));
+    /*
+     * The destination is the uncached-accelerated VIF1 arena: quadword
+     * stores are the fast path; a library memcpy here was the largest
+     * remaining copy on the EE once VU1 took most world geometry.
+     */
+    gfxPs2CopyQwords(cursor, vertices,
+        (size_t)vertex_count * sizeof(*vertices) / 16u);
     cursor += (size_t)vertex_count * sizeof(*vertices);
 
     struct Ps2GsPackedReg padded_suffix = { 0u, PS2_GS_REG_NOP };

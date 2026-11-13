@@ -253,31 +253,24 @@ extern "C" bool gfxRdpTmemWriteTlut(struct GfxRdpTmem *tmem,
         return true;
     }
 
-    /* Each entry fills its word as four big-endian copies: hi,lo,hi,lo... */
-    uint8_t words[GFX_RDP_TMEM_WORDS][GFX_RDP_TMEM_WORD_BYTES];
-    for (uint32_t i = 0; i < entry_count; ++i) {
-        const uint8_t hi = (uint8_t)(entries[i] >> 8);
-        const uint8_t lo = (uint8_t)entries[i];
-        for (uint32_t copy = 0; copy < 4u; ++copy) {
-            words[i][copy * 2u] = hi;
-            words[i][copy * 2u + 1u] = lo;
-        }
-    }
-
     /*
      * Reloading the palette TMEM already holds (the common case: the same
      * TLUT before every draw that uses it) changes nothing observable, as
      * for identical LoadBlocks: keep generations and load records intact.
+     * Each entry fills its word as four copies of hi,lo; compare against that
+     * pattern directly and stop at the first difference.
      */
     uint32_t same = 0u;
     for (; same < entry_count; ++same) {
         const uint32_t word = first_tmem_word + same;
-        const uint32_t dst_byte = word * GFX_RDP_TMEM_WORD_BYTES;
-        if (gfxRdpTmemLoad64(&tmem->bytes[dst_byte]) !=
-                gfxRdpTmemLoad64(words[same]) ||
-            gfxRdpTmemLoad64(&tmem->byte_valid[dst_byte]) !=
-                k_gfx_rdp_tmem_ones ||
-            tmem->word_linear[word] != 0u) {
+        /* shifts, not a 64-bit multiply: the R5900 has no DMULT and the
+         * multiply became a libgcc call per entry */
+        const uint32_t half = ((uint32_t)(entries[same] >> 8) & 0xffu) |
+            (((uint32_t)entries[same] & 0xffu) << 8);
+        const uint32_t pair = half | (half << 16);
+        const uint64_t pattern = (uint64_t)pair | ((uint64_t)pair << 32);
+        if (tmem->word_valid[word] == 0u || tmem->word_linear[word] != 0u ||
+            gfxRdpTmemLoad64(&tmem->bytes[word * GFX_RDP_TMEM_WORD_BYTES]) != pattern) {
             break;
         }
     }
@@ -285,12 +278,23 @@ extern "C" bool gfxRdpTmemWriteTlut(struct GfxRdpTmem *tmem,
         return true;
     }
 
+    /* One pass: each word is four copies of hi,lo (built in a register,
+     * stored straight into TMEM) with full validity and a fresh generation. */
     const uint32_t generation = gfxRdpTmemNextGeneration(tmem);
     uint64_t load_hash = GFX_RDP_TMEM_HASH_SEED;
     for (uint32_t i = 0; i < entry_count; ++i) {
-        gfxRdpTmemStoreFullWord(tmem, first_tmem_word + i, words[i], false,
-            generation);
-        gfxRdpTmemHashMix64(&load_hash, gfxRdpTmemLoad64(words[i]));
+        const uint32_t word = first_tmem_word + i;
+        const uint32_t half = ((uint32_t)(entries[i] >> 8) & 0xffu) |
+            (((uint32_t)entries[i] & 0xffu) << 8);
+        const uint32_t pair = half | (half << 16);
+        const uint64_t pattern = (uint64_t)pair | ((uint64_t)pair << 32);
+        memcpy(&tmem->bytes[word * GFX_RDP_TMEM_WORD_BYTES], &pattern, 8);
+        memcpy(&tmem->byte_valid[word * GFX_RDP_TMEM_WORD_BYTES],
+            &k_gfx_rdp_tmem_ones, sizeof(k_gfx_rdp_tmem_ones));
+        tmem->word_valid[word] = 1u;
+        tmem->word_linear[word] = 0u;
+        tmem->word_generation[word] = generation;
+        gfxRdpTmemHashMix64(&load_hash, pattern);
     }
 
     gfxRdpTmemRecordLoad(tmem, first_tmem_word, entry_count,

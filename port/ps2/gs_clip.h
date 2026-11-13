@@ -26,6 +26,15 @@ bool ps2GsClipTriangle(const float *triangle, size_t stride,
     float *out_vertices, size_t out_capacity_vertices,
     size_t *out_vertex_count);
 
+/*
+ * Guard band: widen the X/Y planes to |X| <= guard * W for ACCEPT and for
+ * the planes actually clipped, while trivial rejection still uses the exact
+ * frustum. Geometry inside the band but off screen is left to the GS
+ * scissor, which discards it for free. 1.0 (the default) is the exact
+ * frustum. Z is never widened.
+ */
+void ps2GsClipSetGuardBand(float guard_x, float guard_y);
+
 enum Ps2GsClipClass {
     /* Outside one plane or non-finite position: produces no output. */
     PS2_GS_CLIP_REJECT = 0,
