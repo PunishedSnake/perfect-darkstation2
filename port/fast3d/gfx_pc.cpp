@@ -2284,6 +2284,17 @@ static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx, bo
     }
 
     if ((rsp.geometry_mode & G_CULL_BOTH) != 0) {
+#if defined(PLATFORM_PS2)
+        /*
+         * Division-free form of the test below. For non-zero W the projected
+         * cross product equals -det[x y w] / (w1 w2 w3), and the eye-plane
+         * flip multiplies by sign(w1 w2 w3) again, so the flipped cross has
+         * the sign of -det. Six FPU divides per triangle become nine
+         * multiplies (the EE's DIV.S is not pipelined).
+         */
+        float cross = v2->x * (v1->y * v3->w - v3->y * v1->w) - v1->x * (v2->y * v3->w - v3->y * v2->w) -
+                      v3->x * (v1->y * v2->w - v2->y * v1->w);
+#else
         /* v2's projection is shared by both edges; compute it once. */
         const float x2 = v2->x / (v2->w);
         const float y2 = v2->y / (v2->w);
@@ -2298,6 +2309,7 @@ static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx, bo
             // If all vertices lie behind the eye, the triangle will be rejected anyway.
             cross = -cross;
         }
+#endif
 
         // If inverted culling is requested, negate the cross
         // if ((rsp.extra_geometry_mode & G_EX_INVERT_CULLING) == 1) {
@@ -3093,10 +3105,41 @@ static void gfx_dp_set_color_image(uint32_t format, uint32_t size, uint32_t widt
     rdp.color_image_address = address;
 }
 
+/*
+ * Commands after which the cached triangle setup is still valid: geometry
+ * and matrix loads, syncs (no state) and other-mode writes, which invalidate
+ * themselves only when they change a bit (display lists re-send the same
+ * render mode constantly).
+ */
+static inline bool gfx_opcode_keeps_tri_setup(uint32_t opcode) {
+    switch (opcode) {
+        case (uint8_t)G_VTX:
+        case (uint8_t)G_TRI1:
+        case (uint8_t)G_TRI4:
+        case (uint8_t)G_COL:
+        case (uint8_t)G_MTX:
+        case (uint8_t)G_POPMTX:
+        case (uint8_t)G_NOOP:
+        case (uint8_t)G_MOVEWORD: /* lights, fog factor, segments: per-vertex state only */
+        case (uint8_t)G_SETOTHERMODE_L:
+        case (uint8_t)G_SETOTHERMODE_H:
+        case (uint8_t)G_RDPPIPESYNC:
+        case (uint8_t)G_RDPFULLSYNC:
+        case (uint8_t)G_RDPLOADSYNC:
+        case (uint8_t)G_RDPTILESYNC:
+            return true;
+        default:
+            return false;
+    }
+}
+
 static void gfx_sp_set_other_mode(uint32_t shift, uint32_t num_bits, uint64_t mode) {
     uint64_t mask = (((uint64_t)1 << num_bits) - 1) << shift;
-    uint64_t om = rdp.other_mode_l | ((uint64_t)rdp.other_mode_h << 32);
-    om = (om & ~mask) | mode;
+    const uint64_t old_om = rdp.other_mode_l | ((uint64_t)rdp.other_mode_h << 32);
+    uint64_t om = (old_om & ~mask) | mode;
+    if (om != old_om) {
+        gfx_tri_setup_invalidate();
+    }
     rdp.other_mode_l = (uint32_t)om;
     rdp.other_mode_h = (uint32_t)(om >> 32);
     rdp.palette_fmt = rdp.other_mode_h & (3U << G_MDSFT_TEXTLUT);
@@ -3146,9 +3189,7 @@ static void gfx_run_dl(Gfx* cmd) {
     for (;;) {
         uint32_t opcode = cmd->words.w0 >> 24;
         // gfx_print_cmd(cmd);
-        if (opcode != G_VTX && opcode != G_TRI1 && opcode != G_TRI4 &&
-            opcode != G_COL && opcode != G_MTX && opcode != (uint8_t)G_POPMTX &&
-            opcode != G_NOOP) {
+        if (!gfx_opcode_keeps_tri_setup(opcode)) {
             gfx_tri_setup_invalidate();
         }
         switch (opcode) {
