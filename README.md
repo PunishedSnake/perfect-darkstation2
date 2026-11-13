@@ -206,6 +206,13 @@ More detailed build, launch and diagnostic instructions live in [port/ps2/README
 | `--no-log` | Force the filesystem log sink off. |
 | `--profile <number>` | Select a player profile where supported. |
 
+## Controls and video settings
+
+Extended Options (pause menu → Options → Extended) are PS2-specific:
+
+- **Controls**, per player: DualShock 2 port, a control scheme (*Modern*, *Shoulder Shooter*, *N64 Classic* or *Custom*), a *Button Layout* reminder screen and *Customize Buttons* remapping (Select cancels a remap). Custom layouts are stored in `pd.ini` as `Input.PlayerN.Custom.*`.
+- **Video Output**: 480i, 480p or 1080i (component cable for the latter two). The 640x448 image is scaled by the GS display unit, so the mode costs no speed. It applies on the next boot; **hold START+TRIANGLE while the game boots** to fall back to 480i if a TV cannot show the chosen mode.
+
 ## Renderer trace capture
 
 The normal game build can record a single renderer frame without globally enabling synchronous file logging.
