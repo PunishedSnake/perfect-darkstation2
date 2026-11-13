@@ -1,4 +1,5 @@
 #include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -10,6 +11,7 @@
 #include "input.h"
 #include "platform.h"
 #include "system.h"
+#include "data.h"
 
 #include "input_ps2_map.h"
 #include "pad_ps2.h"
@@ -45,6 +47,66 @@ static u64 s_rumble_deadline[INPUT_MAX_CONTROLLERS];
 static u32 s_binds[INPUT_MAX_CONTROLLERS][CK_TOTAL_COUNT][INPUT_MAX_BINDS];
 static s32 s_text_input;
 
+/*
+ * Control schemes. Bindings are stored per action as a mask of DualShock 2
+ * button indices (the VK joy index space below), so a custom layout survives
+ * in pd.ini as one integer per action.
+ */
+static s32 s_scheme[INPUT_MAX_CONTROLLERS];
+static s32 s_custom_mask[INPUT_MAX_CONTROLLERS][CK_TOTAL_COUNT];
+static s32 s_last_joy_index = -1;
+
+enum {
+    PS2_JOY_CROSS = 0, PS2_JOY_CIRCLE = 1, PS2_JOY_SQUARE = 2,
+    PS2_JOY_TRIANGLE = 3, PS2_JOY_SELECT = 4, PS2_JOY_START = 6,
+    PS2_JOY_L3 = 7, PS2_JOY_R3 = 8, PS2_JOY_L1 = 9, PS2_JOY_R1 = 10,
+    PS2_JOY_UP = 11, PS2_JOY_DOWN = 12, PS2_JOY_LEFT = 13,
+    PS2_JOY_RIGHT = 14, PS2_JOY_L2 = 30, PS2_JOY_R2 = 31,
+};
+
+struct Ps2SchemeBind {
+    u8 ck;
+    u8 joy;
+};
+
+/* Default: matches the desktop port's gamepad layout. */
+static const struct Ps2SchemeBind s_scheme_modern[] = {
+    { CK_ZTRIG, PS2_JOY_R2 }, { CK_RTRIG, PS2_JOY_L2 },
+    { CK_LTRIG, PS2_JOY_R1 }, { CK_DPAD_D, PS2_JOY_L1 },
+    { CK_A, PS2_JOY_CROSS }, { CK_DPAD_L, PS2_JOY_CIRCLE },
+    { CK_X, PS2_JOY_SQUARE }, { CK_Y, PS2_JOY_TRIANGLE },
+    { CK_8000, PS2_JOY_L3 }, { CK_START, PS2_JOY_START },
+    { CK_C_U, PS2_JOY_UP }, { CK_C_D, PS2_JOY_DOWN },
+    { CK_C_L, PS2_JOY_LEFT }, { CK_C_R, PS2_JOY_RIGHT },
+    { CK_ACCEPT, PS2_JOY_CROSS }, { CK_CANCEL, PS2_JOY_CIRCLE },
+};
+
+/* Shoulder-button shooter layout (TimeSplitters 2 style). */
+static const struct Ps2SchemeBind s_scheme_shooter[] = {
+    { CK_ZTRIG, PS2_JOY_R1 }, { CK_RTRIG, PS2_JOY_L1 },
+    { CK_LTRIG, PS2_JOY_R2 }, { CK_DPAD_D, PS2_JOY_L2 },
+    { CK_A, PS2_JOY_CROSS }, { CK_8000, PS2_JOY_CIRCLE },
+    { CK_X, PS2_JOY_SQUARE }, { CK_Y, PS2_JOY_TRIANGLE },
+    { CK_Y, PS2_JOY_RIGHT }, { CK_DPAD_L, PS2_JOY_LEFT },
+    { CK_START, PS2_JOY_START },
+    { CK_C_U, PS2_JOY_UP }, { CK_C_D, PS2_JOY_DOWN },
+    { CK_ACCEPT, PS2_JOY_CROSS }, { CK_CANCEL, PS2_JOY_CIRCLE },
+};
+
+/* Original N64 controller roles; right stick acts as the C buttons. */
+static const struct Ps2SchemeBind s_scheme_n64[] = {
+    { CK_A, PS2_JOY_CROSS }, { CK_B, PS2_JOY_CIRCLE },
+    { CK_LTRIG, PS2_JOY_L1 }, { CK_RTRIG, PS2_JOY_R1 },
+    { CK_ZTRIG, PS2_JOY_R2 }, { CK_ZTRIG, PS2_JOY_L2 },
+    { CK_START, PS2_JOY_START },
+    { CK_DPAD_U, PS2_JOY_UP }, { CK_DPAD_D, PS2_JOY_DOWN },
+    { CK_DPAD_L, PS2_JOY_LEFT }, { CK_DPAD_R, PS2_JOY_RIGHT },
+};
+
+static const char *s_scheme_names[PS2_INPUT_SCHEME_COUNT] = {
+    "Modern", "Shoulder Shooter", "N64 Classic", "Custom",
+};
+
 static const char *s_cont_key_names[CK_TOTAL_COUNT] = {
     "R_CBUTTONS", "L_CBUTTONS", "D_CBUTTONS", "U_CBUTTONS",
     "R_TRIG", "L_TRIG", "X_BUTTON", "Y_BUTTON",
@@ -55,13 +117,14 @@ static const char *s_cont_key_names[CK_TOTAL_COUNT] = {
     "CK_0800", "CK_1000", "CK_2000", "CK_4000", "CK_8000",
 };
 
+/* DualShock 2 names, indexed like the desktop VK joy button space. */
 static const char *s_joy_key_names[INPUT_MAX_CONTROLLER_BUTTONS] = {
-    "A", "B", "X", "Y", "BACK", "GUIDE", "START", "LSTICK",
-    "RSTICK", "LSHOULDER", "RSHOULDER", "DPAD_UP", "DPAD_DOWN",
-    "DPAD_LEFT", "DPAD_RIGHT", "BUTTON_15", "BUTTON_16", "BUTTON_17",
-    "BUTTON_18", "BUTTON_19", "BUTTON_20", "BUTTON_21", "BUTTON_22",
-    "BUTTON_23", "BUTTON_24", "BUTTON_25", "BUTTON_26", "BUTTON_27",
-    "BUTTON_28", "BUTTON_29", "LTRIGGER", "RTRIGGER",
+    "Cross", "Circle", "Square", "Triangle", "Select", "-", "Start", "L3",
+    "R3", "L1", "R1", "D-Pad Up", "D-Pad Down",
+    "D-Pad Left", "D-Pad Right", "-", "-", "-",
+    "-", "-", "-", "-", "-",
+    "-", "-", "-", "-", "-",
+    "-", "-", "L2", "R2",
 };
 
 static bool ps2InputControllerIndexValid(s32 index)
@@ -146,11 +209,74 @@ static bool ps2InputBindPressed(s32 controller, u32 cont_key)
     return false;
 }
 
-static void ps2InputSetDefaultJoyBind(s32 controller, u32 cont_key,
-    u32 joy_index)
+static void ps2InputAddBind(s32 controller, u32 cont_key, u32 joy_index)
 {
-    inputKeyBind(controller, cont_key, -1,
-        VK_JOY_BEGIN + controller * INPUT_MAX_CONTROLLER_BUTTONS + joy_index);
+    u32 *slots = s_binds[controller][cont_key];
+    const u32 vk = VK_JOY_BEGIN +
+        (u32)controller * INPUT_MAX_CONTROLLER_BUTTONS + joy_index;
+    for (s32 slot = 0; slot < INPUT_MAX_BINDS; ++slot) {
+        if (slots[slot] == vk) {
+            return;
+        }
+        if (slots[slot] == 0u) {
+            slots[slot] = vk;
+            return;
+        }
+    }
+}
+
+static void ps2InputApplyTable(s32 controller,
+    const struct Ps2SchemeBind *table, size_t count)
+{
+    memset(s_binds[controller], 0, sizeof(s_binds[controller]));
+    for (size_t i = 0; i < count; ++i) {
+        ps2InputAddBind(controller, table[i].ck, table[i].joy);
+    }
+}
+
+/* Snapshot the current bindings as the controller's custom layout. */
+static void ps2InputCaptureCustom(s32 controller)
+{
+    for (u32 ck = 0; ck < CK_TOTAL_COUNT; ++ck) {
+        s32 mask = 0;
+        for (s32 slot = 0; slot < INPUT_MAX_BINDS; ++slot) {
+            const u32 vk = s_binds[controller][ck][slot];
+            if (vk >= VK_JOY_BEGIN && vk < VK_TOTAL_COUNT) {
+                mask |= (s32)(1u << ((vk - VK_JOY_BEGIN) %
+                    INPUT_MAX_CONTROLLER_BUTTONS));
+            }
+        }
+        s_custom_mask[controller][ck] = mask;
+    }
+}
+
+static void ps2InputApplyScheme(s32 controller)
+{
+    switch (s_scheme[controller]) {
+        case PS2_INPUT_SCHEME_SHOOTER:
+            ps2InputApplyTable(controller, s_scheme_shooter,
+                sizeof(s_scheme_shooter) / sizeof(s_scheme_shooter[0]));
+            break;
+        case PS2_INPUT_SCHEME_N64:
+            ps2InputApplyTable(controller, s_scheme_n64,
+                sizeof(s_scheme_n64) / sizeof(s_scheme_n64[0]));
+            break;
+        case PS2_INPUT_SCHEME_CUSTOM:
+            memset(s_binds[controller], 0, sizeof(s_binds[controller]));
+            for (u32 ck = 0; ck < CK_TOTAL_COUNT; ++ck) {
+                for (u32 joy = 0; joy < 32u; ++joy) {
+                    if ((u32)s_custom_mask[controller][ck] & (1u << joy)) {
+                        ps2InputAddBind(controller, ck, joy);
+                    }
+                }
+            }
+            break;
+        case PS2_INPUT_SCHEME_MODERN:
+        default:
+            ps2InputApplyTable(controller, s_scheme_modern,
+                sizeof(s_scheme_modern) / sizeof(s_scheme_modern[0]));
+            break;
+    }
 }
 
 void inputSetDefaultKeyBinds(s32 controller, s32 n64mode)
@@ -158,45 +284,100 @@ void inputSetDefaultKeyBinds(s32 controller, s32 n64mode)
     if (!ps2InputControllerIndexValid(controller)) {
         return;
     }
+    inputPs2SetScheme(controller,
+        n64mode ? PS2_INPUT_SCHEME_N64 : PS2_INPUT_SCHEME_MODERN);
+}
 
-    memset(s_binds[controller], 0, sizeof(s_binds[controller]));
-    if (n64mode) {
-        ps2InputSetDefaultJoyBind(controller, CK_A, 0);
-        ps2InputSetDefaultJoyBind(controller, CK_B, 1);
-        ps2InputSetDefaultJoyBind(controller, CK_LTRIG, 9);
-        ps2InputSetDefaultJoyBind(controller, CK_RTRIG, 10);
-        ps2InputSetDefaultJoyBind(controller, CK_ZTRIG, 31);
-        ps2InputSetDefaultJoyBind(controller, CK_START, 6);
-        ps2InputSetDefaultJoyBind(controller, CK_DPAD_U, 11);
-        ps2InputSetDefaultJoyBind(controller, CK_DPAD_D, 12);
-        ps2InputSetDefaultJoyBind(controller, CK_DPAD_L, 13);
-        ps2InputSetDefaultJoyBind(controller, CK_DPAD_R, 14);
+s32 inputPs2SchemeCount(void)
+{
+    return PS2_INPUT_SCHEME_COUNT;
+}
+
+const char *inputPs2SchemeName(s32 scheme)
+{
+    return scheme >= 0 && scheme < PS2_INPUT_SCHEME_COUNT
+        ? s_scheme_names[scheme] : "";
+}
+
+s32 inputPs2GetScheme(s32 controller)
+{
+    return ps2InputControllerIndexValid(controller)
+        ? s_scheme[controller] : PS2_INPUT_SCHEME_MODERN;
+}
+
+void inputPs2SetScheme(s32 controller, s32 scheme)
+{
+    if (!ps2InputControllerIndexValid(controller) ||
+        scheme < 0 || scheme >= PS2_INPUT_SCHEME_COUNT) {
         return;
     }
+    if (scheme == PS2_INPUT_SCHEME_CUSTOM &&
+        s_scheme[controller] != PS2_INPUT_SCHEME_CUSTOM) {
+        /* Start customising from whatever is active now. */
+        ps2InputCaptureCustom(controller);
+    }
+    s_scheme[controller] = scheme;
+    ps2InputApplyScheme(controller);
+    /* N64 roles need the original control logic and C-button look. */
+    g_PlayerExtCfg[controller].extcontrols =
+        scheme == PS2_INPUT_SCHEME_N64 ? 0 : 1;
+    s_dual_analog[controller] = scheme == PS2_INPUT_SCHEME_N64 ? 0 : 1;
+}
 
-    ps2InputSetDefaultJoyBind(controller, CK_A, 0);
-    ps2InputSetDefaultJoyBind(controller, CK_X, 2);
-    ps2InputSetDefaultJoyBind(controller, CK_Y, 3);
-    ps2InputSetDefaultJoyBind(controller, CK_DPAD_L, 1);
-    ps2InputSetDefaultJoyBind(controller, CK_DPAD_D, 9);
-    ps2InputSetDefaultJoyBind(controller, CK_LTRIG, 10);
-    ps2InputSetDefaultJoyBind(controller, CK_RTRIG, 30);
-    ps2InputSetDefaultJoyBind(controller, CK_ZTRIG, 31);
-    ps2InputSetDefaultJoyBind(controller, CK_START, 6);
-    ps2InputSetDefaultJoyBind(controller, CK_C_U, 11);
-    ps2InputSetDefaultJoyBind(controller, CK_C_D, 12);
-    ps2InputSetDefaultJoyBind(controller, CK_C_L, 13);
-    ps2InputSetDefaultJoyBind(controller, CK_C_R, 14);
-    ps2InputSetDefaultJoyBind(controller, CK_ACCEPT, 0);
-    ps2InputSetDefaultJoyBind(controller, CK_CANCEL, 1);
-    ps2InputSetDefaultJoyBind(controller, CK_8000, 7);
+/* Replace an action's buttons with one DualShock 2 button (custom scheme). */
+void inputPs2BindButton(s32 controller, u32 cont_key, s32 joy_index)
+{
+    if (!ps2InputControllerIndexValid(controller) ||
+        cont_key >= CK_TOTAL_COUNT || joy_index < -1 || joy_index >= 32) {
+        return;
+    }
+    if (s_scheme[controller] != PS2_INPUT_SCHEME_CUSTOM) {
+        ps2InputCaptureCustom(controller);
+        s_scheme[controller] = PS2_INPUT_SCHEME_CUSTOM;
+    }
+    s_custom_mask[controller][cont_key] =
+        joy_index < 0 ? 0 : (s32)(1u << joy_index);
+    ps2InputApplyScheme(controller);
+}
+
+/* Comma-separated DualShock 2 buttons bound to an action, or "-". */
+const char *inputPs2DescribeBind(s32 controller, u32 cont_key)
+{
+    static char text[64];
+    text[0] = '\0';
+    const u32 *binds = inputKeyGetBinds(controller, cont_key);
+    for (s32 slot = 0; binds && slot < INPUT_MAX_BINDS; ++slot) {
+        if (binds[slot] < VK_JOY_BEGIN || binds[slot] >= VK_TOTAL_COUNT) {
+            continue;
+        }
+        const u32 joy = (binds[slot] - VK_JOY_BEGIN) %
+            INPUT_MAX_CONTROLLER_BUTTONS;
+        if (text[0]) {
+            strncat(text, ", ", sizeof(text) - strlen(text) - 1);
+        }
+        strncat(text, s_joy_key_names[joy], sizeof(text) - strlen(text) - 1);
+    }
+    if (!text[0]) {
+        strcpy(text, "-");
+    }
+    return text;
+}
+
+/* Joy index of the most recent new button press since the last clear. */
+s32 inputPs2GetLastButton(void)
+{
+    return s_last_joy_index;
 }
 
 s32 inputInit(void)
 {
     for (s32 controller = 0; controller < INPUT_MAX_CONTROLLERS;
          ++controller) {
-        inputSetDefaultKeyBinds(controller, false);
+        if (s_scheme[controller] < 0 ||
+            s_scheme[controller] >= PS2_INPUT_SCHEME_COUNT) {
+            s_scheme[controller] = PS2_INPUT_SCHEME_MODERN;
+        }
+        ps2InputApplyScheme(controller);
     }
 
     if (!ps2PadInit()) {
@@ -209,6 +390,20 @@ s32 inputInit(void)
 void inputUpdate(void)
 {
     ps2PadUpdate();
+
+    for (s32 port = 0; port < PS2_INPUT_PHYSICAL_PORTS; ++port) {
+        const struct Ps2PadState *pad = ps2PadGetState(port);
+        if (!pad || !pad->connected || pad->pressed == 0u) {
+            continue;
+        }
+        for (u32 joy = 0; joy < 32u; ++joy) {
+            const u32 mask = ps2InputRawButtonForVirtualIndex(joy);
+            if (mask != 0u && (pad->pressed & mask) != 0u) {
+                s_last_joy_index = (s32)joy;
+                break;
+            }
+        }
+    }
 
     const u64 now = sysGetMicroseconds();
     for (s32 controller = 0; controller < INPUT_MAX_CONTROLLERS;
@@ -255,13 +450,13 @@ s32 inputReadController(s32 controller, OSContPad *pad)
             s_axis_deadzone[controller][0], s_axis_deadzone[controller][1],
             s_axis_deadzone[controller][2], s_axis_deadzone[controller][3],
         },
+        true,
     };
     if (!ps2InputMapPad(source, &config, pad)) {
         return -1;
     }
 
-    /* Button bindings remain configurable even though PS2 has no keyboard. */
-    pad->button = 0u;
+    /* Bindings add to the right-stick C buttons produced without dual analog. */
     for (u32 cont_key = 0u; cont_key < CONT_NUM_BUTTONS; ++cont_key) {
         if (ps2InputBindPressed(controller, cont_key)) {
             pad->button |= 1u << cont_key;
@@ -613,8 +808,12 @@ s32 inputGetMouseLockMode(void) { return MLOCK_OFF; }
 void inputSetMouseLockMode(s32 lockmode) { (void)lockmode; }
 
 void inputSaveBinds(void) {}
-void inputClearLastKey(void) {}
-s32 inputGetLastKey(void) { return 0; }
+void inputClearLastKey(void) { s_last_joy_index = -1; }
+s32 inputGetLastKey(void)
+{
+    return s_last_joy_index < 0 ? 0
+        : (s32)(VK_JOY_BEGIN + (u32)s_last_joy_index);
+}
 void inputStartTextInput(void) { s_text_input = 1; }
 void inputStopTextInput(void) { s_text_input = 0; }
 s32 inputIsTextInputActive(void) { return s_text_input; }
@@ -645,6 +844,19 @@ PD_CONSTRUCTOR static void ps2InputConfigInit(void)
         configRegisterInt(key, &s_dual_analog[controller], 0, 1);
         snprintf(key, sizeof(key), "Input.Player%d.CancelCButtons", player);
         configRegisterInt(key, &s_cancel_c_buttons[controller], 0, 1);
+        snprintf(key, sizeof(key), "Input.Player%d.ControlScheme", player);
+        configRegisterInt(key, &s_scheme[controller], 0,
+            PS2_INPUT_SCHEME_COUNT - 1);
+        for (u32 ck = 0; ck < CK_TOTAL_COUNT; ++ck) {
+            if (strncmp(s_cont_key_names[ck], "CK_", 3) == 0 &&
+                ck != CK_8000 && ck != CK_4000 && ck != CK_2000) {
+                continue; /* unused extension slots */
+            }
+            snprintf(key, sizeof(key), "Input.Player%d.Custom.%s",
+                player, s_cont_key_names[ck]);
+            configRegisterInt(key, &s_custom_mask[controller][ck],
+                INT32_MIN, INT32_MAX);
+        }
         snprintf(key, sizeof(key), "Input.Player%d.RumbleScale", player);
         configRegisterFloat(key, &s_rumble_scale[controller], 0.0f, 1.0f);
 

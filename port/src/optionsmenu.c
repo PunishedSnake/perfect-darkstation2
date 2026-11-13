@@ -40,6 +40,7 @@ struct menuitem g_ExtendedSelectPlayerMenuItems[] = {
 		0,
 		menuhandlerSelectPlayer,
 	},
+#ifndef PLATFORM_PS2 // two DualShock 2 ports, no multitap
 	{
 		MENUITEMTYPE_SELECTABLE,
 		0,
@@ -56,6 +57,7 @@ struct menuitem g_ExtendedSelectPlayerMenuItems[] = {
 		0,
 		menuhandlerSelectPlayer,
 	},
+#endif
 	{
 		MENUITEMTYPE_SEPARATOR,
 		0,
@@ -616,6 +618,237 @@ static MenuItemHandlerResult menuhandlerController(s32 operation, struct menuite
 	return 0;
 }
 
+#ifdef PLATFORM_PS2
+/*
+ * DualShock 2 controls: physical port, a predefined control scheme (or a
+ * custom layout built from one), a button-layout reminder and per-action
+ * remapping. Keyboard/mouse/SDL-specific options are not offered on PS2.
+ */
+struct ps2action {
+	u32 ck;
+	const char *name;
+	const char *n64name;
+};
+
+static const struct ps2action g_Ps2Actions[] = {
+	{ CK_ZTRIG,  "Fire",            "Z Trigger" },
+	{ CK_RTRIG,  "Aim",             "R Trigger" },
+	{ CK_LTRIG,  "Fire Mode",       "L Trigger" },
+	{ CK_A,      "Use / Accept",    "A Button" },
+	{ CK_B,      "Use / Cancel",    "B Button" },
+	{ CK_X,      "Reload",          "Ext X" },
+	{ CK_Y,      "Next Weapon",     "Ext Y" },
+	{ CK_DPAD_L, "Previous Weapon", "D-Pad Left" },
+	{ CK_DPAD_D, "Weapon Menu",     "D-Pad Down" },
+	{ CK_DPAD_U, "D-Pad Up",        "D-Pad Up" },
+	{ CK_DPAD_R, "D-Pad Right",     "D-Pad Right" },
+	{ CK_8000,   "Cycle Crouch",    "Ext Crouch" },
+	{ CK_START,  "Pause",           "Start" },
+	{ CK_C_U,    "Forward",         "C-Up" },
+	{ CK_C_D,    "Backward",        "C-Down" },
+	{ CK_C_L,    "Strafe Left",     "C-Left" },
+	{ CK_C_R,    "Strafe Right",    "C-Right" },
+	{ CK_ACCEPT, "Menu Accept",     "Menu Accept" },
+	{ CK_CANCEL, "Menu Cancel",     "Menu Cancel" },
+};
+
+static s32 g_Ps2RemapAction = 0;
+
+static const char *ps2ActionName(s32 index)
+{
+	return inputPs2GetScheme(g_ExtMenuPlayer) == PS2_INPUT_SCHEME_N64 ?
+		g_Ps2Actions[index].n64name : g_Ps2Actions[index].name;
+}
+
+static MenuItemHandlerResult menuhandlerControlScheme(s32 operation, struct menuitem *item, union handlerdata *data)
+{
+	switch (operation) {
+	case MENUOP_GETOPTIONCOUNT:
+		data->dropdown.value = inputPs2SchemeCount();
+		break;
+	case MENUOP_GETOPTIONTEXT:
+		return (intptr_t)inputPs2SchemeName(data->dropdown.value);
+	case MENUOP_SET:
+		inputPs2SetScheme(g_ExtMenuPlayer, data->dropdown.value);
+		break;
+	case MENUOP_GETSELECTEDINDEX:
+		data->dropdown.value = inputPs2GetScheme(g_ExtMenuPlayer);
+		break;
+	}
+	return 0;
+}
+
+/* ---- button layout reminder ---- */
+
+static const char *menutextPs2LayoutName(struct menuitem *item);
+static MenuItemHandlerResult menuhandlerPs2Layout(s32 operation, struct menuitem *item, union handlerdata *data);
+
+#define PS2_LAYOUT_ROW() \
+	{ MENUITEMTYPE_DROPDOWN, 0, 0, (uintptr_t)menutextPs2LayoutName, 0, menuhandlerPs2Layout }
+
+struct menuitem g_Ps2LayoutMenuItems[] = {
+	PS2_LAYOUT_ROW(), PS2_LAYOUT_ROW(), PS2_LAYOUT_ROW(), PS2_LAYOUT_ROW(),
+	PS2_LAYOUT_ROW(), PS2_LAYOUT_ROW(), PS2_LAYOUT_ROW(), PS2_LAYOUT_ROW(),
+	PS2_LAYOUT_ROW(), PS2_LAYOUT_ROW(), PS2_LAYOUT_ROW(), PS2_LAYOUT_ROW(),
+	PS2_LAYOUT_ROW(), PS2_LAYOUT_ROW(), PS2_LAYOUT_ROW(), PS2_LAYOUT_ROW(),
+	PS2_LAYOUT_ROW(), PS2_LAYOUT_ROW(), PS2_LAYOUT_ROW(),
+	{ MENUITEMTYPE_SEPARATOR, 0, 0, 0, 0, NULL },
+	{ MENUITEMTYPE_SELECTABLE, 0, MENUITEMFLAG_SELECTABLE_CLOSESDIALOG, L_OPTIONS_213, 0, NULL }, // "Back"
+	{ MENUITEMTYPE_END },
+};
+
+static const char *menutextPs2LayoutName(struct menuitem *item)
+{
+	static char text[40];
+	snprintf(text, sizeof(text), "%s\n", ps2ActionName(item - g_Ps2LayoutMenuItems));
+	return text;
+}
+
+/* Read-only: the single option is the current button(s). */
+static MenuItemHandlerResult menuhandlerPs2Layout(s32 operation, struct menuitem *item, union handlerdata *data)
+{
+	switch (operation) {
+	case MENUOP_GETOPTIONCOUNT:
+		data->dropdown.value = 1;
+		break;
+	case MENUOP_GETOPTIONTEXT:
+		return (intptr_t)inputPs2DescribeBind(g_ExtMenuPlayer, g_Ps2Actions[item - g_Ps2LayoutMenuItems].ck);
+	case MENUOP_GETSELECTEDINDEX:
+		data->dropdown.value = 0;
+		break;
+	}
+	return 0;
+}
+
+struct menudialogdef g_Ps2LayoutMenuDialog = {
+	MENUDIALOGTYPE_DEFAULT,
+	(uintptr_t)"Button Layout",
+	g_Ps2LayoutMenuItems,
+	NULL,
+	MENUDIALOGFLAG_LITERAL_TEXT,
+	NULL,
+};
+
+/* ---- remapping ---- */
+
+static MenuItemHandlerResult menuhandlerPs2Capture(s32 operation, struct menuitem *item, union handlerdata *data);
+
+struct menuitem g_Ps2CaptureMenuItems[] = {
+	{ MENUITEMTYPE_LABEL, 0, MENUITEMFLAG_SELECTABLE_CENTRE | MENUITEMFLAG_LITERAL_TEXT, (uintptr_t)"\n", 0, NULL },
+	{ MENUITEMTYPE_SEPARATOR, 0, 0, 0, 0, NULL },
+	{ MENUITEMTYPE_SELECTABLE, 0, MENUITEMFLAG_SELECTABLE_CENTRE | MENUITEMFLAG_LITERAL_TEXT, (uintptr_t)"Press the new button...\n", 0, menuhandlerPs2Capture },
+	{ MENUITEMTYPE_SELECTABLE, 0, MENUITEMFLAG_SELECTABLE_CENTRE | MENUITEMFLAG_LITERAL_TEXT, (uintptr_t)"SELECT to cancel\n", 0, menuhandlerPs2Capture },
+	{ MENUITEMTYPE_END },
+};
+
+struct menudialogdef g_Ps2CaptureMenuDialog = {
+	MENUDIALOGTYPE_SUCCESS,
+	(uintptr_t)"Remap",
+	g_Ps2CaptureMenuItems,
+	NULL,
+	MENUDIALOGFLAG_LITERAL_TEXT | MENUDIALOGFLAG_IGNOREBACK,
+	NULL,
+};
+
+static MenuItemHandlerResult menuhandlerPs2Capture(s32 operation, struct menuitem *item, union handlerdata *data)
+{
+	if (!menuIsDialogOpen(&g_Ps2CaptureMenuDialog)) {
+		return 0;
+	}
+
+	const s32 joy = inputPs2GetLastButton();
+	if (joy < 0) {
+		return 0;
+	}
+	inputClearLastKey();
+	if (joy != 4) { // Select cancels
+		inputPs2BindButton(g_ExtMenuPlayer, g_Ps2Actions[g_Ps2RemapAction].ck, joy);
+	}
+	menuPopDialog();
+	return 0;
+}
+
+static MenuItemHandlerResult menuhandlerPs2Remap(s32 operation, struct menuitem *item, union handlerdata *data);
+static const char *menutextPs2Remap(struct menuitem *item);
+
+#define PS2_REMAP_ROW() \
+	{ MENUITEMTYPE_DROPDOWN, 0, 0, (uintptr_t)menutextPs2Remap, 0, menuhandlerPs2Remap }
+
+struct menuitem g_Ps2RemapMenuItems[] = {
+	PS2_REMAP_ROW(), PS2_REMAP_ROW(), PS2_REMAP_ROW(), PS2_REMAP_ROW(),
+	PS2_REMAP_ROW(), PS2_REMAP_ROW(), PS2_REMAP_ROW(), PS2_REMAP_ROW(),
+	PS2_REMAP_ROW(), PS2_REMAP_ROW(), PS2_REMAP_ROW(), PS2_REMAP_ROW(),
+	PS2_REMAP_ROW(), PS2_REMAP_ROW(), PS2_REMAP_ROW(), PS2_REMAP_ROW(),
+	PS2_REMAP_ROW(), PS2_REMAP_ROW(), PS2_REMAP_ROW(),
+	{ MENUITEMTYPE_SEPARATOR, 0, 0, 0, 0, NULL },
+	{ MENUITEMTYPE_SELECTABLE, 0, MENUITEMFLAG_SELECTABLE_CLOSESDIALOG, L_OPTIONS_213, 0, NULL }, // "Back"
+	{ MENUITEMTYPE_END },
+};
+
+static const char *menutextPs2Remap(struct menuitem *item)
+{
+	static char text[40];
+	snprintf(text, sizeof(text), "%s\n", ps2ActionName(item - g_Ps2RemapMenuItems));
+	return text;
+}
+
+static MenuItemHandlerResult menuhandlerPs2Remap(s32 operation, struct menuitem *item, union handlerdata *data)
+{
+	const s32 idx = item - g_Ps2RemapMenuItems;
+	static char text[2][40];
+
+	switch (operation) {
+	case MENUOP_GETOPTIONCOUNT:
+		data->dropdown.value = 2;
+		break;
+	case MENUOP_GETOPTIONTEXT:
+		if (data->dropdown.value == 0) {
+			strncpy(text[0], inputPs2DescribeBind(g_ExtMenuPlayer, g_Ps2Actions[idx].ck), sizeof(text[0]) - 1);
+			return (intptr_t)text[0];
+		}
+		return (intptr_t)"Unbind";
+	case MENUOP_SET:
+		g_Ps2RemapAction = idx;
+		if (data->dropdown.value == 1) {
+			inputPs2BindButton(g_ExtMenuPlayer, g_Ps2Actions[idx].ck, -1);
+			break;
+		}
+		snprintf(text[1], sizeof(text[1]), "%s\n", ps2ActionName(idx));
+		g_Ps2CaptureMenuItems[0].param2 = (uintptr_t)text[1];
+		inputClearLastKey();
+		menuPushDialog(&g_Ps2CaptureMenuDialog);
+		break;
+	case MENUOP_GETSELECTEDINDEX:
+		data->dropdown.value = 0;
+		break;
+	}
+	return 0;
+}
+
+struct menudialogdef g_Ps2RemapMenuDialog = {
+	MENUDIALOGTYPE_DEFAULT,
+	(uintptr_t)"Customize Buttons",
+	g_Ps2RemapMenuItems,
+	NULL,
+	MENUDIALOGFLAG_LITERAL_TEXT,
+	NULL,
+};
+
+struct menuitem g_ExtendedControllerMenuItems[] = {
+	{ MENUITEMTYPE_DROPDOWN, 0, MENUITEMFLAG_LITERAL_TEXT, (uintptr_t)"Controller Port", 0, menuhandlerController },
+	{ MENUITEMTYPE_DROPDOWN, 0, MENUITEMFLAG_LITERAL_TEXT, (uintptr_t)"Control Scheme", 0, menuhandlerControlScheme },
+	{ MENUITEMTYPE_SELECTABLE, 0, MENUITEMFLAG_SELECTABLE_OPENSDIALOG | MENUITEMFLAG_LITERAL_TEXT, (uintptr_t)"Button Layout...\n", 0, (void *)&g_Ps2LayoutMenuDialog },
+	{ MENUITEMTYPE_SELECTABLE, 0, MENUITEMFLAG_SELECTABLE_OPENSDIALOG | MENUITEMFLAG_LITERAL_TEXT, (uintptr_t)"Customize Buttons...\n", 0, (void *)&g_Ps2RemapMenuDialog },
+	{ MENUITEMTYPE_SEPARATOR, 0, 0, 0, 0, NULL },
+	{ MENUITEMTYPE_CHECKBOX, 0, MENUITEMFLAG_LITERAL_TEXT, (uintptr_t)"Dual Analog Look", 0, menuhandlerAnalogMovement },
+	{ MENUITEMTYPE_CHECKBOX, 0, MENUITEMFLAG_LITERAL_TEXT, (uintptr_t)"Swap Sticks (Southpaw)", 0, menuhandlerSwapSticks },
+	{ MENUITEMTYPE_SELECTABLE, 0, MENUITEMFLAG_SELECTABLE_OPENSDIALOG | MENUITEMFLAG_LITERAL_TEXT, (uintptr_t)"Stick Settings...\n", 0, (void *)&g_ExtendedStickMenuDialog },
+	{ MENUITEMTYPE_SLIDER, 0, MENUITEMFLAG_LITERAL_TEXT, (uintptr_t)"Vibration", 10, menuhandlerVibration },
+	{ MENUITEMTYPE_SEPARATOR, 0, 0, 0, 0, NULL },
+	{ MENUITEMTYPE_SELECTABLE, 0, MENUITEMFLAG_SELECTABLE_CLOSESDIALOG, L_OPTIONS_213, 0, NULL }, // "Back"
+	{ MENUITEMTYPE_END },
+};
+#else
 struct menuitem g_ExtendedControllerMenuItems[] = {
 	{
 		MENUITEMTYPE_DROPDOWN,
@@ -675,6 +908,8 @@ struct menuitem g_ExtendedControllerMenuItems[] = {
 	},
 	{ MENUITEMTYPE_END },
 };
+
+#endif
 
 static char g_ExtendedControllerMenuTitle[] = "Player 1 Controller Options";
 struct menudialogdef g_ExtendedControllerMenuDialog = {
@@ -862,7 +1097,9 @@ static MenuItemHandlerResult menuhandlerTexFilter(s32 operation, struct menuitem
 	static const char *opts[] = {
 		"Nearest",
 		"Bilinear",
+#ifndef PLATFORM_PS2 // the GS samples nearest or bilinear only
 		"Three Point"
+#endif
 	};
 
 	switch (operation) {
@@ -876,6 +1113,9 @@ static MenuItemHandlerResult menuhandlerTexFilter(s32 operation, struct menuitem
 		break;
 	case MENUOP_GETSELECTEDINDEX:
 		data->dropdown.value = videoGetTextureFilter();
+		if (data->dropdown.value >= ARRAYCOUNT(opts)) {
+			data->dropdown.value = ARRAYCOUNT(opts) - 1;
+		}
 	}
 
 	return 0;
@@ -1036,6 +1276,64 @@ static MenuItemHandlerResult menuhandlerOverexposureScale(s32 operation, struct 
 	return 0;
 }
 
+#ifdef PLATFORM_PS2
+static MenuItemHandlerResult menuhandlerVideoOutput(s32 operation, struct menuitem *item, union handlerdata *data)
+{
+	switch (operation) {
+	case MENUOP_GETOPTIONCOUNT:
+		data->dropdown.value = videoPs2OutputModeCount();
+		break;
+	case MENUOP_GETOPTIONTEXT:
+		return (intptr_t)videoPs2OutputModeName(data->dropdown.value);
+	case MENUOP_SET:
+		videoPs2SetOutputMode(data->dropdown.value);
+		break;
+	case MENUOP_GETSELECTEDINDEX:
+		data->dropdown.value = videoPs2GetOutputMode();
+		break;
+	}
+	return 0;
+}
+
+static MenuItemHandlerResult menuhandlerWidescreen(s32 operation, struct menuitem *item, union handlerdata *data)
+{
+	switch (operation) {
+	case MENUOP_GET:
+		return videoGetAspectMode() == VIDEO_ASPECT_16_9;
+	case MENUOP_SET:
+		videoSetAspectMode(data->checkbox.value ? VIDEO_ASPECT_16_9 : VIDEO_ASPECT_4_3);
+		break;
+	}
+	return 0;
+}
+
+static char *menutextVideoOutputNote(struct menuitem *item)
+{
+	return (char *)(videoPs2GetOutputMode() != videoPs2GetActiveOutputMode() ?
+		"Applies on restart\n" : "Hold START+TRIANGLE at boot for 480i\n");
+}
+
+struct menuitem g_ExtendedVideoMenuItems[] = {
+	{ MENUITEMTYPE_DROPDOWN, 0, MENUITEMFLAG_LITERAL_TEXT, (uintptr_t)"Video Output", 0, menuhandlerVideoOutput },
+	{ MENUITEMTYPE_LABEL, 0, MENUITEMFLAG_LABEL_ALTCOLOUR, (uintptr_t)menutextVideoOutputNote, 0, NULL },
+	{ MENUITEMTYPE_CHECKBOX, 0, MENUITEMFLAG_LITERAL_TEXT, (uintptr_t)"Widescreen (16:9)", 0, menuhandlerWidescreen },
+	{ MENUITEMTYPE_CHECKBOX, 0, MENUITEMFLAG_LITERAL_TEXT, (uintptr_t)"Display FPS", 0, menuhandlerDisplayFPS },
+	{ MENUITEMTYPE_SEPARATOR, 0, 0, 0, 0, NULL },
+	{ MENUITEMTYPE_DROPDOWN, 0, MENUITEMFLAG_LITERAL_TEXT, (uintptr_t)"Texture Filtering", 0, menuhandlerTexFilter },
+	{ MENUITEMTYPE_CHECKBOX, 0, MENUITEMFLAG_LITERAL_TEXT, (uintptr_t)"GUI Texture Filtering", 0, menuhandlerTexFilter2D },
+	{ MENUITEMTYPE_CHECKBOX, 0, MENUITEMFLAG_LITERAL_TEXT, (uintptr_t)"Detail Textures", 0, menuhandlerTexDetail },
+	{ MENUITEMTYPE_SEPARATOR, 0, 0, 0, 0, NULL },
+	{ MENUITEMTYPE_DROPDOWN, 0, MENUITEMFLAG_LITERAL_TEXT, (uintptr_t)"HUD Centering", 0, menuhandlerCenterHUD },
+	{ MENUITEMTYPE_CHECKBOX, 0, MENUITEMFLAG_LITERAL_TEXT, (uintptr_t)"GE64-style Muzzle Flashes", 0, menuhandlerGeMuzzleFlashes },
+	{ MENUITEMTYPE_SLIDER, 0, MENUITEMFLAG_LITERAL_TEXT, (uintptr_t)"Explosion Shake", 20, menuhandlerScreenShake },
+	{ MENUITEMTYPE_SEPARATOR, 0, 0, 0, 0, NULL },
+	{ MENUITEMTYPE_SLIDER, 0, MENUITEMFLAG_LITERAL_TEXT, (uintptr_t)"Glare Brightness", 10, menuhandlerGlareBrightness },
+	{ MENUITEMTYPE_SLIDER, 0, MENUITEMFLAG_LITERAL_TEXT, (uintptr_t)"Overexposure Scale", 10, menuhandlerOverexposureScale },
+	{ MENUITEMTYPE_SEPARATOR, 0, 0, 0, 0, NULL },
+	{ MENUITEMTYPE_SELECTABLE, 0, MENUITEMFLAG_SELECTABLE_CLOSESDIALOG, L_OPTIONS_213, 0, NULL }, // "Back"
+	{ MENUITEMTYPE_END },
+};
+#else
 struct menuitem g_ExtendedVideoMenuItems[] = {
 	{
 		MENUITEMTYPE_CHECKBOX,
@@ -1231,6 +1529,8 @@ struct menuitem g_ExtendedVideoMenuItems[] = {
 	},
 	{ MENUITEMTYPE_END },
 };
+
+#endif
 
 struct menudialogdef g_ExtendedVideoMenuDialog = {
 	MENUDIALOGTYPE_DEFAULT,
@@ -1936,6 +2236,7 @@ static MenuItemHandlerResult menuhandlerOpenGameMenu(s32 operation, struct menui
 	return 0;
 }
 
+#ifndef PLATFORM_PS2
 static MenuItemHandlerResult menuhandlerOpenBindsMenu(s32 operation, struct menuitem *item, union handlerdata *data)
 {
 	if (operation == MENUOP_SET) {
@@ -1944,7 +2245,19 @@ static MenuItemHandlerResult menuhandlerOpenBindsMenu(s32 operation, struct menu
 	}
 	return 0;
 }
+#endif
 
+#ifdef PLATFORM_PS2
+struct menuitem g_ExtendedMenuItems[] = {
+	{ MENUITEMTYPE_SELECTABLE, 0, MENUITEMFLAG_SELECTABLE_OPENSDIALOG | MENUITEMFLAG_LITERAL_TEXT, (uintptr_t)"Video\n", 0, (void *)&g_ExtendedVideoMenuDialog },
+	{ MENUITEMTYPE_SELECTABLE, 0, MENUITEMFLAG_SELECTABLE_OPENSDIALOG | MENUITEMFLAG_LITERAL_TEXT, (uintptr_t)"Audio\n", 0, (void *)&g_ExtendedAudioMenuDialog },
+	{ MENUITEMTYPE_SELECTABLE, 0, MENUITEMFLAG_LITERAL_TEXT, (uintptr_t)"Controls\n", 0, menuhandlerOpenControllerMenu },
+	{ MENUITEMTYPE_SELECTABLE, 0, MENUITEMFLAG_LITERAL_TEXT, (uintptr_t)"Game\n", 0, menuhandlerOpenGameMenu },
+	{ MENUITEMTYPE_SEPARATOR, 0, 0, 0, 0, NULL },
+	{ MENUITEMTYPE_SELECTABLE, 0, MENUITEMFLAG_SELECTABLE_CLOSESDIALOG, L_OPTIONS_213, 0, NULL }, // "Back"
+	{ MENUITEMTYPE_END },
+};
+#else
 struct menuitem g_ExtendedMenuItems[] = {
 	{
 		MENUITEMTYPE_SELECTABLE,
@@ -2012,6 +2325,8 @@ struct menuitem g_ExtendedMenuItems[] = {
 	},
 	{ MENUITEMTYPE_END },
 };
+
+#endif
 
 struct menudialogdef g_ExtendedMenuDialog = {
 	MENUDIALOGTYPE_DEFAULT,

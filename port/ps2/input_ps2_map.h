@@ -19,6 +19,9 @@ struct Ps2InputMapConfig {
     bool cancel_c_buttons;
     float axis_scale[4];
     int32_t axis_deadzone[4];
+    /* Leave physical buttons unmapped (caller applies its own bindings);
+     * right-stick C buttons are still produced when dual_analog is off. */
+    bool skip_button_map;
 };
 
 /*
