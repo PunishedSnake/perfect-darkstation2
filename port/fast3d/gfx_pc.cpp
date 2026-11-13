@@ -1394,48 +1394,82 @@ static void gfx_adjust_width_height_for_scale(uint32_t& width, uint32_t& height)
 static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx* vertices) {
     SUPPORT_CHECK(n_vertices <= MAX_VERTICES);
 
+    /*
+     * Per-call invariants. Writes through `d` alias rsp, so without local
+     * copies the compiler reloads all sixteen matrix floats per vertex; the
+     * aspect correction's division becomes one multiply by a constant.
+     */
+    float m[4][4];
+    memcpy(m, rsp.MP_matrix, sizeof(m));
+    const bool aspect_adjust = !fbActive;
+    const float aspect_ofs = rsp.aspect_ofs;
+    const float aspect_k = rsp.aspect_scale / gfx_current_dimensions.aspect_ratio;
+
+    /* Lighting state is per call too; the 1/127 normal scale folds into it. */
+    const bool lighting = (rsp.geometry_mode & G_LIGHTING) != 0;
+    int num_dir_lights = 0;
+    int ambient_r = 0, ambient_g = 0, ambient_b = 0;
+    float light_coeffs[MAX_LIGHTS][3];
+    float light_cols[MAX_LIGHTS][3];
+    if (lighting) {
+        if (rsp.lights_changed) {
+            for (int i = 0; i < rsp.current_num_lights - 1; i++) {
+                calculate_normal_dir(&rsp.current_lights[i], rsp.current_lights_coeffs[i]);
+            }
+            if (rsp.lookat_enabled) {
+                calculate_normal_dir(&rsp.lookat[0], rsp.current_lookat_coeffs[0]);
+                calculate_normal_dir(&rsp.lookat[1], rsp.current_lookat_coeffs[1]);
+            }
+            rsp.lights_changed = false;
+        }
+        num_dir_lights = rsp.current_num_lights - 1;
+        if (num_dir_lights > MAX_LIGHTS) {
+            num_dir_lights = MAX_LIGHTS;
+        }
+        ambient_r = rsp.current_lights[rsp.current_num_lights - 1].col[0];
+        ambient_g = rsp.current_lights[rsp.current_num_lights - 1].col[1];
+        ambient_b = rsp.current_lights[rsp.current_num_lights - 1].col[2];
+        for (int i = 0; i < num_dir_lights; i++) {
+            for (int k = 0; k < 3; k++) {
+                light_coeffs[i][k] = rsp.current_lights_coeffs[i][k] * (1.0f / 127.0f);
+                light_cols[i][k] = rsp.current_lights[i].col[k];
+            }
+        }
+    }
+
     for (size_t i = 0; i < n_vertices; i++, dest_index++) {
         const Vtx* v = &vertices[i];
         struct LoadedVertex* d = &rsp.loaded_vertices[dest_index];
 
-        float x = v->v[0] * rsp.MP_matrix[0][0] + v->v[1] * rsp.MP_matrix[1][0] + v->v[2] * rsp.MP_matrix[2][0] + rsp.MP_matrix[3][0];
-        float y = v->v[0] * rsp.MP_matrix[0][1] + v->v[1] * rsp.MP_matrix[1][1] + v->v[2] * rsp.MP_matrix[2][1] + rsp.MP_matrix[3][1];
-        float z = v->v[0] * rsp.MP_matrix[0][2] + v->v[1] * rsp.MP_matrix[1][2] + v->v[2] * rsp.MP_matrix[2][2] + rsp.MP_matrix[3][2];
-        float w = v->v[0] * rsp.MP_matrix[0][3] + v->v[1] * rsp.MP_matrix[1][3] + v->v[2] * rsp.MP_matrix[2][3] + rsp.MP_matrix[3][3];
+        const float vx = v->v[0];
+        const float vy = v->v[1];
+        const float vz = v->v[2];
+        float x = vx * m[0][0] + vy * m[1][0] + vz * m[2][0] + m[3][0];
+        float y = vx * m[0][1] + vy * m[1][1] + vz * m[2][1] + m[3][1];
+        float z = vx * m[0][2] + vy * m[1][2] + vz * m[2][2] + m[3][2];
+        float w = vx * m[0][3] + vy * m[1][3] + vz * m[2][3] + m[3][3];
 
-        x = gfx_adjust_x_for_aspect_ratio(x, w);
+        if (aspect_adjust) {
+            x = (aspect_ofs * w + x) * aspect_k;
+        }
 
         short U = v->s * rsp.texture_scaling_factor.s >> 16;
         short V = v->t * rsp.texture_scaling_factor.t >> 16;
 
         const struct NormalColor *vcn = &rsp.vertex_colors[v->colour >> 2];
 
-        if (rsp.geometry_mode & G_LIGHTING) {
-            if (rsp.lights_changed) {
-                for (int i = 0; i < rsp.current_num_lights - 1; i++) {
-                    calculate_normal_dir(&rsp.current_lights[i], rsp.current_lights_coeffs[i]);
-                }
-                if (rsp.lookat_enabled) {
-                    calculate_normal_dir(&rsp.lookat[0], rsp.current_lookat_coeffs[0]);
-                    calculate_normal_dir(&rsp.lookat[1], rsp.current_lookat_coeffs[1]);
-                }
-                rsp.lights_changed = false;
-            }
+        if (lighting) {
+            int r = ambient_r;
+            int g = ambient_g;
+            int b = ambient_b;
 
-            int r = rsp.current_lights[rsp.current_num_lights - 1].col[0];
-            int g = rsp.current_lights[rsp.current_num_lights - 1].col[1];
-            int b = rsp.current_lights[rsp.current_num_lights - 1].col[2];
-
-            for (int i = 0; i < rsp.current_num_lights - 1; i++) {
-                float intensity = 0;
-                intensity += vcn->x * rsp.current_lights_coeffs[i][0];
-                intensity += vcn->y * rsp.current_lights_coeffs[i][1];
-                intensity += vcn->z * rsp.current_lights_coeffs[i][2];
-                intensity /= 127.0f;
+            for (int i = 0; i < num_dir_lights; i++) {
+                const float intensity = vcn->x * light_coeffs[i][0] +
+                    vcn->y * light_coeffs[i][1] + vcn->z * light_coeffs[i][2];
                 if (intensity > 0.0f) {
-                    r += intensity * rsp.current_lights[i].col[0];
-                    g += intensity * rsp.current_lights[i].col[1];
-                    b += intensity * rsp.current_lights[i].col[2];
+                    r += intensity * light_cols[i][0];
+                    g += intensity * light_cols[i][1];
+                    b += intensity * light_cols[i][2];
                 }
             }
 
