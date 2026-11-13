@@ -11,7 +11,9 @@ enum : uint8_t {
     FMT_RGBA = 0u,
     FMT_YUV = 1u,
     FMT_CI = 2u,
+    FMT_I = 4u,
     SIZ_4B = 0u,
+    SIZ_8B = 1u,
     SIZ_16B = 2u,
     SIZ_32B = 3u,
 };
@@ -267,6 +269,40 @@ static void test_lazy_load_block_is_unobservable(void)
     assert(lazy_elided != 0u); /* the stream really exercised elision */
 }
 
+/*
+ * The port keeps texture data linear in RAM. A block loaded with a real dxt
+ * is swizzled by the load and unswizzled by the tile read; a block loaded
+ * with dxt == 0 is stored as-is and must be read back as-is. Either way the
+ * renderer sees the source rows unchanged, and the two differ in identity.
+ */
+static void test_dxt_zero_block_reads_back_linear(void)
+{
+    uint8_t source[56u * 4u];
+    for (uint32_t i = 0; i < sizeof(source); ++i) {
+        source[i] = (uint8_t)(i * 7u + 3u);
+    }
+    uint64_t identity[2] = { 0u, 0u };
+    for (uint32_t pass = 0; pass < 2u; ++pass) {
+        const uint32_t dxt = pass == 0u ? 0u : 293u; /* 7 words per row */
+        gfxRdpTmemLiveReset();
+        /* loaded as 16-bit texels, rendered as an 8-bit 56-wide tile */
+        gfxRdpTmemLiveSetTextureImage(FMT_CI, SIZ_16B, 0u, source);
+        gfxRdpTmemLiveSetTile(FMT_RGBA, SIZ_16B, 0u, 0u, 7u);
+        gfxRdpTmemLiveLoadBlock(7u, 0u, 0u,
+            (uint32_t)sizeof(source) / 2u - 1u, dxt);
+        gfxRdpTmemLiveSetTile(FMT_CI, SIZ_8B, 7u, 0u, 0u);
+        GfxRdpTmemLiveTextureView view{};
+        /* the frontend reports a dxt == 0 block as one long line */
+        assert(gfxRdpTmemLiveMaterializeTexture(0u,
+            pass == 0u ? (uint32_t)sizeof(source) : 56u,
+            (uint32_t)sizeof(source), FMT_I, SIZ_8B, 0u, &view));
+        assert(view.line_size_bytes == 56u);
+        assert(memcmp(view.texels, source, sizeof(source)) == 0);
+        identity[pass] = view.content_identity;
+    }
+    assert(identity[0] != identity[1]);
+}
+
 static void test_ci_fingerprint_tracks_tlut(void)
 {
     uint8_t palette[32];
@@ -423,6 +459,7 @@ int main(void)
     test_ci_fingerprint_tracks_tlut();
     test_fingerprint_independent_of_load_record_eviction();
     test_lazy_load_block_is_unobservable();
+    test_dxt_zero_block_reads_back_linear();
     test_conservative_shadow_forces_pointer_fallback();
     test_materialized_linear_view_owns_loaded_bytes();
     test_materialized_rgba32_split_view();
