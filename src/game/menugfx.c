@@ -126,8 +126,13 @@ void menugfxCreateBlur(void)
 	g_ScaleX = 1;
 #else
 	if (g_MenuBlurFb < 0) {
+#ifdef PLATFORM_PS2
+		g_MenuBlurFb = videoPs2CreateCaptureFramebuffer();
+		g_MenuScreenFb = videoPs2CreateCaptureFramebuffer();
+#else
 		g_MenuBlurFb = videoCreateFramebuffer(BLURIMG_WIDTH, BLURIMG_HEIGHT, true, false);
 		g_MenuScreenFb = videoCreateFramebuffer(0, 0, false, true);
+#endif
 	}
 	// copy full viewport and downscale to 40x30
 	videoCopyFramebuffer(g_MenuBlurFb, 0, -1, -1);

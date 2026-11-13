@@ -159,6 +159,16 @@ uint32_t ps2GsCoreGetRenderTargetWidth(Ps2GsRenderTargetHandle handle);
 uint32_t ps2GsCoreGetRenderTargetHeight(Ps2GsRenderTargetHandle handle);
 
 /*
+ * Draw into the bound offscreen target using the frame that was just
+ * presented as the texture (ST normalised to its power-of-two page).
+ */
+bool ps2GsCoreDrawPresentedScreenTriangles(
+    const struct Ps2GsTexturedVertex *vertices, uint32_t vertex_count,
+    bool linear_filter);
+uint32_t ps2GsCoreGetScreenWidth(void);
+uint32_t ps2GsCoreGetScreenHeight(void);
+bool ps2GsCoreMarkRenderTargetWritten(Ps2GsRenderTargetHandle handle);
+/*
  * Sample a completed CT32 target without copying it through EE memory. The
  * target must have received a successful clear or draw and may not be sampled
  * recursively while active. The first read after a target write inserts the

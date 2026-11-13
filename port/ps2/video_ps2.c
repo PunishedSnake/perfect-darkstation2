@@ -554,12 +554,23 @@ void videoResetFramebuffer(void)
 {
 }
 
+/*
+ * The GS backend implements one framebuffer effect: a low-resolution capture
+ * of the presented screen, used for the blurred menu background. The generic
+ * effects (motion blur, glare probes, ...) stay off: videoCreateFramebuffer
+ * keeps returning 0 and videoFramebuffersSupported() stays false.
+ */
+s32 videoPs2CreateCaptureFramebuffer(void)
+{
+    const s32 fb = gfx_create_framebuffer(0, 0, false, true);
+    return fb > 0 ? fb : -1;
+}
+
 void videoCopyFramebuffer(s32 dst, s32 src, s32 left, s32 top)
 {
-    (void)dst;
-    (void)src;
-    (void)left;
-    (void)top;
+    if (dst > 0) {
+        gfx_copy_framebuffer(dst, src, left, top, false);
+    }
 }
 
 void videoResizeFramebuffer(s32 target, u32 w, u32 h, s32 upscale, s32 autoresize)

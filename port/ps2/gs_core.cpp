@@ -933,6 +933,16 @@ extern "C" int ps2GsCoreGetRefreshRate(void)
     }
 }
 
+extern "C" uint32_t ps2GsCoreGetScreenWidth(void)
+{
+    return s_gs && s_gs->Width > 0 ? (uint32_t)s_gs->Width : 0u;
+}
+
+extern "C" uint32_t ps2GsCoreGetScreenHeight(void)
+{
+    return s_gs && s_gs->Height > 0 ? (uint32_t)s_gs->Height : 0u;
+}
+
 extern "C" int ps2GsCoreGetOffsetX(void)
 {
     return s_gs ? s_gs->OffsetX : 0;
@@ -3276,6 +3286,62 @@ static bool ps2GsCoreDrawRenderTargetView(
     }
 
     slot->texture_cache_dirty = false;
+    return true;
+}
+
+/*
+ * Sample the most recently completed scanout buffer (the frame that was
+ * just presented) as a texture. Used to capture the screen into an offscreen
+ * target for framebuffer effects; the draw buffer itself is never sampled.
+ */
+extern "C" bool ps2GsCoreDrawPresentedScreenTriangles(
+    const struct Ps2GsTexturedVertex *vertices, uint32_t vertex_count,
+    bool linear_filter)
+{
+    if (!s_gs || !s_frame_building || !vertices || vertex_count == 0u ||
+        s_active_render_target == PS2_GS_RENDER_TARGET_DEFAULT ||
+        s_gs->DoubleBuffering != GS_SETTING_ON ||
+        s_gs->Width <= 0 || s_gs->Height <= 0 ||
+        (s_gs->Width % 64) != 0) {
+        return false;
+    }
+
+    struct Ps2GsRenderTargetTextureView view;
+    memset(&view, 0, sizeof(view));
+    view.tbw = (uint32_t)s_gs->Width / 64u;
+    view.clamp_max_u = (uint32_t)s_gs->Width - 1u;
+    view.clamp_max_v = (uint32_t)s_gs->Height - 1u;
+    while ((1u << view.tw) < (uint32_t)s_gs->Width) {
+        ++view.tw;
+    }
+    while ((1u << view.th) < (uint32_t)s_gs->Height) {
+        ++view.th;
+    }
+
+    GSTEXTURE texture;
+    memset(&texture, 0, sizeof(texture));
+    texture.Width = s_gs->Width;
+    texture.Height = s_gs->Height;
+    texture.PSM = s_gs->PSM;
+    texture.Vram = s_gs->ScreenBuffer[(s_gs->ActiveBuffer ^ 1u) & 1u];
+    texture.TBW = (int)view.tbw;
+    texture.Filter = linear_filter ? GS_FILTER_LINEAR : GS_FILTER_NEAREST;
+
+    /* The screen changes every frame: always flush the GS texture cache. */
+    return ps2GsCoreDrawTexturedTrianglesInternal(
+        &texture, vertices, vertex_count, true, &view,
+        NULL, NULL, NULL);
+}
+
+extern "C" bool ps2GsCoreMarkRenderTargetWritten(
+    Ps2GsRenderTargetHandle handle)
+{
+    struct Ps2GsRenderTargetSlot *slot = ps2GsCoreRenderTargetSlot(handle);
+    if (!slot) {
+        return false;
+    }
+    slot->has_contents = true;
+    slot->texture_cache_dirty = true;
     return true;
 }
 
