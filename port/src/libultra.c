@@ -67,25 +67,9 @@ void osCreateThread(OSThread *thrd, OSId id, void (*entry)(void *), void *arg, v
 	thrd->state = OS_STATE_STOPPED;
 }
 
-void osDestroyThread(OSThread *thrd)
-{
-	thrd->id = 0;
-	thrd->state = 0;
-}
-
-void osYieldThread(void)
-{
-
-}
-
 void osStartThread(OSThread *thrd)
 {
 	thrd->state = OS_STATE_RUNNING;
-}
-
-void osStopThread(OSThread *thrd)
-{
-	thrd->state = OS_STATE_STOPPED;
 }
 
 OSPri osGetThreadPri(OSThread *thrd)
@@ -146,11 +130,6 @@ void osViBlack(u8 active)
 }
 
 void osViSetSpecialFeatures(u32 func)
-{
-
-}
-
-void osViSwapBuffer(void *vaddr)
 {
 
 }
@@ -481,11 +460,6 @@ s32 osPfsDeleteFile(OSPfs *pfs, u16 company_code, u32 game_code, u8 *game_name, 
 	return PFS_ERR_NOPACK;
 }
 
-s32 osPfsReSizeFile(OSPfs *pfs, u16 company_code, u32 game_code, u8 *game_name, u8 *ext_name, int length)
-{
-	return PFS_ERR_NOPACK;
-}
-
 s32 osPfsFileState(OSPfs *pfs, s32 fileNo, OSPfsState *state)
 {
 	return PFS_ERR_NOPACK;
@@ -503,29 +477,9 @@ s32 osGbpakInit(OSMesgQueue *queue, OSPfs *pfs, s32 ch)
 	return PFS_ERR_NOPACK;
 }
 
-s32 osGbpakPower(OSPfs *pfs, s32 flag)
-{
-	return PFS_ERR_NOPACK;
-}
-
-s32 osGbpakReadWrite(OSPfs *pfs, u16 flag, u16 addr, u8 *buf, u16 size)
-{
-	return PFS_ERR_NOPACK;
-}
-
-s32 osGbpakReadId(OSPfs *pfs, OSGbpakId *id, u8 *status)
-{
-	return PFS_ERR_NOPACK;
-}
-
 /* Misc */
 
 void osWritebackDCacheAll(void)
-{
-
-}
-
-void osWritebackDCache(void *a, s32 b)
 {
 
 }
@@ -560,11 +514,6 @@ s32 osPiStartDma(OSIoMesg *mb, s32 priority, s32 direction, uintptr_t devAddr, v
 	return 0;
 }
 
-s32 osPiReadIo(u32 devaddr, u32 *data)
-{
-	return 0;
-}
-
 uintptr_t osVirtualToPhysical(void *addr)
 {
 	return (uintptr_t)addr;
@@ -573,11 +522,6 @@ uintptr_t osVirtualToPhysical(void *addr)
 u32 osGetMemSize(void)
 {
 	return osMemSize;
-}
-
-OSIntMask osGetIntMask(void)
-{
-	return 0;
 }
 
 OSIntMask osSetIntMask(OSIntMask mask)

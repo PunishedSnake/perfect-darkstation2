@@ -5427,13 +5427,6 @@ static void ps2_log_renderer_stats(
     }
 }
 
-extern "C" void gfxPs2LogRendererStats(int checkpoint)
-{
-    struct Ps2RendererStats stats;
-    ps2RendererStatsGet(&stats);
-    ps2_log_renderer_stats(stats, checkpoint != 0);
-}
-
 static void ps2_end_frame(void)
 {
     ps2GsCoreSubmit();

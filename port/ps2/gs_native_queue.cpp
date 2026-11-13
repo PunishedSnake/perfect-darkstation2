@@ -949,7 +949,3 @@ extern "C" uint32_t ps2GsNativeQueueCapacityQwords(void)
     return s_initialized ? s_arenas[s_build_arena].capacity_qw : 0;
 }
 
-extern "C" bool ps2GsNativeQueueOverflowed(void)
-{
-    return s_initialized && s_arenas[s_build_arena].overflowed;
-}

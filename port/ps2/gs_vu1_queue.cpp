@@ -344,19 +344,6 @@ extern "C" bool ps2GsVu1QueueWaitIdle(void)
 #endif
 }
 
-extern "C" bool ps2GsVu1QueueSetEnabled(bool enabled)
-{
-#if !defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
-    return !enabled;
-#else
-    if (!s_initialized || !ps2GsVu1QueueWaitIdle()) {
-        return false;
-    }
-    s_enabled = enabled;
-    return true;
-#endif
-}
-
 extern "C" bool ps2GsVu1QueueSubmitAd(
     const struct Ps2GsPackedReg *prefix, uint32_t prefix_count,
     const struct Ps2GsPackedReg *records, uint32_t record_count,
@@ -418,21 +405,6 @@ extern "C" bool ps2GsVu1QueueSubmitAd(
     s_build_slot ^= 1u;
     return true;
 #endif
-}
-
-extern "C" bool ps2GsVu1QueueSubmitColor(
-    const struct Ps2GsPackedReg *prim, bool emit_prim,
-    const struct Ps2GsColorVertex *vertices, uint32_t vertex_count)
-{
-    if (!vertices || vertex_count == 0u ||
-        vertex_count > PS2_GS_VU1_MAX_COLOR_VERTICES ||
-        vertex_count % 3u != 0u) {
-        return false;
-    }
-    return ps2GsVu1QueueSubmitAd(
-        emit_prim ? prim : NULL, emit_prim ? 1u : 0u,
-        &vertices[0].rgbaq, vertex_count * 2u,
-        NULL, 0u);
 }
 
 extern "C" bool ps2GsVu1QueueSubmitTexturedTransform(

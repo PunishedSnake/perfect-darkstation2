@@ -11,6 +11,7 @@ static struct Ps2InputMapConfig defaultConfig(void)
         false,
         { 1.0f, 1.0f, 1.0f, 1.0f },
         { 6000, 6000, 4500, 4500 },
+        false,
     };
     return config;
 }
@@ -95,11 +96,30 @@ static void test_c_button_emulation_and_cancellation(void)
     assert(destination.rstick_y == 0);
 }
 
+/* Bindings-owned buttons: physical buttons stay unmapped, but the right
+ * stick still produces C buttons when dual analog is off. */
+static void test_skip_button_map_keeps_stick_c_buttons(void)
+{
+    struct Ps2PadState source = { 0 };
+    source.connected = true;
+    source.held = PS2_PAD_CROSS | PS2_PAD_R2 | PS2_PAD_UP;
+    source.rx = 32767;
+    struct Ps2InputMapConfig config = defaultConfig();
+    config.dual_analog = false;
+    config.skip_button_map = true;
+    OSContPad destination;
+
+    assert(ps2InputMapPad(&source, &config, &destination));
+    assert(destination.button == R_CBUTTONS);
+    assert(destination.rstick_x == 0);
+}
+
 int main(void)
 {
     test_disconnected_pad();
     test_default_button_contract();
     test_axes_deadzone_and_swap();
     test_c_button_emulation_and_cancellation();
+    test_skip_button_map_keeps_stick_c_buttons();
     return 0;
 }

@@ -279,15 +279,6 @@ static void ps2InputApplyScheme(s32 controller)
     }
 }
 
-void inputSetDefaultKeyBinds(s32 controller, s32 n64mode)
-{
-    if (!ps2InputControllerIndexValid(controller)) {
-        return;
-    }
-    inputPs2SetScheme(controller,
-        n64mode ? PS2_INPUT_SCHEME_N64 : PS2_INPUT_SCHEME_MODERN);
-}
-
 s32 inputPs2SchemeCount(void)
 {
     return PS2_INPUT_SCHEME_COUNT;
@@ -570,19 +561,6 @@ void inputControllerSetDualAnalog(s32 controller, s32 enable)
     }
 }
 
-s32 inputControllerGetCancelCButtons(s32 controller)
-{
-    return ps2InputControllerIndexValid(controller)
-        ? s_cancel_c_buttons[controller] : 0;
-}
-
-void inputControllerSetCancelCButtons(s32 controller, s32 cancel)
-{
-    if (ps2InputControllerIndexValid(controller)) {
-        s_cancel_c_buttons[controller] = cancel != 0;
-    }
-}
-
 f32 inputControllerGetAxisScale(s32 controller, s32 stick, s32 axis)
 {
     const s32 index = stick * 2 + axis;
@@ -669,26 +647,6 @@ s32 inputAssignController(s32 controller, s32 id)
     return 1;
 }
 
-void inputKeyBind(s32 controller, u32 cont_key, s32 bind, u32 vk)
-{
-    if (!ps2InputControllerIndexValid(controller) ||
-        cont_key >= CK_TOTAL_COUNT || bind >= INPUT_MAX_BINDS) {
-        return;
-    }
-    if (bind < 0) {
-        for (s32 slot = 0; slot < INPUT_MAX_BINDS; ++slot) {
-            if (s_binds[controller][cont_key][slot] == 0u) {
-                bind = slot;
-                break;
-            }
-        }
-        if (bind < 0) {
-            bind = INPUT_MAX_BINDS - 1;
-        }
-    }
-    s_binds[controller][cont_key][bind] = vk;
-}
-
 const u32 *inputKeyGetBinds(s32 controller, u32 cont_key)
 {
     if (!ps2InputControllerIndexValid(controller) ||
@@ -720,70 +678,12 @@ s32 inputKeyJustPressed(u32 vk)
     return pad && pad->connected && (pad->pressed & raw_button) != 0u;
 }
 
-s32 inputButtonPressed(s32 controller, u32 cont_button)
-{
-    OSContPad pad;
-    return inputReadController(controller, &pad) == 0 &&
-        (pad.button & cont_button) != 0u;
-}
-
-const char *inputGetContKeyName(u32 cont_key)
-{
-    return cont_key < CK_TOTAL_COUNT ? s_cont_key_names[cont_key] : "";
-}
-
-s32 inputGetContKeyByName(const char *name)
-{
-    if (!name) {
-        return -1;
-    }
-    for (s32 key = 0; key < CK_TOTAL_COUNT; ++key) {
-        if (strcmp(name, s_cont_key_names[key]) == 0) {
-            return key;
-        }
-    }
-    return -1;
-}
-
-const char *inputGetKeyName(s32 vk)
-{
-    static char name[48];
-    if (vk >= VK_JOY_BEGIN && vk < VK_TOTAL_COUNT) {
-        const u32 relative = (u32)(vk - VK_JOY_BEGIN);
-        const u32 controller = relative / INPUT_MAX_CONTROLLER_BUTTONS;
-        const u32 index = relative % INPUT_MAX_CONTROLLER_BUTTONS;
-        snprintf(name, sizeof(name), "JOY%u_%s",
-            controller + 1u, s_joy_key_names[index]);
-        return name;
-    }
-    return "UNAVAILABLE";
-}
-
-s32 inputGetKeyByName(const char *name)
-{
-    if (!name) {
-        return -1;
-    }
-    for (s32 vk = VK_JOY_BEGIN; vk < VK_TOTAL_COUNT; ++vk) {
-        if (strcmp(name, inputGetKeyName(vk)) == 0) {
-            return vk;
-        }
-    }
-    return -1;
-}
-
-void inputLockMouse(s32 lock) { (void)lock; }
 s32 inputMouseIsLocked(void) { return 0; }
 s32 inputMouseGetPosition(s32 *x, s32 *y)
 {
     if (x) *x = 0;
     if (y) *y = 0;
     return 0;
-}
-void inputMouseGetRawDelta(s32 *dx, s32 *dy)
-{
-    if (dx) *dx = 0;
-    if (dy) *dy = 0;
 }
 void inputMouseGetScaledDelta(f32 *dx, f32 *dy)
 {
@@ -794,31 +694,14 @@ void inputMouseGetAbsScaledDelta(f32 *dx, f32 *dy)
 {
     inputMouseGetScaledDelta(dx, dy);
 }
-void inputMouseGetSpeed(f32 *x, f32 *y)
-{
-    if (x) *x = 0.0f;
-    if (y) *y = 0.0f;
-}
-void inputMouseSetSpeed(f32 x, f32 y) { (void)x; (void)y; }
 s32 inputMouseIsEnabled(void) { return 0; }
-void inputMouseEnable(s32 enabled) { (void)enabled; }
 s32 inputAutoLockMouse(s32 wantlock) { (void)wantlock; return 0; }
-void inputMouseShowCursor(s32 show) { (void)show; }
-s32 inputGetMouseLockMode(void) { return MLOCK_OFF; }
-void inputSetMouseLockMode(s32 lockmode) { (void)lockmode; }
 
 void inputSaveBinds(void) {}
 void inputClearLastKey(void) { s_last_joy_index = -1; }
-s32 inputGetLastKey(void)
-{
-    return s_last_joy_index < 0 ? 0
-        : (s32)(VK_JOY_BEGIN + (u32)s_last_joy_index);
-}
 void inputStartTextInput(void) { s_text_input = 1; }
 void inputStopTextInput(void) { s_text_input = 0; }
-s32 inputIsTextInputActive(void) { return s_text_input; }
 void inputClearLastTextChar(void) {}
-char inputGetLastTextChar(void) { return 0; }
 s32 inputTextHandler(char *out, const u32 out_size, s32 *column,
     s32 osk_chars_only)
 {
@@ -828,8 +711,6 @@ s32 inputTextHandler(char *out, const u32 out_size, s32 *column,
     (void)osk_chars_only;
     return 0;
 }
-void inputClearClipboard(void) {}
-const char *inputGetClipboard(void) { return NULL; }
 u32 inputGetKeyModState(void) { return 0u; }
 
 PD_CONSTRUCTOR static void ps2InputConfigInit(void)

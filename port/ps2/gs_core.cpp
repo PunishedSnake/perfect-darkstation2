@@ -1976,50 +1976,6 @@ extern "C" void ps2GsCoreBindDefaultRenderTarget(void)
     ps2GsCoreEmitRenderTargetState();
 }
 
-extern "C" bool ps2GsCoreReleaseRenderTarget(
-    Ps2GsRenderTargetHandle handle)
-{
-    struct Ps2GsRenderTargetSlot *slot = ps2GsCoreRenderTargetSlot(handle);
-    if (!slot || handle == s_active_render_target) {
-        return false;
-    }
-    if (!ps2GsCoreEnsureRetireCapacity(1u)) {
-        sysLogPrintf(LOG_ERROR,
-            "GS core: render-target retirement fence failed id=%u",
-            (unsigned int)handle);
-        ps2LogCheckpoint();
-        return false;
-    }
-
-    ps2RendererTraceRecord(PS2_TRACE_RESOURCE_OP, 12u,
-        handle, ps2GsCoreTracePair(slot->vram, slot->layout.bytes),
-        ps2GsCoreTracePair(slot->layout.width, slot->layout.height),
-        slot->layout.fbw);
-    ps2GsCoreRetireVram(slot->vram, slot->layout.bytes);
-    memset(slot, 0, sizeof(*slot));
-    return true;
-}
-
-extern "C" uint32_t ps2GsCoreGetRenderTargetWidth(
-    Ps2GsRenderTargetHandle handle)
-{
-    if (handle == PS2_GS_RENDER_TARGET_DEFAULT) {
-        return s_gs ? (uint32_t)s_gs->Width : 0u;
-    }
-    struct Ps2GsRenderTargetSlot *slot = ps2GsCoreRenderTargetSlot(handle);
-    return slot ? slot->layout.width : 0u;
-}
-
-extern "C" uint32_t ps2GsCoreGetRenderTargetHeight(
-    Ps2GsRenderTargetHandle handle)
-{
-    if (handle == PS2_GS_RENDER_TARGET_DEFAULT) {
-        return s_gs ? (uint32_t)s_gs->Height : 0u;
-    }
-    struct Ps2GsRenderTargetSlot *slot = ps2GsCoreRenderTargetSlot(handle);
-    return slot ? slot->layout.height : 0u;
-}
-
 extern "C" Ps2GsTextureHandle ps2GsCoreCreateTexture(void)
 {
     for (uint32_t i = 0; i < PS2_GS_MAX_TEXTURES; ++i) {
@@ -2040,11 +1996,6 @@ extern "C" bool ps2GsCoreTextureEvicted(Ps2GsTextureHandle handle)
 {
     struct Ps2GsTextureSlot *slot = ps2GsCoreTextureSlot(handle);
     return slot && slot->evicted;
-}
-
-extern "C" uint32_t ps2GsCoreTextureEvictionCount(void)
-{
-    return s_texture_evictions;
 }
 
 extern "C" bool ps2GsCoreTextureExists(Ps2GsTextureHandle handle)
@@ -3824,18 +3775,3 @@ extern "C" bool ps2GsCoreBlitRenderTargetChannelSpansToActiveAlpha(
         span_x0, span_x1, span_count);
 }
 
-extern "C" bool ps2GsCoreBlitRenderTargetChannelToActiveAlpha(
-    Ps2GsRenderTargetHandle source, enum Ps2GsCt32Channel channel)
-{
-    struct Ps2GsRenderTargetSlot *slot =
-        ps2GsCoreRenderTargetSlot(source);
-    return slot && ps2GsCoreBlitRenderTargetChannelRectToActiveAlpha(
-        source, channel, slot->layout.width, slot->layout.height);
-}
-
-extern "C" bool ps2GsCoreBlitRenderTargetRedToActiveAlpha(
-    Ps2GsRenderTargetHandle source)
-{
-    return ps2GsCoreBlitRenderTargetChannelToActiveAlpha(
-        source, PS2_GS_CT32_CHANNEL_RED);
-}

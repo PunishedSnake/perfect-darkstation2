@@ -39,20 +39,6 @@ char *strFmt(const char *fmt, ...)
 	return buf;
 }
 
-char *strRightTrim(char *str)
-{
-	if (!str) {
-		return NULL;
-	}
-
-	const s32 len = strlen(str);
-	for (s32 i = len - 1; i >= 0 && isspace(str[i]); --i) {
-		str[i] = '\0';
-	}
-
-	return str;
-}
-
 char *strTrim(char *str)
 {
 	if (!str) {

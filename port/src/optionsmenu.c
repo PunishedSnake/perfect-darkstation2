@@ -97,6 +97,7 @@ static MenuItemHandlerResult menuhandlerSelectPlayer(s32 operation, struct menui
 	return 0;
 }
 
+#ifndef PLATFORM_PS2 // keyboard/mouse only
 static MenuItemHandlerResult menuhandlerMouseEnabled(s32 operation, struct menuitem *item, union handlerdata *data)
 {
 	switch (operation) {
@@ -387,6 +388,7 @@ struct menudialogdef g_ExtendedMouseMenuDialog = {
 	MENUDIALOGFLAG_LITERAL_TEXT,
 	NULL,
 };
+#endif
 
 static MenuItemHandlerResult menuhandlerStickSpeed(s32 operation, struct menuitem *item, union handlerdata *data);
 static MenuItemHandlerResult menuhandlerStickDeadzone(s32 operation, struct menuitem *item, union handlerdata *data);
@@ -921,6 +923,7 @@ struct menudialogdef g_ExtendedControllerMenuDialog = {
 	NULL,
 };
 
+#ifndef PLATFORM_PS2
 static MenuItemHandlerResult menuhandlerFullScreen(s32 operation, struct menuitem *item, union handlerdata *data)
 {
 	switch (operation) {
@@ -933,7 +936,9 @@ static MenuItemHandlerResult menuhandlerFullScreen(s32 operation, struct menuite
 
 	return 0;
 }
+#endif
 
+#ifndef PLATFORM_PS2
 static MenuItemHandlerResult menuhandlerFullScreenMode(s32 operation, struct menuitem *item, union handlerdata *data)
 {
 	static const char *opts[] = {
@@ -956,7 +961,9 @@ static MenuItemHandlerResult menuhandlerFullScreenMode(s32 operation, struct men
 
 	return 0;
 }
+#endif
 
+#ifndef PLATFORM_PS2
 static MenuItemHandlerResult menuhandlerCenterWindow(s32 operation, struct menuitem *item, union handlerdata *data)
 {
 	switch (operation) {
@@ -969,7 +976,9 @@ static MenuItemHandlerResult menuhandlerCenterWindow(s32 operation, struct menui
 
 	return 0;
 }
+#endif
 
+#ifndef PLATFORM_PS2
 static MenuItemHandlerResult menuhandlerVsync(s32 operation, struct menuitem *item, union handlerdata *data)
 {
 	static const s32 numOpts = 10;
@@ -999,7 +1008,9 @@ static MenuItemHandlerResult menuhandlerVsync(s32 operation, struct menuitem *it
 
 	return 0;
 }
+#endif
 
+#ifndef PLATFORM_PS2
 static MenuItemHandlerResult menuhandlerFramerateLimit(s32 operation, struct menuitem *item, union handlerdata *data)
 {
 	switch (operation) {
@@ -1020,7 +1031,9 @@ static MenuItemHandlerResult menuhandlerFramerateLimit(s32 operation, struct men
 
 	return 0;
 }
+#endif
 
+#ifndef PLATFORM_PS2
 static MenuItemHandlerResult menuhandlerMSAA(s32 operation, struct menuitem *item, union handlerdata *data)
 {
 	s32 msaa;
@@ -1058,7 +1071,9 @@ static MenuItemHandlerResult menuhandlerMSAA(s32 operation, struct menuitem *ite
 
 	return 0;
 }
+#endif
 
+#ifndef PLATFORM_PS2
 static MenuItemHandlerResult menuhandlerResolution(s32 operation, struct menuitem *item, union handlerdata *data)
 {
 	static char resstring[32];
@@ -1091,6 +1106,7 @@ static MenuItemHandlerResult menuhandlerResolution(s32 operation, struct menuite
 
 	return 0;
 }
+#endif
 
 static MenuItemHandlerResult menuhandlerTexFilter(s32 operation, struct menuitem *item, union handlerdata *data)
 {
@@ -1148,6 +1164,7 @@ static MenuItemHandlerResult menuhandlerTexFilter2D(s32 operation, struct menuit
 	return 0;
 }
 
+#ifndef PLATFORM_PS2
 static MenuItemHandlerResult menuhandlerAnisotropicFiltering(s32 operation, struct menuitem *item, union handlerdata *data)
 {
 	switch (operation) {
@@ -1161,6 +1178,7 @@ static MenuItemHandlerResult menuhandlerAnisotropicFiltering(s32 operation, stru
 
 	return 0;
 }
+#endif
 
 static MenuItemHandlerResult menuhandlerDisplayFPS(s32 operation, struct menuitem *item, union handlerdata *data)
 {
@@ -1187,6 +1205,7 @@ static MenuItemHandlerResult menuhandlerGeMuzzleFlashes(s32 operation, struct me
 	return 0;
 }
 
+#ifndef PLATFORM_PS2
 static MenuItemHandlerResult menuhandlerUncapTickrate(s32 operation, struct menuitem *item, union handlerdata *data)
 {
 	switch (operation) {
@@ -1199,6 +1218,7 @@ static MenuItemHandlerResult menuhandlerUncapTickrate(s32 operation, struct menu
 
 	return 0;
 }
+#endif
 
 static MenuItemHandlerResult menuhandlerCenterHUD(s32 operation, struct menuitem *item, union handlerdata *data)
 {
@@ -1971,6 +1991,7 @@ struct menudialogdef g_ExtendedGameMenuDialog = {
 	NULL,
 };
 
+#ifndef PLATFORM_PS2 // desktop key/button binding; PS2 uses the remap dialog
 static MenuItemHandlerResult menuhandlerDoBind(s32 operation, struct menuitem *item, union handlerdata *data);
 
 struct menuitem g_ExtendedBindKeyMenuItems[] = {
@@ -2217,6 +2238,7 @@ struct menudialogdef g_ExtendedBindsMenuDialog = {
 	MENUDIALOGFLAG_LITERAL_TEXT | MENUDIALOGFLAG_STARTSELECTS | MENUDIALOGFLAG_IGNOREBACK,
 	NULL,
 };
+#endif
 
 static MenuItemHandlerResult menuhandlerOpenControllerMenu(s32 operation, struct menuitem *item, union handlerdata *data)
 {
@@ -2337,6 +2359,7 @@ struct menudialogdef g_ExtendedMenuDialog = {
 	NULL,
 };
 
+#ifndef PLATFORM_PS2
 void updateMaxAnisotropyLevel()
 {
 	for (int i = 0; i < ARRAYCOUNT(g_ExtendedVideoMenuItems); ++i) {
@@ -2351,7 +2374,11 @@ void updateMaxAnisotropyLevel()
 
 }
 
+#endif
+
 void optionsMenuInit()
 {
+#ifndef PLATFORM_PS2
 	updateMaxAnisotropyLevel();
+#endif
 }
