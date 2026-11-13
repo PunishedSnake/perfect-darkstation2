@@ -48,6 +48,14 @@ struct GfxRdpTmem {
     uint32_t generation;
     uint32_t word_generation[GFX_RDP_TMEM_WORDS];
     uint8_t word_valid[GFX_RDP_TMEM_WORDS];
+    /*
+     * Words stored by a LoadBlock with dxt == 0. Real hardware never swaps
+     * such a block, so a multi-row texture loaded that way must already be
+     * row-swizzled in RDRAM. This port keeps every texture linear in RAM
+     * (texSwizzle is stubbed), so those words are linear in TMEM as well and
+     * the tile readers must not apply the odd-row half swap to them.
+     */
+    uint8_t word_linear[GFX_RDP_TMEM_WORDS];
     struct GfxRdpTmemLoadRecord load_records[GFX_RDP_TMEM_LOAD_RECORDS];
     uint32_t load_record_next;
 };

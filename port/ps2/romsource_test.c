@@ -94,6 +94,41 @@ int main(void)
 	assert(memcmp(cachedRange, container + 1024u, sizeof(cachedRange)) == 0);
 	romSourceClose(&source);
 
+	/*
+	 * Streamed audio: a dozen voices each read a few hundred bytes per
+	 * audio frame from their own position. Interleaved sequential streams
+	 * must share the cache without evicting each other, so the device is
+	 * touched once per 16 KiB of progress per stream, not once per read.
+	 */
+	{
+		enum { STREAMS = 12, STEP = 300, ROUNDS = 200, FILE_BYTES = 1024 * 1024 };
+		static u8 big[FILE_BYTES];
+		char bigPath[] = "/tmp/pd_romsource_stream_XXXXXX";
+		const int bigFd = mkstemp(bigPath);
+		u8 chunk[STEP];
+
+		assert(bigFd >= 0);
+		for (u32 i = 0; i < FILE_BYTES; ++i) {
+			big[i] = (u8)((i * 131u) ^ (i >> 7) ^ (i >> 13));
+		}
+		assert(write(bigFd, big, FILE_BYTES) == (ssize_t)FILE_BYTES);
+		assert(close(bigFd) == 0);
+		assert(romSourceOpenFile(&source, bigPath));
+		assert(unlink(bigPath) == 0);
+
+		for (u32 round = 0; round < ROUNDS; ++round) {
+			for (u32 stream = 0; stream < STREAMS; ++stream) {
+				const u32 offset = stream * 70001u + round * STEP;
+				assert(romSourceReadAt(&source, offset, chunk, STEP));
+				assert(memcmp(chunk, big + offset, STEP) == 0);
+			}
+		}
+		/* 60000 bytes per stream = 4 lines each, plus slack for line edges */
+		assert(source.read_cache_reads <= STREAMS * 5u);
+		assert(source.read_cache_reads >= STREAMS * 3u);
+		romSourceClose(&source);
+	}
+
 	puts("romsource_test: ok");
 	return 0;
 }

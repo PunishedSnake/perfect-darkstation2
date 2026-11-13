@@ -58,6 +58,9 @@ void crashShutdown(void);
 
 #ifdef PLATFORM_PS2
 // per-frame phase accumulators reported by the PS2 frame runtime log
+// write the EEPROM image once a burst of block writes has settled
+// (force != 0: write now, e.g. before exit)
+void osEepromFlushPending(s32 force);
 extern u64 g_Ps2PhaseAudioUs;
 extern u64 g_Ps2PhaseGfxUs;
 extern u64 g_Ps2PhaseFlipWaitUs; // EE idle waiting for the previous scanout flip

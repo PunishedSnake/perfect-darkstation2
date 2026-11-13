@@ -10,7 +10,7 @@
 
 #include "romsource.h"
 
-#define ROMSOURCE_FILE_CACHE_LINE_SIZE (4u * 1024u)
+#define ROMSOURCE_FILE_CACHE_LINE_SIZE (16u * 1024u)
 #define ROMSOURCE_FILE_CACHE_SIZE \
 	(ROMSOURCE_FILE_CACHE_SLOTS * ROMSOURCE_FILE_CACHE_LINE_SIZE)
 #define ROMSOURCE_FILE_CACHE_ALIGNMENT 512u
@@ -33,9 +33,11 @@ static void romSourceResetCache(struct romsource *source)
 	for (u32 i = 0; i < ROMSOURCE_FILE_CACHE_SLOTS; ++i) {
 		source->read_cache_lines[i].offset = 0;
 		source->read_cache_lines[i].length = 0;
+		source->read_cache_lines[i].last_use = 0;
 	}
 
-	source->read_cache_next_slot = 0;
+	source->read_cache_clock = 0;
+	source->read_cache_reads = 0;
 }
 
 static bool romSourceRangeValid(const struct romsource *source, u32 offset, u32 length)
@@ -165,8 +167,13 @@ bool romSourceReadAt(struct romsource *source, u32 offset, void *dst, u32 length
 
 		FILE *file = (FILE *)source->handle;
 		if (source->read_cache && length <= ROMSOURCE_FILE_CACHE_LINE_SIZE) {
+			u32 slot = 0;
 			for (u32 i = 0; i < ROMSOURCE_FILE_CACHE_SLOTS; ++i) {
-				const struct romsourcecacheline *line = &source->read_cache_lines[i];
+				struct romsourcecacheline *line = &source->read_cache_lines[i];
+				/* least recently used (or empty) line is the refill victim */
+				if (line->last_use < source->read_cache_lines[slot].last_use) {
+					slot = i;
+				}
 				if (offset >= line->offset) {
 					const u32 cacheDelta = offset - line->offset;
 					if (cacheDelta <= line->length &&
@@ -174,6 +181,7 @@ bool romSourceReadAt(struct romsource *source, u32 offset, void *dst, u32 length
 						memcpy(dst,
 							source->read_cache + i * ROMSOURCE_FILE_CACHE_LINE_SIZE + cacheDelta,
 							length);
+						line->last_use = ++source->read_cache_clock;
 						return true;
 					}
 				}
@@ -189,7 +197,6 @@ bool romSourceReadAt(struct romsource *source, u32 offset, void *dst, u32 length
 			const u32 remaining = source->size - cacheOffset;
 			const u32 cacheLength = remaining < ROMSOURCE_FILE_CACHE_LINE_SIZE
 				? remaining : ROMSOURCE_FILE_CACHE_LINE_SIZE;
-			const u32 slot = source->read_cache_next_slot;
 			u8 *cache = source->read_cache + slot * ROMSOURCE_FILE_CACHE_LINE_SIZE;
 
 			if (cacheOffset <= (u32)LONG_MAX &&
@@ -197,13 +204,15 @@ bool romSourceReadAt(struct romsource *source, u32 offset, void *dst, u32 length
 					fread(cache, 1, cacheLength, file) == cacheLength) {
 				source->read_cache_lines[slot].offset = cacheOffset;
 				source->read_cache_lines[slot].length = cacheLength;
-				source->read_cache_next_slot =
-					(slot + 1u) % ROMSOURCE_FILE_CACHE_SLOTS;
+				source->read_cache_lines[slot].last_use =
+					++source->read_cache_clock;
+				++source->read_cache_reads;
 				memcpy(dst, cache + cacheDelta, length);
 				return true;
 			}
 
 			source->read_cache_lines[slot].length = 0;
+			source->read_cache_lines[slot].last_use = 0;
 			return false;
 		}
 

@@ -607,8 +607,16 @@ static bool ps2_decode_texture_region_clamp(
     return false;
 }
 
+static int s_fb_draw_target; /* framebuffer being drawn to, 0 = screen */
+static int s_fb_texture;     /* framebuffer bound as texture 0, 0 = none */
+static bool ps2_draw_framebuffer_batch(const float buf_vbo[],
+    size_t buf_vbo_len, size_t buf_vbo_num_tris);
+
 static void ps2_select_texture(int tile, uint32_t texture_id, bool linear_filter)
 {
+    if (tile == 0) {
+        s_fb_texture = 0;
+    }
     if (tile < 0 || tile > 1 || texture_id > UINT16_MAX) {
         return;
     }
@@ -4998,6 +5006,14 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len,
         return;
     }
 
+    if (s_fb_draw_target != 0 || s_fb_texture != 0) {
+        ps2_refresh_gs_offsets();
+        if (ps2_draw_framebuffer_batch(buf_vbo, buf_vbo_len,
+                buf_vbo_num_tris)) {
+            return;
+        }
+    }
+
     /*
      * Clamp bounds are decoded during translation below.  Clearing the prior
      * batch here prevents draw_state from presenting stale region-clamp data;
@@ -5384,11 +5400,66 @@ static void ps2_finish_render(void)
      */
 }
 
+/*
+ * Framebuffer effects (menu background blur).
+ *
+ * The game captures the screen into a small framebuffer, blurs it into a
+ * second screen-sized one, then draws that behind the menu. A screen-sized
+ * offscreen target does not fit in GS VRAM next to two scanout buffers and
+ * Z, and the GS filters for free, so this backend keeps one 64x32 CT32
+ * capture per framebuffer object:
+ *   - copy from the screen renders the last presented frame into it
+ *     (bilinear, so the capture is already a strong blur);
+ *   - drawing INTO an offscreen framebuffer is not rendered. When such a
+ *     draw samples another framebuffer, the target becomes an alias of it,
+ *     which is exactly what the blur blit means;
+ *   - drawing WITH a framebuffer texture stretches the capture with
+ *     bilinear filtering, as the original 40x30 N64 blur image was.
+ */
+#define PS2_GFX_FRAMEBUFFERS 8
+#define PS2_GFX_FB_CAPTURE_WIDTH 64u
+#define PS2_GFX_FB_CAPTURE_HEIGHT 32u
+
+struct Ps2GfxFramebuffer {
+    bool used;
+    bool capture_pending;
+    bool has_capture;
+    int alias; /* framebuffer id whose capture this one shows, 0 = own */
+    Ps2GsRenderTargetHandle target;
+};
+
+static struct Ps2GfxFramebuffer s_fb[PS2_GFX_FRAMEBUFFERS + 1]; /* 1-based */
+static struct Ps2GfxFramebuffer *ps2_fb(int id)
+{
+    return id > 0 && id <= PS2_GFX_FRAMEBUFFERS && s_fb[id].used
+        ? &s_fb[id] : NULL;
+}
+
+/* Follow aliases to the framebuffer that owns the pixels. */
+static struct Ps2GfxFramebuffer *ps2_fb_resolve(int id)
+{
+    for (int hops = 0; hops < PS2_GFX_FRAMEBUFFERS; ++hops) {
+        struct Ps2GfxFramebuffer *fb = ps2_fb(id);
+        if (!fb || fb->alias == 0 || fb->alias == id) {
+            return fb;
+        }
+        id = fb->alias;
+    }
+    return NULL;
+}
+
 static int ps2_create_framebuffer(void)
 {
+    for (int id = 1; id <= PS2_GFX_FRAMEBUFFERS; ++id) {
+        if (!s_fb[id].used) {
+            s_fb[id] = {};
+            s_fb[id].used = true;
+            return id;
+        }
+    }
     if (!s_warned_framebuffer) {
         sysLogPrintf(LOG_WARNING,
-            "GfxPS2 offscreen framebuffer API is not implemented; default scanout only");
+            "GfxPS2 framebuffer table exhausted (%d)", PS2_GFX_FRAMEBUFFERS);
         s_warned_framebuffer = true;
     }
     return 0;
@@ -5406,16 +5477,170 @@ static void ps2_update_framebuffer_parameters(int fb_id, uint32_t width, uint32_
 static bool ps2_start_draw_to_framebuffer(int fb_id, float noise_scale)
 {
     (void)noise_scale;
-    return fb_id == 0;
+    s_fb_draw_target = ps2_fb(fb_id) ? fb_id : 0;
+    return true;
 }
 
 static void ps2_copy_framebuffer(int fb_dst, int fb_src, int left, int top, bool flip_y, bool use_back)
 {
-    (void)fb_dst; (void)fb_src; (void)left; (void)top; (void)flip_y; (void)use_back;
+    (void)left; (void)top; (void)flip_y; (void)use_back;
+    struct Ps2GfxFramebuffer *dst = ps2_fb(fb_dst);
+    if (!dst) {
+        return;
+    }
+    if (fb_src == 0) {
+        /* Rendered at the next draw, when a GS frame is being built. */
+        dst->alias = 0;
+        dst->capture_pending = true;
+    } else if (ps2_fb(fb_src) && fb_src != fb_dst) {
+        dst->alias = fb_src;
+        dst->capture_pending = false;
+    }
+}
+
+/* Render the last presented frame into the framebuffer's capture target. */
+static void ps2_fb_capture_screen(struct Ps2GfxFramebuffer *fb)
+{
+    fb->capture_pending = false;
+    if (fb->target == PS2_GS_RENDER_TARGET_DEFAULT) {
+        fb->target = ps2GsCoreCreateRenderTarget(
+            PS2_GFX_FB_CAPTURE_WIDTH, PS2_GFX_FB_CAPTURE_HEIGHT);
+        if (fb->target == PS2_GS_RENDER_TARGET_DEFAULT) {
+            return;
+        }
+    }
+    const uint32_t screen_w = ps2GsCoreGetScreenWidth();
+    const uint32_t screen_h = ps2GsCoreGetScreenHeight();
+    if (screen_w == 0u || screen_h == 0u ||
+        !ps2GsCoreBindRenderTarget(fb->target)) {
+        return;
+    }
+
+    uint32_t page_w = 1u;
+    uint32_t page_h = 1u;
+    while (page_w < screen_w) page_w <<= 1;
+    while (page_h < screen_h) page_h <<= 1;
+    const float max_s = (float)screen_w / (float)page_w;
+    const float max_t = (float)screen_h / (float)page_h;
+    const float w = (float)PS2_GFX_FB_CAPTURE_WIDTH;
+    const float h = (float)PS2_GFX_FB_CAPTURE_HEIGHT;
+    static const uint8_t corner[6][2] = {
+        { 0, 0 }, { 1, 0 }, { 0, 1 }, { 1, 0 }, { 1, 1 }, { 0, 1 },
+    };
+    struct Ps2GsTexturedVertex quad[6];
+    for (uint32_t i = 0u; i < 6u; ++i) {
+        quad[i].rgbaq = ps2_pack_rgbaq(0x80u, 0x80u, 0x80u, 0x80u, 1.0f);
+        quad[i].st = ps2_pack_st(
+            corner[i][0] ? max_s : 0.0f, corner[i][1] ? max_t : 0.0f);
+        quad[i].xyz2 = ps2_pack_xyz2(
+            corner[i][0] ? w : 0.0f, corner[i][1] ? h : 0.0f, 0);
+    }
+
+    ps2GsCoreSetScissor(0, 0,
+        (int)PS2_GFX_FB_CAPTURE_WIDTH, (int)PS2_GFX_FB_CAPTURE_HEIGHT);
+    ps2GsCoreSetAlphaTest(false, 0u);
+    ps2GsCoreSetFog(false, 0u, 0u, 0u);
+    ps2GsCoreSetDepthMode(false, false, false, false);
+    ps2GsCoreSetAlphaBlend(false);
+    ps2GsCoreSetFramebufferAlphaForce(false);
+    ps2GsCoreSetColorWrite(true);
+    ps2GsCoreSetAlphaWrite(true);
+    ps2GsCoreSetTextureAlpha(false);
+    fb->has_capture = ps2GsCoreDrawPresentedScreenTriangles(quad, 6u, true) &&
+        ps2GsCoreMarkRenderTargetWritten(fb->target);
+
+    ps2GsCoreBindDefaultRenderTarget();
+    ps2_restore_alpha_trilerp_state();
+}
+
+/*
+ * Draw one batch that samples a framebuffer capture. Returns true when the
+ * batch was consumed (drawn, or intentionally not rendered).
+ */
+static bool ps2_draw_framebuffer_batch(const float buf_vbo[],
+    size_t buf_vbo_len, size_t buf_vbo_num_tris)
+{
+    if (s_fb_draw_target != 0) {
+        /* Offscreen pass: remember what it shows, render nothing. */
+        struct Ps2GfxFramebuffer *target = ps2_fb(s_fb_draw_target);
+        if (target && s_fb_texture != 0 && s_fb_texture != s_fb_draw_target &&
+            ps2_fb(s_fb_texture)) {
+            target->alias = s_fb_texture;
+        }
+        return true;
+    }
+    if (s_fb_texture == 0) {
+        return false;
+    }
+
+    struct Ps2GfxFramebuffer *source = ps2_fb_resolve(s_fb_texture);
+    if (source && source->capture_pending) {
+        ps2_fb_capture_screen(source);
+    }
+    const size_t stride = ps2_vbo_stride(s_shader);
+    const size_t vertex_count = buf_vbo_num_tris * 3u;
+    if (!source || !source->has_capture || !s_shader ||
+        !s_shader->features.used_textures[0] || stride == 0u ||
+        vertex_count == 0u || vertex_count > PS2_GFX_TRANSLATE_VERTS ||
+        buf_vbo_len < vertex_count * stride) {
+        return true; /* nothing sensible to show; never sample stale VRAM */
+    }
+
+    size_t input_offset = 4u;
+    for (int t = 0; t < 2; ++t) {
+        if (s_shader->features.used_textures[t]) {
+            input_offset += 2u;
+            if (s_shader->features.clamp[t][0]) ++input_offset;
+            if (s_shader->features.clamp[t][1]) ++input_offset;
+        }
+    }
+    if (s_shader->features.opt_fog) input_offset += 4u;
+    if (s_shader->features.opt_grayscale) input_offset += 4u;
+    const bool has_input = s_shader->features.num_inputs > 0;
+
+    for (size_t i = 0; i < vertex_count; ++i) {
+        const float *src = &buf_vbo[i * stride];
+        if (!(src[3] > 0.0f)) {
+            return true;
+        }
+        const float inv_w = ps2_clip_inv_w(src[3]);
+        float u = src[4];
+        float v = src[5];
+        if (u < 0.0f) u = 0.0f;
+        if (u > 1.0f) u = 1.0f;
+        if (v < 0.0f) v = 0.0f;
+        if (v > 1.0f) v = 1.0f;
+        const uint8_t r = has_input
+            ? ps2_modulate_component(src[input_offset + 0u]) : 0x80u;
+        const uint8_t g = has_input
+            ? ps2_modulate_component(src[input_offset + 1u]) : 0x80u;
+        const uint8_t b = has_input
+            ? ps2_modulate_component(src[input_offset + 2u]) : 0x80u;
+        s_stq_vertices[0][i].rgbaq = ps2_pack_rgbaq(r, g, b, 0x80u, inv_w);
+        s_stq_vertices[0][i].st = ps2_pack_st(u * inv_w, v * inv_w);
+        s_stq_vertices[0][i].xyz2 = ps2_pack_screen_position(
+            src[0], src[1], src[2], src[3], inv_w, false, 0u);
+    }
+
+    ps2GsCoreSetAlphaTest(false, 0u);
+    ps2GsCoreSetFog(false, 0u, 0u, 0u);
+    ps2GsCoreSetDepthMode(false, false, false, false);
+    ps2GsCoreSetAlphaBlend(false);
+    ps2GsCoreSetFramebufferAlphaForce(false);
+    ps2GsCoreSetColorWrite(true);
+    ps2GsCoreSetAlphaWrite(true);
+    ps2GsCoreSetTextureAlpha(false);
+    (void)ps2GsCoreDrawRenderTargetTriangles(
+        source->target, s_stq_vertices[0], (uint32_t)vertex_count, true);
+    ps2_restore_alpha_trilerp_state();
+    return true;
 }
 
 static void ps2_clear_framebuffer(bool clear_color, bool clear_depth)
 {
+    if (s_fb_draw_target != 0) {
+        return; /* offscreen passes are not rendered */
+    }
     ps2GsCoreClear(clear_color, clear_depth);
 }
 
@@ -5432,7 +5657,7 @@ static void *ps2_get_framebuffer_texture_id(int fb_id)
 
 static void ps2_select_texture_fb(int fb_id)
 {
-    (void)fb_id;
+    s_fb_texture = ps2_fb(fb_id) ? fb_id : 0;
 }
 
 static void ps2_delete_texture(uint32_t tex_id)

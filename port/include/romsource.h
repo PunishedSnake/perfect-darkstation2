@@ -10,11 +10,20 @@ enum romsourcekind {
 	ROMSOURCE_FILE,
 };
 
-#define ROMSOURCE_FILE_CACHE_SLOTS 4u
+/*
+ * Read-ahead cache for small file-backed reads. Streamed audio is the main
+ * client: every active voice pulls a few hundred bytes of ADPCM per audio
+ * frame from its own position in sfxtbl, and each uncached read is a
+ * synchronous seek + USB 1.1 transfer of roughly 10 ms. The cache must
+ * therefore hold one line per concurrent stream (LRU, not round-robin) and
+ * a line must last a stream many frames.
+ */
+#define ROMSOURCE_FILE_CACHE_SLOTS 16u
 
 struct romsourcecacheline {
 	u32 offset;
 	u32 length;
+	u32 last_use;
 };
 
 /*
@@ -31,7 +40,8 @@ struct romsource {
 	u32 size;
 	u8 *read_cache;
 	struct romsourcecacheline read_cache_lines[ROMSOURCE_FILE_CACHE_SLOTS];
-	u32 read_cache_next_slot;
+	u32 read_cache_clock;
+	u32 read_cache_reads; /* device reads issued through the cache */
 };
 
 void romSourceInitMemory(struct romsource *source, const void *data, u32 size);

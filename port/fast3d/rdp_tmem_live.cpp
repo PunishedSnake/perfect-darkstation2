@@ -550,7 +550,9 @@ extern "C" bool gfxRdpTmemLiveTextureFingerprint(uint8_t tile_index,
             const uint64_t range_hash = pending->hash;
             hash = UINT64_C(0x3c6ef372a54ff53a);
             gfxRdpTmemHashMix64(&hash, range_hash);
-            gfxRdpTmemHashMix(&hash, (uint32_t)total64, tile->line_words);
+            /* dxt == 0 blocks read back without the odd-row swap */
+            gfxRdpTmemHashMix(&hash, (uint32_t)total64,
+                tile->line_words | (pending->dxt == 0u ? 0x80000000u : 0u));
             hashed = true;
             ++s_live.stats.fingerprint_source_hash;
         } else {
@@ -568,7 +570,9 @@ extern "C" bool gfxRdpTmemLiveTextureFingerprint(uint8_t tile_index,
                 (uint32_t)total64, &range_hash)) {
             hash = UINT64_C(0x3c6ef372a54ff53a);
             gfxRdpTmemHashMix64(&hash, range_hash);
-            gfxRdpTmemHashMix(&hash, (uint32_t)total64, tile->line_words);
+            gfxRdpTmemHashMix(&hash, (uint32_t)total64,
+                tile->line_words |
+                (tmem->word_linear[tile->tmem_word] ? 0x80000000u : 0u));
             hashed = true;
         }
     }
