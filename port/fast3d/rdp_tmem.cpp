@@ -253,21 +253,44 @@ extern "C" bool gfxRdpTmemWriteTlut(struct GfxRdpTmem *tmem,
         return true;
     }
 
+    /* Each entry fills its word as four big-endian copies: hi,lo,hi,lo... */
+    uint8_t words[GFX_RDP_TMEM_WORDS][GFX_RDP_TMEM_WORD_BYTES];
+    for (uint32_t i = 0; i < entry_count; ++i) {
+        const uint8_t hi = (uint8_t)(entries[i] >> 8);
+        const uint8_t lo = (uint8_t)entries[i];
+        for (uint32_t copy = 0; copy < 4u; ++copy) {
+            words[i][copy * 2u] = hi;
+            words[i][copy * 2u + 1u] = lo;
+        }
+    }
+
+    /*
+     * Reloading the palette TMEM already holds (the common case: the same
+     * TLUT before every draw that uses it) changes nothing observable, as
+     * for identical LoadBlocks: keep generations and load records intact.
+     */
+    uint32_t same = 0u;
+    for (; same < entry_count; ++same) {
+        const uint32_t word = first_tmem_word + same;
+        const uint32_t dst_byte = word * GFX_RDP_TMEM_WORD_BYTES;
+        if (gfxRdpTmemLoad64(&tmem->bytes[dst_byte]) !=
+                gfxRdpTmemLoad64(words[same]) ||
+            gfxRdpTmemLoad64(&tmem->byte_valid[dst_byte]) !=
+                k_gfx_rdp_tmem_ones ||
+            tmem->word_linear[word] != 0u) {
+            break;
+        }
+    }
+    if (same == entry_count) {
+        return true;
+    }
+
     const uint32_t generation = gfxRdpTmemNextGeneration(tmem);
     uint64_t load_hash = GFX_RDP_TMEM_HASH_SEED;
     for (uint32_t i = 0; i < entry_count; ++i) {
-        const uint16_t value = entries[i];
-        const uint8_t hi = (uint8_t)(value >> 8);
-        const uint8_t lo = (uint8_t)value;
-        const uint32_t dst_byte =
-            (first_tmem_word + i) * GFX_RDP_TMEM_WORD_BYTES;
-
-        for (uint32_t copy = 0; copy < 4u; ++copy) {
-            gfxRdpTmemWriteMappedByte(tmem, dst_byte + copy * 2u, hi);
-            gfxRdpTmemWriteMappedByte(tmem, dst_byte + copy * 2u + 1u, lo);
-        }
-        gfxRdpTmemMarkOneWord(tmem, first_tmem_word + i, generation);
-        gfxRdpTmemHashMix64(&load_hash, gfxRdpTmemLoad64(&tmem->bytes[dst_byte]));
+        gfxRdpTmemStoreFullWord(tmem, first_tmem_word + i, words[i], false,
+            generation);
+        gfxRdpTmemHashMix64(&load_hash, gfxRdpTmemLoad64(words[i]));
     }
 
     gfxRdpTmemRecordLoad(tmem, first_tmem_word, entry_count,
@@ -396,7 +419,94 @@ extern "C" bool gfxRdpTmemLoadTileRgba32(struct GfxRdpTmem *tmem,
     return true;
 }
 
+static uint64_t gfxRdpTmemHashBlockSourceUncached(const uint8_t *source,
+    uint32_t first_word, uint32_t word_count, uint16_t dxt);
+
+/*
+ * Memo for gfxRdpTmemHashBlockSource. The same static textures are loaded and
+ * fingerprinted many times per frame; the serial hash chain costs far more
+ * than an exact 64-bit compare against a retained copy of the bytes. A hit
+ * requires byte-identical source content, so results are exactly those of
+ * the uncached hash regardless of what the game does to that memory.
+ */
+enum {
+    GFX_RDP_TMEM_SOURCE_MEMO_SLOTS = 32,
+    GFX_RDP_TMEM_SOURCE_MEMO_WORDS = GFX_RDP_TMEM_WORDS,
+};
+
+static struct {
+    const uint8_t *source;
+    uint32_t word_count;
+    uint32_t last_use;
+    uint16_t dxt;
+    uint16_t t_phase;
+    bool valid;
+    uint64_t hash;
+} s_source_memo[GFX_RDP_TMEM_SOURCE_MEMO_SLOTS];
+static uint64_t s_source_memo_bytes[GFX_RDP_TMEM_SOURCE_MEMO_SLOTS]
+    [GFX_RDP_TMEM_SOURCE_MEMO_WORDS];
+static uint32_t s_source_memo_clock;
+
+static bool gfxRdpTmemSourceEqual(const uint8_t *a, const uint64_t *b,
+    uint32_t words)
+{
+    uint64_t diff = 0u;
+    for (uint32_t i = 0u; i < words; ++i) {
+        diff |= gfxRdpTmemLoad64(a + i * GFX_RDP_TMEM_WORD_BYTES) ^ b[i];
+        if ((i & 15u) == 15u && diff != 0u) {
+            return false;
+        }
+    }
+    return diff == 0u;
+}
+
 extern "C" uint64_t gfxRdpTmemHashBlockSource(const uint8_t *source,
+    uint32_t first_word, uint32_t word_count, uint16_t dxt)
+{
+    if (!source || word_count == 0u ||
+        word_count > GFX_RDP_TMEM_SOURCE_MEMO_WORDS || first_word > 0xffffu) {
+        return gfxRdpTmemHashBlockSourceUncached(
+            source, first_word, word_count, dxt);
+    }
+    /* Only the odd-line phase of t at the first word matters per word. */
+    const uint8_t *start = source + first_word * GFX_RDP_TMEM_WORD_BYTES;
+    const uint16_t t_phase = (uint16_t)((first_word * (uint32_t)dxt) & 0xfffu);
+    uint32_t victim = 0u;
+    for (uint32_t i = 0u; i < GFX_RDP_TMEM_SOURCE_MEMO_SLOTS; ++i) {
+        if (s_source_memo[i].valid && s_source_memo[i].source == start &&
+            s_source_memo[i].word_count == word_count &&
+            s_source_memo[i].dxt == dxt &&
+            s_source_memo[i].t_phase == t_phase) {
+            if (gfxRdpTmemSourceEqual(start, s_source_memo_bytes[i],
+                    word_count)) {
+                s_source_memo[i].last_use = ++s_source_memo_clock;
+                return s_source_memo[i].hash;
+            }
+            victim = i;
+            break;
+        }
+        if (!s_source_memo[i].valid ||
+            (s_source_memo[victim].valid &&
+             s_source_memo[i].last_use < s_source_memo[victim].last_use)) {
+            victim = i;
+        }
+    }
+
+    const uint64_t hash = gfxRdpTmemHashBlockSourceUncached(
+        source, first_word, word_count, dxt);
+    memcpy(s_source_memo_bytes[victim], start,
+        word_count * GFX_RDP_TMEM_WORD_BYTES);
+    s_source_memo[victim].source = start;
+    s_source_memo[victim].word_count = word_count;
+    s_source_memo[victim].dxt = dxt;
+    s_source_memo[victim].t_phase = t_phase;
+    s_source_memo[victim].hash = hash;
+    s_source_memo[victim].last_use = ++s_source_memo_clock;
+    s_source_memo[victim].valid = true;
+    return hash;
+}
+
+static uint64_t gfxRdpTmemHashBlockSourceUncached(const uint8_t *source,
     uint32_t first_word, uint32_t word_count, uint16_t dxt)
 {
     uint64_t hash = GFX_RDP_TMEM_HASH_SEED;
