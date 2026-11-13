@@ -7,6 +7,10 @@ namespace {
 
 constexpr size_t kClipPlaneCount = 6u;
 
+/* Guard-band scale for the X/Y planes (1 = exact frustum). */
+float s_guard_x = 1.0f;
+float s_guard_y = 1.0f;
+
 float planeDistance(const float *vertex, size_t plane)
 {
     const float x = vertex[0];
@@ -15,10 +19,10 @@ float planeDistance(const float *vertex, size_t plane)
     const float w = vertex[3];
 
     switch (plane) {
-    case 0u: return x + w;
-    case 1u: return w - x;
-    case 2u: return y + w;
-    case 3u: return w - y;
+    case 0u: return x + s_guard_x * w;
+    case 1u: return s_guard_x * w - x;
+    case 2u: return y + s_guard_y * w;
+    case 3u: return s_guard_y * w - y;
     case 4u: return z;
     default: return w - z;
     }
@@ -39,9 +43,30 @@ inline unsigned int clipCode(const float *vertex)
         (w - z < 0.0f ? 32u : 0u);
 }
 
-/* Outcodes of a finite triangle; false if any position is non-finite. */
+/* Same planes widened by the guard band (X/Y only). */
+inline unsigned int guardCode(const float *vertex)
+{
+    const float x = vertex[0];
+    const float y = vertex[1];
+    const float z = vertex[2];
+    const float w = vertex[3];
+    const float gx = s_guard_x * w;
+    const float gy = s_guard_y * w;
+    return (x + gx < 0.0f ? 1u : 0u) |
+        (gx - x < 0.0f ? 2u : 0u) |
+        (y + gy < 0.0f ? 4u : 0u) |
+        (gy - y < 0.0f ? 8u : 0u) |
+        (z < 0.0f ? 16u : 0u) |
+        (w - z < 0.0f ? 32u : 0u);
+}
+
+/*
+ * Outcodes of a finite triangle; false if any position is non-finite.
+ * codes[] use the exact frustum (trivial reject), guard[] the guard band
+ * (accept / clip).
+ */
 inline bool triangleCodes(const float *triangle, size_t stride,
-    unsigned int codes[3])
+    unsigned int codes[3], unsigned int guard[3])
 {
     for (size_t vertex = 0u; vertex < 3u; ++vertex) {
         const float *v = &triangle[vertex * stride];
@@ -50,6 +75,8 @@ inline bool triangleCodes(const float *triangle, size_t stride,
             return false;
         }
         codes[vertex] = clipCode(v);
+        guard[vertex] = s_guard_x == 1.0f && s_guard_y == 1.0f
+            ? codes[vertex] : guardCode(v);
     }
     return true;
 }
@@ -77,23 +104,31 @@ void intersectEdge(float *destination, const float *from, const float *to,
 
 } // namespace
 
-static enum Ps2GsClipClass classifyCodes(const unsigned int codes[3])
+static enum Ps2GsClipClass classifyCodes(const unsigned int codes[3],
+    const unsigned int guard[3])
 {
     if ((codes[0] & codes[1] & codes[2]) != 0u) {
         return PS2_GS_CLIP_REJECT;
     }
-    return (codes[0] | codes[1] | codes[2]) == 0u
+    return (guard[0] | guard[1] | guard[2]) == 0u
         ? PS2_GS_CLIP_ACCEPT : PS2_GS_CLIP_PARTIAL;
+}
+
+void ps2GsClipSetGuardBand(float guard_x, float guard_y)
+{
+    s_guard_x = guard_x >= 1.0f ? guard_x : 1.0f;
+    s_guard_y = guard_y >= 1.0f ? guard_y : 1.0f;
 }
 
 enum Ps2GsClipClass ps2GsClipClassifyTriangle(
     const float *triangle, size_t stride)
 {
     unsigned int codes[3];
-    if (!triangleCodes(triangle, stride, codes)) {
+    unsigned int guard[3];
+    if (!triangleCodes(triangle, stride, codes, guard)) {
         return PS2_GS_CLIP_REJECT;
     }
-    return classifyCodes(codes);
+    return classifyCodes(codes, guard);
 }
 
 bool ps2GsClipTriangle(const float *triangle, size_t stride,
@@ -109,9 +144,10 @@ bool ps2GsClipTriangle(const float *triangle, size_t stride,
     }
 
     unsigned int codes[3];
+    unsigned int guard[3];
     const enum Ps2GsClipClass clip_class =
-        triangleCodes(triangle, stride, codes)
-            ? classifyCodes(codes) : PS2_GS_CLIP_REJECT;
+        triangleCodes(triangle, stride, codes, guard)
+            ? classifyCodes(codes, guard) : PS2_GS_CLIP_REJECT;
     if (clip_class == PS2_GS_CLIP_REJECT) {
         return true;
     }
@@ -131,7 +167,7 @@ bool ps2GsClipTriangle(const float *triangle, size_t stride,
      * is a convex combination of the inputs, so it cannot violate them
      * either. The result is identical to clipping against all six planes.
      */
-    const unsigned int crossed = codes[0] | codes[1] | codes[2];
+    const unsigned int crossed = guard[0] | guard[1] | guard[2];
     constexpr size_t kPoolVertices = 2u * kClipPlaneCount;
     float pool[kPoolVertices][PS2_GS_CLIP_MAX_VERTEX_FLOATS];
     size_t pool_used = 0u;

@@ -318,8 +318,9 @@ static const uint8_t s_geometry_baseline_palette[][3] = {
 };
 #endif
 #if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
+/* Quadword aligned: copied into the VIF1 arena with LQ/SQ. */
 static struct Ps2GsVu1TransformVertex
-    s_vu1_transform_vertices[PS2_GFX_TRANSLATE_VERTS];
+    s_vu1_transform_vertices[PS2_GFX_TRANSLATE_VERTS] __attribute__((aligned(16)));
 #endif
 static struct Ps2AlphaTrilerpVertex
     s_alpha_trilerp_vertices[PS2_GFX_TRANSLATE_VERTS];
@@ -856,7 +857,7 @@ extern "C" void gfxPs2TraceTmemTextureView(uint32_t texture_id,
     s_trace_tmem_snapshot_identity[handle] = view->content_identity;
 }
 
-extern "C" void gfxPs2TraceGfxCommands(
+extern "C" void gfxPs2TraceGfxCommandsImpl(
     const void *commands, uint32_t depth, uint32_t entry_count)
 {
     if (!ps2RendererTraceIsCapturing() || !commands ||
@@ -5217,6 +5218,29 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len,
         if (trace_clip_map) {
             memset(trace_clip_map, 0, trace_clip_map_bytes);
         }
+    }
+
+    /*
+     * Guard band from the viewport: the largest NDC extent whose GS
+     * coordinates still fit the 12.4 primitive range (0..4095) with a margin.
+     * Only geometry beyond it (or crossing near/far) is clipped on the EE;
+     * the scissor discards the off-screen rest.
+     */
+    {
+        const float half_w = (float)s_viewport.width * 0.5f;
+        const float half_h = (float)s_viewport.height * 0.5f;
+        const float cx = (float)s_viewport.x + half_w +
+            (float)ps2GsCoreGetOffsetX();
+        const float cy = (float)s_viewport.y + half_h +
+            (float)ps2GsCoreGetOffsetY();
+        const float margin = 64.0f;
+        float gx = half_w > 0.0f
+            ? ((cx < 4095.0f - cx ? cx : 4095.0f - cx) - margin) / half_w : 1.0f;
+        float gy = half_h > 0.0f
+            ? ((cy < 4095.0f - cy ? cy : 4095.0f - cy) - margin) / half_h : 1.0f;
+        gx = gx > 8.0f ? 8.0f : gx;
+        gy = gy > 8.0f ? 8.0f : gy;
+        ps2GsClipSetGuardBand(gx, gy);
     }
 
     uint32_t trace_clip_chunk = 0u;
