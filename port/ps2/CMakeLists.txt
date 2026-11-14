@@ -33,9 +33,12 @@ option(PD_PS2_ALPHA_MATERIAL_DIAGNOSTIC
   "Render direct TEXEL0 materials while preserving alpha visibility state"
   OFF
 )
+# Off by default since the shuffle sprites became DMA-referenced templates:
+# the whole-tile shuffle costs the EE almost nothing, while computing the
+# per-row spans to skip sprites cost ~8K EE cycles per tile.
 option(PD_PS2_ALPHA_SPARSE_SHUFFLE
   "Omit definitely untouched 8x2 channel-shuffle sprites in alpha pass graphs"
-  ON
+  OFF
 )
 option(PD_PS2_ALPHA_SAME_SAMPLE_FASTPATH
   "Collapse alpha trilerp when both cycles provably sample the same texels"

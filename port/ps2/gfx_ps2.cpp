@@ -5461,7 +5461,12 @@ static int ps2_direct_shader_path(void)
             s_sampler_cmt[0] == s_sampler_cmt[1] &&
             s_sampler_linear[0] == s_sampler_linear[1] ? 2 : 0;
     }
-    return opaque_input1_tex0_lerp ? 0 : 1;
+    if (opaque_input1_tex0_lerp) {
+        /* two passes, batched: needs the writing Z buffer that keeps the
+         * second pass on the first one's pixels (ps2_draw_opaque_input1_tex0_lerp) */
+        return s_depth_test && s_depth_compare && s_depth_update ? 4 : 0;
+    }
+    return 1;
 }
 
 static int ps2_direct_at_path(void);
@@ -5524,6 +5529,8 @@ extern "C" bool gfxPs2DirectQuery(struct GfxPs2DirectContext *ctx)
 
     ctx->trilerp = path == 2;
     ctx->color_only = path == 3;
+    ctx->pass0_a = -1;
+    ctx->pass0_b = -1;
     ctx->fog = s_shader->features.opt_fog;
     ctx->use_alpha = s_shader->features.opt_alpha;
     ctx->num_inputs = (uint8_t)s_shader->features.num_inputs;
@@ -5534,7 +5541,23 @@ extern "C" bool gfxPs2DirectQuery(struct GfxPs2DirectContext *ctx)
     ctx->alpha_input = -1;
     ctx->alpha_const = 0x80u;
 
-    if (path == 2) {
+    if (path == 4) {
+        /* == the translator's opaque_input1_tex0_lerp vertex */
+        const bool modulate = s_shader->plan.color_recipe ==
+            PS2_COLOR_INPUT1_TEX0_LERP_INPUT2_MUL_INPUT3;
+        ctx->two_pass = 1u;
+        ctx->pass0_a = 0;
+        ctx->pass0_b = modulate ? 2 : -1;
+        if (modulate) {
+            ctx->rgb_input = 2;
+            ctx->rgb_lut = s_direct_lut_modulate;
+        } else {
+            ctx->rgb_const = s_direct_lut_modulate[255];
+        }
+        ctx->alpha_input = 1;
+        ctx->alpha_lut = s_direct_lut_modulate;
+        ctx->alpha_from_rgb = 1u;
+    } else if (path == 2) {
         if (s_shader->plan.color_recipe ==
                 PS2_COLOR_TEX01_LERP_INPUT1_MUL_INPUT2) {
             ctx->rgb_input = 1;
@@ -5664,7 +5687,7 @@ static const struct Ps2GsVu1TransformVertex *ps2_object_to_clip(
 
 static void ps2_direct_draw_impl(const struct Ps2GsVu1TransformVertex *vertices,
     uint32_t vertex_count, bool trilerp, bool w_ok, const uint8_t fog_rgb[3],
-    const struct Ps2GsVu1ObjectTransform *object)
+    const struct Ps2GsVu1ObjectTransform *object, const uint32_t *color_pass)
 {
     if (!ps2GsCoreIsReady() || !s_shader || !s_shader->plan.supported ||
         vertex_count == 0u ||
@@ -5711,8 +5734,24 @@ static void ps2_direct_draw_impl(const struct Ps2GsVu1TransformVertex *vertices,
         ps2GsCoreGetOffsetX(), ps2GsCoreGetOffsetY(),
         s_depth_near, s_depth_far, transform_scale, transform_offset);
 
-    const bool at_same_sample = !trilerp && ps2_direct_at_path() == 1;
-    if (trilerp) {
+    const bool at_same_sample = !trilerp && !color_pass && ps2_direct_at_path() == 1;
+    if (color_pass) {
+        /* pass 1: the colour triangles, projected here from the records */
+        const bool fog = s_shader->features.opt_fog;
+        for (uint32_t i = 0u; i < vertex_count; ++i) {
+            const float inv_w = ps2_clip_inv_w(vertices[i].clip[3]);
+            const uint32_t c = color_pass[i];
+            s_color_vertices[i].rgbaq = ps2_pack_rgbaq((uint8_t)c,
+                (uint8_t)(c >> 8), (uint8_t)(c >> 16), 0x80u, 0.0f);
+            s_color_vertices[i].xyz2 = ps2_pack_screen_position(
+                vertices[i].clip[0], vertices[i].clip[1], vertices[i].clip[2],
+                vertices[i].clip[3], inv_w, fog,
+                (uint8_t)(vertices[i].texcoord.xyz_control >> 4));
+        }
+        ps2_input1_tex0_lerp_set_base_state();
+        ps2GsCoreDrawColorTriangles(s_color_vertices, vertex_count);
+        ps2_input1_tex0_lerp_set_texture_state();
+    } else if (trilerp) {
         ps2_trilerp_set_base_state();
     } else if (at_same_sample) {
         ps2_set_alpha_trilerp_same_sample_state();
@@ -5738,7 +5777,7 @@ static void ps2_direct_draw_impl(const struct Ps2GsVu1TransformVertex *vertices,
         ps2GsCoreDrawTexturedTriangles(s_selected_texture[0],
             s_stq_vertices[0], vertex_count);
     }
-    if (trilerp) {
+    if (trilerp || color_pass) {
         ps2_trilerp_restore_state();
     } else if (at_same_sample) {
         ps2_restore_alpha_trilerp_state();
@@ -5759,9 +5798,11 @@ static void ps2_direct_draw_impl(const struct Ps2GsVu1TransformVertex *vertices,
     }
 }
 extern "C" void gfxPs2DirectDraw(const struct Ps2GsVu1TransformVertex *vertices,
-    uint32_t vertex_count, bool trilerp, bool w_ok, const uint8_t fog_rgb[3])
+    uint32_t vertex_count, bool trilerp, bool w_ok, const uint8_t fog_rgb[3],
+    const uint32_t *color_pass)
 {
-    ps2_direct_draw_impl(vertices, vertex_count, trilerp, w_ok, fog_rgb, NULL);
+    ps2_direct_draw_impl(vertices, vertex_count, trilerp, w_ok, fog_rgb, NULL,
+        color_pass);
 }
 
 extern "C" void gfxPs2DirectDrawObject(
@@ -5775,7 +5816,7 @@ extern "C" void gfxPs2DirectDrawObject(
     /* Object blocks are accepted only with every w >= 1e-3 (finite, normal).
      * The impl passes object vertices through untouched or converts them. */
     ps2_direct_draw_impl((const struct Ps2GsVu1TransformVertex *)vertices,
-        vertex_count, trilerp, true, fog_rgb, object);
+        vertex_count, trilerp, true, fog_rgb, object, NULL);
 }
 
 /* Direct colour tables are round(i / 255 * K); report K / 255. */
@@ -6395,9 +6436,11 @@ extern "C" bool gfxPs2DirectQuery(struct GfxPs2DirectContext *ctx)
 }
 
 extern "C" void gfxPs2DirectDraw(const struct Ps2GsVu1TransformVertex *vertices,
-    uint32_t vertex_count, bool trilerp, bool w_ok, const uint8_t fog_rgb[3])
+    uint32_t vertex_count, bool trilerp, bool w_ok, const uint8_t fog_rgb[3],
+    const uint32_t *color_pass)
 {
     (void)vertices; (void)vertex_count; (void)trilerp; (void)w_ok; (void)fog_rgb;
+    (void)color_pass;
 }
 
 extern "C" void gfxPs2DirectDrawObject(

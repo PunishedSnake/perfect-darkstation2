@@ -65,6 +65,7 @@ static union {
  */
 #define PS2_DMA_TAG_ID_CNT 1u
 #define PS2_DMA_TAG_ID_END 7u
+#define PS2_DMA_TAG_ID_REF 3u
 #define PS2_VIF_NOP 0x00u
 #define PS2_VIF_STCYCL 0x01u
 #define PS2_VIF_FLUSH 0x11u
@@ -395,6 +396,58 @@ extern "C" struct Ps2GsPackedReg *ps2GsNativeQueueReserveAd(uint32_t reg_count)
     arena->used_qw += packet_qw;
     arena->open_qw += packet_qw;
     return (struct Ps2GsPackedReg *)(packet + 2);
+}
+
+extern "C" bool ps2GsNativeQueueAppendAdRefs(
+    const struct Ps2GsPackedReg *head, uint32_t head_count,
+    const struct Ps2GsPackedReg *const *parts, const uint32_t *part_counts,
+    uint32_t part_total)
+{
+    if (!s_initialized || head_count == 0u || head_count > 16u || !head) {
+        return false;
+    }
+    uint32_t nloop = head_count;
+    for (uint32_t i = 0u; i < part_total; ++i) {
+        if (part_counts[i] == 0u || part_counts[i] > 0xffffu ||
+            ((uintptr_t)parts[i] & 15u) != 0u) {
+            return false;
+        }
+        nloop += part_counts[i];
+    }
+    if (nloop > PS2_GIF_MAX_NLOOP) {
+        return false;
+    }
+    struct Ps2GsNativeArena *arena = &s_arenas[s_build_arena];
+    /* head tag + GIF tag + head registers, then one REF tag per part */
+    const uint32_t need_qw = 2u + head_count + part_total;
+    if (arena->used_qw + PS2_GS_NATIVE_TAIL_QW > arena->capacity_qw ||
+        need_qw + 1u > arena->capacity_qw - PS2_GS_NATIVE_TAIL_QW - arena->used_qw) {
+        return false;
+    }
+    ps2GsNativeCloseSegment(arena);
+    uint64_t *tag = arena->ucab + (size_t)arena->used_qw * 2u;
+    ps2GsNativeWriteTag(tag, 1u + head_count, PS2_DMA_TAG_ID_CNT,
+        ps2VifCode(0u, 0u, arena->last_was_vu1 ? PS2_VIF_FLUSH : PS2_VIF_NOP),
+        ps2VifCode(1u + head_count, 0u, PS2_VIF_DIRECT));
+    tag[2] = ps2GifPackedAdTag(nloop);
+    tag[3] = PS2_GIF_REG_AD;
+    memcpy(tag + 4, head, (size_t)head_count * 16u);
+    ps2RendererTraceRecordPath3Qwords(tag + 2, 1u + head_count);
+    arena->used_qw += 2u + head_count;
+    for (uint32_t i = 0u; i < part_total; ++i) {
+        /* The GIF packet continues across DIRECT commands: PATH2 carries
+         * the same packet until NLOOP is exhausted. */
+        uint64_t *ref = arena->ucab + (size_t)arena->used_qw * 2u;
+        ref[0] = (uint64_t)(part_counts[i] & 0xffffu) |
+            ((uint64_t)PS2_DMA_TAG_ID_REF << 28) |
+            ((uint64_t)((uintptr_t)parts[i] & 0x7fffffffu) << 32);
+        ref[1] = (uint64_t)ps2VifCode(0u, 0u, PS2_VIF_NOP) |
+            ((uint64_t)ps2VifCode(part_counts[i], 0u, PS2_VIF_DIRECT) << 32);
+        arena->used_qw += 1u;
+    }
+    arena->last_was_vu1 = false;
+    arena->has_gif_since_vu1 = true;
+    return true;
 }
 
 extern "C" uint32_t *ps2GsNativeQueueReserveVu1Batch(uint32_t input_qw,

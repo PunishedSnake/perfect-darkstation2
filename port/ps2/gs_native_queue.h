@@ -33,6 +33,18 @@ void ps2GsNativeQueueBeginFrame(void);
  */
 struct Ps2GsPackedReg *ps2GsNativeQueueReserveAd(uint32_t reg_count);
 
+/*
+ * One A+D packet whose first head_count registers are copied into the arena
+ * and whose remaining registers are DMA-referenced in place (REF tags), in
+ * order. Referenced storage must be 16-byte aligned, written back from the
+ * data cache and unchanged until the frame's chain has been consumed. False
+ * (nothing emitted) when it does not fit; the caller then copies instead.
+ */
+bool ps2GsNativeQueueAppendAdRefs(
+    const struct Ps2GsPackedReg *head, uint32_t head_count,
+    const struct Ps2GsPackedReg *const *parts, const uint32_t *part_counts,
+    uint32_t part_total);
+
 /* Submit the active draw/state arena to GIF DMA. Never waits for GS FINISH/VSync. */
 bool ps2GsNativeQueueSubmit(void);
 
