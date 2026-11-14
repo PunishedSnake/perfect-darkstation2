@@ -5493,7 +5493,7 @@ static bool ps2_direct_at_same_sample_eligible(void)
 
 extern "C" bool gfxPs2DirectQuery(struct GfxPs2DirectContext *ctx)
 {
-    memset(ctx, 0, sizeof(*ctx));
+    *ctx = GfxPs2DirectContext();
     if (!ps2GsCoreIsReady() || ps2RendererTraceIsCapturing() ||
         s_fb_draw_target != 0 || s_fb_texture != 0 || s_depth_decal) {
         return false;
@@ -6272,7 +6272,7 @@ extern "C" void gfxPs2DirectDrawAT(const uint8_t fog_rgb[3])
 #else
 extern "C" bool gfxPs2DirectQuery(struct GfxPs2DirectContext *ctx)
 {
-    memset(ctx, 0, sizeof(*ctx));
+    *ctx = GfxPs2DirectContext();
     return false;
 }
 

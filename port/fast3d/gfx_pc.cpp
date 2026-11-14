@@ -452,7 +452,12 @@ static inline void gfx_ps2_direct_invalidate_vertices(size_t first, size_t count
     if (count > MAX_VERTICES - first) {
         count = MAX_VERTICES - first;
     }
-    memset(&gfx_ps2_direct.tag[first], 0, count * sizeof(gfx_ps2_direct.tag[0]));
+    /* Plain word stores: newlib's memset takes its byte loop for these
+     * short, odd-sized ranges, and this runs on every G_VTX. */
+    uint32_t* direct_tag = &gfx_ps2_direct.tag[first];
+    for (size_t i = 0; i < count; ++i) {
+        direct_tag[i] = 0;
+    }
     gfx_ps2_at_invalidate_vertices(first, count);
 }
 
@@ -2652,7 +2657,10 @@ static void gfx_ps2_at_build_map(const struct GfxTriSetup* S) {
 
 static inline void gfx_ps2_at_invalidate_vertices(size_t first, size_t count) {
     /* range already clamped by gfx_ps2_direct_invalidate_vertices */
-    memset(&gfx_ps2_at.tag[first], 0, count * sizeof(gfx_ps2_at.tag[0]));
+    uint32_t* tag = &gfx_ps2_at.tag[first];
+    for (size_t i = 0; i < count; ++i) {
+        tag[i] = 0;
+    }
 }
 
 static void gfx_ps2_at_flush(void) {
