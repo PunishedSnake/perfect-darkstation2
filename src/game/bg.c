@@ -1,3 +1,6 @@
+#ifdef PLATFORM_PS2
+#include "texmem_epoch.h"
+#endif
 #include <ultra64.h>
 #include "constants.h"
 #include "game/debug.h"
@@ -2661,6 +2664,9 @@ void bgPrintLoadedRooms(void)
 
 u32 bgInflate(u8 *src, u8 *dst, u32 len)
 {
+#ifdef PLATFORM_PS2
+	texmemNoteWrite();
+#endif
 	u32 result;
 	u8 scratch[5120];
 #if VERSION < VERSION_NTSC_1_0

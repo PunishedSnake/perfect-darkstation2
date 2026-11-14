@@ -1555,6 +1555,60 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx* verti
             }
         }
     }
+#if defined(PLATFORM_PS2) && defined(_EE)
+    /*
+     * VU0 lighting: the four directional lights' coefficients as columns
+     * (one intensity per lane), their colours, the ambient colour and the
+     * two lookat rows stay in VF registers for the whole call. Unused lights
+     * have zero coefficients and colours, so every vertex runs the same
+     * branch-free sequence; a zero or negative intensity adds exactly 0.
+     */
+    float lit_cx[4] __attribute__((aligned(16))) = { 0, 0, 0, 0 };
+    float lit_cy[4] __attribute__((aligned(16))) = { 0, 0, 0, 0 };
+    float lit_cz[4] __attribute__((aligned(16))) = { 0, 0, 0, 0 };
+    float lit_col[4][4] __attribute__((aligned(16))) = { { 0 } };
+    int32_t lit_amb[4] __attribute__((aligned(16))) = { ambient_r, ambient_g, ambient_b, 0 };
+    float la_x[4] __attribute__((aligned(16))) = { 0, 0, 0, 0 };
+    float la_y[4] __attribute__((aligned(16))) = { 0, 0, 0, 0 };
+    float la_z[4] __attribute__((aligned(16))) = { 0, 0, 0, 0 };
+    int32_t nrm_in[4] __attribute__((aligned(16))) = { 0, 0, 0, 0 };
+    int32_t lit_out[4] __attribute__((aligned(16)));
+    float la_out[4] __attribute__((aligned(16)));
+    if (lighting) {
+        for (int i = 0; i < num_dir_lights && i < 4; i++) {
+            lit_cx[i] = light_coeffs[i][0];
+            lit_cy[i] = light_coeffs[i][1];
+            lit_cz[i] = light_coeffs[i][2];
+            lit_col[i][0] = light_cols[i][0];
+            lit_col[i][1] = light_cols[i][1];
+            lit_col[i][2] = light_cols[i][2];
+        }
+        if (rsp.lookat_enabled) {
+            for (int i = 0; i < 2; i++) {
+                la_x[i] = rsp.current_lookat_coeffs[i][0];
+                la_y[i] = rsp.current_lookat_coeffs[i][1];
+                la_z[i] = rsp.current_lookat_coeffs[i][2];
+            }
+        }
+        __asm__ __volatile__(
+            "lqc2    $vf8, 0(%0)\n\t"
+            "lqc2    $vf9, 0(%1)\n\t"
+            "lqc2    $vf10, 0(%2)\n\t"
+            "lqc2    $vf11, 0(%3)\n\t"
+            "lqc2    $vf12, 16(%3)\n\t"
+            "lqc2    $vf13, 32(%3)\n\t"
+            "lqc2    $vf14, 48(%3)\n\t"
+            "lqc2    $vf20, 0(%4)\n\t"
+            "vitof0.xyz $vf20, $vf20\n\t"
+            "lqc2    $vf16, 0(%5)\n\t"
+            "lqc2    $vf17, 0(%6)\n\t"
+            "lqc2    $vf18, 0(%7)\n\t"
+            :
+            : "r"(lit_cx), "r"(lit_cy), "r"(lit_cz), "r"(lit_col), "r"(lit_amb),
+              "r"(la_x), "r"(la_y), "r"(la_z)
+            : "memory");
+    }
+#endif
 
 #if defined(GFX_PS2_DIRECT)
     gfx_ps2_direct_invalidate_vertices(dest_index, n_vertices);
@@ -1604,6 +1658,48 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx* verti
         const struct NormalColor *vcn = &rsp.vertex_colors[v->colour >> 2];
 
         if (lighting) {
+#if defined(PLATFORM_PS2) && defined(_EE)
+            /* Intensities of all four lights in one MULA/MADDA/MADD chain,
+             * clamped at zero, then accumulated per light with the same
+             * truncate-to-int after every light as the scalar loop. Also the
+             * two lookat dot products for texture generation. */
+            nrm_in[0] = vcn->x;
+            nrm_in[1] = vcn->y;
+            nrm_in[2] = vcn->z;
+            __asm__ __volatile__(
+                "lqc2    $vf1, 0(%2)\n\t"
+                "vitof0.xyz $vf1, $vf1\n\t"
+                "vmulax.xyzw  $ACC, $vf8, $vf1x\n\t"
+                "vmadday.xyzw $ACC, $vf9, $vf1y\n\t"
+                "vmaddz.xyzw  $vf2, $vf10, $vf1z\n\t"
+                "vmulax.xy    $ACC, $vf16, $vf1x\n\t"
+                "vmadday.xy   $ACC, $vf17, $vf1y\n\t"
+                "vmaddz.xy    $vf19, $vf18, $vf1z\n\t"
+                "vmaxx.xyzw   $vf2, $vf2, $vf0x\n\t"
+                "vaddax.xyz   $ACC, $vf20, $vf0x\n\t"
+                "vmaddx.xyz   $vf3, $vf11, $vf2x\n\t"
+                "vftoi0.xyz   $vf3, $vf3\n\t"
+                "vitof0.xyz   $vf3, $vf3\n\t"
+                "vaddax.xyz   $ACC, $vf3, $vf0x\n\t"
+                "vmaddy.xyz   $vf3, $vf12, $vf2y\n\t"
+                "vftoi0.xyz   $vf3, $vf3\n\t"
+                "vitof0.xyz   $vf3, $vf3\n\t"
+                "vaddax.xyz   $ACC, $vf3, $vf0x\n\t"
+                "vmaddz.xyz   $vf3, $vf13, $vf2z\n\t"
+                "vftoi0.xyz   $vf3, $vf3\n\t"
+                "vitof0.xyz   $vf3, $vf3\n\t"
+                "vaddax.xyz   $ACC, $vf3, $vf0x\n\t"
+                "vmaddw.xyz   $vf3, $vf14, $vf2w\n\t"
+                "vftoi0.xyz   $vf3, $vf3\n\t"
+                "sqc2    $vf3, 0(%0)\n\t"
+                "sqc2    $vf19, 0(%1)\n\t"
+                :
+                : "r"(lit_out), "r"(la_out), "r"(nrm_in)
+                : "memory");
+            const int r = lit_out[0];
+            const int g = lit_out[1];
+            const int b = lit_out[2];
+#else
             int r = ambient_r;
             int g = ambient_g;
             int b = ambient_b;
@@ -1617,6 +1713,7 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx* verti
                     b += intensity * light_cols[i][2];
                 }
             }
+#endif
 
             d->color.r = r > 255 ? 255 : r;
             d->color.g = g > 255 ? 255 : g;
@@ -1625,6 +1722,10 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx* verti
             if (rsp.geometry_mode & G_TEXTURE_GEN) {
                 float dotx = 0, doty = 0;
                 if (rsp.lookat_enabled) {
+#if defined(PLATFORM_PS2) && defined(_EE)
+                    dotx = la_out[0] / 127.0f;
+                    doty = la_out[1] / 127.0f;
+#else
                     dotx += vcn->x * rsp.current_lookat_coeffs[0][0];
                     dotx += vcn->y * rsp.current_lookat_coeffs[0][1];
                     dotx += vcn->z * rsp.current_lookat_coeffs[0][2];
@@ -1633,6 +1734,7 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx* verti
                     doty += vcn->z * rsp.current_lookat_coeffs[1][2];
                     dotx /= 127.0f;
                     doty /= 127.0f;
+#endif
                 } else {
                     float tvcn[3];
                     calculate_normal_dir(vcn, tvcn);

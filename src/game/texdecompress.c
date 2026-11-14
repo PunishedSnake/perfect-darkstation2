@@ -1,3 +1,6 @@
+#ifdef PLATFORM_PS2
+#include "texmem_epoch.h"
+#endif
 #include <ultra64.h>
 #include "constants.h"
 #include "game/tex.h"
@@ -2095,6 +2098,9 @@ void texBlur(u8 *pixels, s32 width, s32 height, s32 method, s32 chansize)
 
 void texInitPool(struct texpool *pool, u8 *start, s32 len)
 {
+#ifdef PLATFORM_PS2
+	texmemNoteWrite();
+#endif
 	pool->start = start;
 	pool->end = (struct tex *)(start + len);
 	pool->leftpos = start;
@@ -2211,6 +2217,9 @@ extern u8 EXT_SEG _texturesdataSegmentRomStart;
  */
 void texLoad(texnum_t *updateword, struct texpool *pool, bool unusedarg)
 {
+#ifdef PLATFORM_PS2
+	texmemNoteWrite();
+#endif
 	u8 compbuffer[4 * 1024 + 0x40];
 	u8 *compptr;
 	s32 hasloddata;

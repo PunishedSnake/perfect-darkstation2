@@ -3,6 +3,7 @@
 #include "rdp_tmem_trace.h"
 #include "rdp_tmem_live.h"
 #include "rdp_tmem.h"
+#include "texmem_epoch.h"
 
 /*
  * gfx_pc.cpp is compiled on PS2 with gfx_run renamed to gfx_run_ps2_impl.
@@ -20,8 +21,15 @@ extern "C" void gfx_run(Gfx *commands)
 #if defined(PD_PS2_TMEM_SHADOW_REPLAY)
     gfxRdpTmemTraceDisplayList(commands);
 #endif
-    /* The game may have rewritten texture memory since the last run. */
-    gfxRdpTmemSourceMemoNewEpoch();
+    /*
+     * Texture identities verified in earlier runs stay valid until the game
+     * writes memory a texture may live in (see texmem_epoch.h).
+     */
+    static unsigned int s_seen_texmem_epoch = ~0u;
+    if (g_TexMemWriteEpoch != s_seen_texmem_epoch) {
+        s_seen_texmem_epoch = g_TexMemWriteEpoch;
+        gfxRdpTmemSourceMemoNewEpoch();
+    }
     gfx_run_ps2_impl(commands);
     /* Lazy block loads reference display-list source RAM; settle them
      * before the game can change it for the next frame. */
