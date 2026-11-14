@@ -2788,6 +2788,12 @@ __attribute__((noinline)) static void gfx_sp_tri1_emit(uint8_t vtx1_idx, uint8_t
         gfx_tri_setup(&gfx_tri_setup_cache, false);
         gfx_tri_setup_cache.valid = true;
 #if defined(GFX_PS2_DIRECT)
+        {
+            const struct GfxTriSetup* T = &gfx_tri_setup_cache;
+            gfxPs2DirectSetATSameCoords(T->used_textures[0] && T->used_textures[1] &&
+                                        T->u_scale[0] == T->u_scale[1] && T->u_bias[0] == T->u_bias[1] &&
+                                        T->v_scale[0] == T->v_scale[1] && T->v_bias[0] == T->v_bias[1]);
+        }
         gfx_ps2_direct_refresh(&gfx_tri_setup_cache);
         if (++gfx_ps2_at.serial == 0) {
             gfx_ps2_at.serial = 1;
@@ -2795,12 +2801,6 @@ __attribute__((noinline)) static void gfx_sp_tri1_emit(uint8_t vtx1_idx, uint8_t
         gfx_ps2_at.path = 0;
         if (!gfx_ps2_direct.active && !gfx_tri_setup_cache.depth_source_prim &&
             !gfx_tri_setup_cache.use_grayscale) {
-            {
-                const struct GfxTriSetup* T = &gfx_tri_setup_cache;
-                gfxPs2DirectSetATSameCoords(T->used_textures[0] && T->used_textures[1] &&
-                                            T->u_scale[0] == T->u_scale[1] && T->u_bias[0] == T->u_bias[1] &&
-                                            T->v_scale[0] == T->v_scale[1] && T->v_bias[0] == T->v_bias[1]);
-            }
             gfx_ps2_at.path = gfxPs2DirectQueryAT();
             if (gfx_ps2_at.path != 0) {
                 gfxPs2DirectUpdateGuard(&gfx_ps2_at.gx, &gfx_ps2_at.gy);
