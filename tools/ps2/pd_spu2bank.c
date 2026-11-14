@@ -2,7 +2,11 @@
  * pd_spu2bank: transcode Perfect Dark's audio sample banks into a PS-ADPCM
  * bank for the PS2 SPU2 hardware-voice path (docs/ps2-spu2-audio.md).
  *
- *   pd_spu2bank <rom.z64> <out.pssb> [--verify]
+ *   pd_spu2bank <rom> [out.pssb] [--verify]
+ *
+ * The ROM may be .z64, .v64 or .n64 byte order. Without an output path the
+ * bank is written as pd.pssb next to the ROM (so the ROM can be dragged onto
+ * the executable on Windows).
  *
  * Walks sfx.ctl and seq.ctl in the (big-endian, byte-order .z64) ROM, decodes
  * every referenced wavetable (VADPCM or raw PCM16) and encodes it as
@@ -457,13 +461,81 @@ static void put16(uint8_t *p, uint16_t v)
     p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8);
 }
 
+/* Converts .v64 (16-bit swapped) and .n64 (32-bit little-endian) images
+ * to .z64 order in place. Returns false for anything else. */
+static bool rom_to_z64(uint8_t *rom, size_t size)
+{
+    const uint32_t w = (uint32_t)rom[0] << 24 | (uint32_t)rom[1] << 16 |
+                       (uint32_t)rom[2] << 8 | rom[3];
+    if (w == 0x80371240u) {
+        return true;
+    }
+    if (w == 0x37804012u) {
+        for (size_t i = 0; i + 1 < size; i += 2) {
+            const uint8_t t = rom[i]; rom[i] = rom[i + 1]; rom[i + 1] = t;
+        }
+        return true;
+    }
+    if (w == 0x40123780u) {
+        for (size_t i = 0; i + 3 < size; i += 4) {
+            uint8_t t = rom[i]; rom[i] = rom[i + 3]; rom[i + 3] = t;
+            t = rom[i + 1]; rom[i + 1] = rom[i + 2]; rom[i + 2] = t;
+        }
+        return true;
+    }
+    return false;
+}
+
+static int run(int argc, char **argv);
+
 int main(int argc, char **argv)
 {
-    if (argc < 3) {
-        fprintf(stderr, "usage: %s <rom.z64> <out.pssb> [--verify]\n", argv[0]);
+    const int rc = run(argc, argv);
+#if defined(_WIN32)
+    /* Dragged onto the exe: keep the window open to show the result. */
+    if (argc == 2) {
+        printf("\nPress Enter to close.");
+        fflush(stdout);
+        (void)getchar();
+    }
+#endif
+    return rc;
+}
+
+static int run(int argc, char **argv)
+{
+    if (argc < 2) {
+        fprintf(stderr,
+            "usage: %s <rom.z64|.v64|.n64> [out.pssb] [--verify]\n"
+            "Without out.pssb the bank is written as pd.pssb next to the ROM.\n",
+            argv[0]);
         return 2;
     }
-    const bool verify = argc > 3 && strcmp(argv[3], "--verify") == 0;
+    bool verify = false;
+    const char *out_arg = NULL;
+    for (int i = 2; i < argc; ++i) {
+        if (strcmp(argv[i], "--verify") == 0) {
+            verify = true;
+        } else if (!out_arg) {
+            out_arg = argv[i];
+        }
+    }
+    static char out_buf[4096];
+    if (!out_arg) {
+        const char *slash = strrchr(argv[1], '/');
+        const char *bslash = strrchr(argv[1], '\\');
+        if (bslash && (!slash || bslash > slash)) {
+            slash = bslash;
+        }
+        const size_t dir = slash ? (size_t)(slash - argv[1] + 1) : 0;
+        if (dir + 8 >= sizeof(out_buf)) {
+            fprintf(stderr, "path too long\n");
+            return 1;
+        }
+        memcpy(out_buf, argv[1], dir);
+        memcpy(out_buf + dir, "pd.pssb", 8);
+        out_arg = out_buf;
+    }
     FILE *f = fopen(argv[1], "rb");
     if (!f) {
         perror(argv[1]);
@@ -478,8 +550,8 @@ int main(int argc, char **argv)
         return 1;
     }
     fclose(f);
-    if (s_rom_size < 0x40 || be32(0) != 0x80371240u) {
-        fprintf(stderr, "%s: not a big-endian .z64 ROM\n", argv[1]);
+    if (s_rom_size < 0x40 || !rom_to_z64(s_rom, s_rom_size)) {
+        fprintf(stderr, "%s: not an N64 ROM image (.z64, .v64 or .n64)\n", argv[1]);
         return 1;
     }
 
@@ -626,9 +698,9 @@ int main(int argc, char **argv)
     put32(header + 16, (uint32_t)data_len);
     put32(header + 20, crc);
 
-    FILE *o = fopen(argv[2], "wb");
+    FILE *o = fopen(out_arg, "wb");
     if (!o) {
-        perror(argv[2]);
+        perror(out_arg);
         return 1;
     }
     static const uint8_t pad[16];
@@ -647,6 +719,7 @@ int main(int argc, char **argv)
     if (verify) {
         printf("worst round-trip SNR %.1f dB\n", worst_snr);
     }
+    printf("wrote %s\n", out_arg);
     free(entries);
     free(data);
     free(s_rom);

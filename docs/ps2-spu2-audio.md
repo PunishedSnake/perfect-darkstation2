@@ -1,4 +1,4 @@
-# SPU2 hardware-voice audio (plan and groundwork)
+# SPU2 hardware-voice audio
 
 ## Why
 
@@ -64,18 +64,30 @@ Voice commands are batched per audio frame into one SIF RPC to the IRX.
 
 ## Using it
 
-1. Build the bank once per ROM on a PC:
+The bank is optional but recommended: without it the game falls back to the
+EE software mixer, which costs several milliseconds per frame. It has to be
+built from your own ROM, so it is never shipped with the game.
 
-       cc -O2 -Iport/ps2 -Iport/include tools/ps2/pd_spu2bank.c \
-           port/ps2/spu2_adpcm.c -lz -lm -o pd_spu2bank
-       ./pd_spu2bank pd.ntsc-final.z64 pd.pssb --verify
+1. Get `pd_spu2bank`:
+   * **Prebuilt:** download it from the
+     [SPU2 bank tool releases](https://github.com/PunishedSnake/perfect-darkstation2/releases?q=tools-spu2bank)
+     or the latest *SPU2 bank tool* workflow run (Linux x86_64 static,
+     Windows x86_64, macOS x86_64 and arm64).
+   * **From source:** `tools/ps2/build_spu2bank.sh` (needs a C compiler and
+     zlib). The same script cross-builds the release binaries with zig.
+2. Run it on the ROM. `.z64`, `.v64` and `.n64` byte orders all work:
 
+       pd_spu2bank pd.ntsc-final.z64            # writes pd.pssb next to the ROM
+       pd_spu2bank pd.ntsc-final.z64 out.pssb --verify
+
+   On Windows you can drag the ROM onto `pd_spu2bank-x86_64-windows-gnu.exe`.
    NTSC final gives 961 samples (7.7 MiB of PS-ADPCM, 138 looped) plus
    548 speech clips (21.6 MiB, 30 minutes), 29 MiB in all, in about six
-   seconds. A bank built before the speech clips were added still works;
-   speech then stays on the software decoder.
-2. Copy `pd.pssb` next to the ROM (for example `mass:PDPS2/`).
-3. Start the game. The log shows `SPU2 voices: on, 1509 samples ...`.
+   seconds. The result for NTSC final has CRC `48d1e507` (printed by the tool).
+   A bank built before the speech clips were added still works; speech then
+   stays on the software decoder.
+3. Copy `pd.pssb` next to the ELF and ROM (for example `mass:PDPS2/`).
+4. Start the game. The log shows `SPU2 voices: on, 1509 samples ...`.
    `Audio.HardwareVoices=0` in the config turns it off; without the file
    the software mixer is used as before.
 

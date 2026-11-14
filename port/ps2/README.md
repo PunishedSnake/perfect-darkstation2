@@ -8,25 +8,15 @@ asset is included in source control or CI artifacts.
 
 ## Current status
 
-`pd_ps2_game` is a complete EE link frontier, not a renderer-only demo. It
-contains the portable Perfect Dark runtime, ROM-backed assets, DualShock 2
-input, SPU2 output, Fast3D command translation, the native GS backend and VU1
-microprograms.
+`pd_ps2_game` is the complete game: the portable Perfect Dark runtime,
+ROM-backed assets, DualShock 2 input, SPU2 hardware-voice audio through the
+project IOP module, the Emotion3D renderer (native GS backend, VU0 macro code
+and VU1 microprograms).
 
-Real hardware has confirmed through the 2026-09-15 no-file-log build:
-
-- system, filesystem and logger startup;
-- bounded loading of the NTSC-final ROM data segment;
-- GS presentation and the native renderer;
-- DualShock 2 discovery and corrected stick extrema;
-- the legal screen followed by the Rare, Nintendo 64 and Perfect Dark logos;
-- the main menu and mission loading;
-- EEPROM creation through the portable libultra interface.
-
-The title, menu and missions still contain major texture, material and effect
-errors. This is not a playable release. The earlier apparent post-LEGAL hang
-was isolated to synchronous file logging on the launch device, not to title
-progress or GS presentation.
+As of November 2026 retail hardware runs the title sequence, menus, mission
+loading and gameplay with cutscenes, characters, sound and speech. Remaining
+work is performance and a few materials; see
+[docs/PS2_DEVELOPMENT.md](../../docs/PS2_DEVELOPMENT.md). This is not a release.
 
 ## Required files
 
@@ -39,6 +29,11 @@ pd.ntsc-final.z64
 
 The ROM must be a legally obtained NTSC-final / US v1.1 big-endian `.z64`
 image. Its MD5 is `e03b088b6ac9e0080440efed07c1e40f`.
+
+Optional, strongly recommended: `pd.pssb`, the SPU2 sound bank built from the
+same ROM with `pd_spu2bank` (see
+[docs/ps2-spu2-audio.md](../../docs/ps2-spu2-audio.md)). Without it the game
+uses the EE software mixer.
 
 On first start the game also creates these files beside the ELF:
 

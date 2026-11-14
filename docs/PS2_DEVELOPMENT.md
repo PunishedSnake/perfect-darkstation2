@@ -1,6 +1,6 @@
 # PS2 development guide
 
-Updated: 2026-09-18
+Updated: 2026-11-14
 
 This is the canonical developer-facing guide for the Perfect DarkStation 2 port. It describes the current development branch, the shortest build/test loop and the active technical frontier.
 
@@ -39,37 +39,40 @@ Use short-lived branches from `ps2` for risky or independently testable changes,
 
 Keep changes small enough that a retail-hardware regression can be bisected.
 
-## Current validated frontier
+## Current frontier
 
-Retail PlayStation 2 testing has confirmed the normal game ELF through:
+Retail PlayStation 2 testing covers the full startup chain, the title
+sequence, menus, mission loading and gameplay with cutscenes, characters,
+SPU2 audio and speech. Reaching the game is no longer the problem.
 
-```text
-ELF startup
- -> filesystem/config
- -> ROM validation and streaming
- -> PAD/SPU2/GS initialization
- -> Perfect Dark runtime initialization
- -> LEGAL / Expansion Pak screen
- -> Rare logo
- -> Nintendo 64 logo
- -> Perfect Dark logo
- -> main menu
- -> mission loading
-```
+Work is now about speed and the remaining materials, under the rule "don't do
+unnecessary work": move work to the GS, VU0, VU1 and IOP where it wins on
+hardware, and keep the EE for game logic.
 
-This means startup reachability is no longer the primary problem.
+Done so far (details in [ps2-emotion3d.md](ps2-emotion3d.md) and the pull
+requests):
 
-The current high-value work is:
+| Area | State |
+| --- | --- |
+| GS transport | Native GIF/VIF packet queue, arena self-spill (no dropped frames), packed V4-16 object vertices. |
+| Rooms | Compiled room geometry and lazy palettes (Emotion3D stages 1-2). |
+| Object geometry | Object-space G_VTX blocks transformed and packed on VU1. |
+| Characters | VU1 skin: palette per matrix epoch, Fast3D lighting, texgen, LOD alpha, cull (stage 5, default on). |
+| Materials | One-pass and multipass combiner plans; same-sample alpha trilerp on VU1; two-pass opaque trilerp on the skin path; texture clamps on the direct path. |
+| Audio | SPU2 hardware voices, per-area reverb and speech from the `pd.pssb` bank via the project IOP module `pdsnd.irx`. |
+| EE runtime | EE-specific soft-double, memcpy/memset; VU0 transforms and lighting. |
 
-1. renderer correctness in real title/menu/game scenes;
-2. unsupported combiner coverage;
-3. texture/material fidelity;
-4. framebuffer-copy and offscreen effects;
-5. VIF1/VU1/PATH3 synchronization validation;
-6. display-list command-budget hardening;
-7. measured performance work once the rendered output is trustworthy.
+Open, in order:
 
-The port is not yet a playable release.
+1. EE preparation cost of the skin path (matrix snaps, per-load bounds):
+   characters should be clearly cheaper, not just at parity.
+2. Fallback materials: the alpha-add window material (graph 5),
+   independent-alpha trilerp (graph 4), two-pass input lerp (graph 2).
+3. Engine features rewritten around the GS and vector units.
+4. Framebuffer copies and off-screen effects.
+5. Hardware confirmation of every PCSX2 measurement.
+
+The port is not yet a release.
 
 ## Build loop
 
@@ -177,7 +180,14 @@ The capture is intentionally synchronous only for the selected diagnostic frame.
 
 Enable `--file-log` only for controlled startup/fatal-boundary diagnostics. Do not use it as a normal performance or gameplay logging mode.
 
-### 6. Hardware test ELF
+### 6. PCSX2 timing
+
+For A/B timing, run the same ELF twice with different `pd.ini` switches
+(for example `Video.Ps2Emotion3DSkin=0/1`) over the same scene and compare
+per-frame `gfx`/`logic` times. Emulator timing ranks changes; only hardware
+confirms them. See [PS2_PCSX2_DEBUGGING.md](PS2_PCSX2_DEBUGGING.md).
+
+### 7. Hardware test ELF
 
 Use the owned-IOP game ELF from the current PS2 CI run. Earlier bootstrap and
 VU1 color test results are historical records:
@@ -191,12 +201,12 @@ The active path is:
 
 ```text
 Perfect Dark GBI
- -> portable Fast3D
+ -> Emotion3D front end (compiled rooms, model programs) / Fast3D for the rest
  -> RDP/TMEM model
  -> PS2 combiner/pass planner
- -> VIF1/VU1/PATH1 when supported
- -> CPU/PATH3 fallback otherwise
- -> GS
+ -> VU1 object and skin batches (PATH1) when supported
+ -> EE direct draws / fallbacks (PATH3) otherwise
+ -> native GIF/VIF queue -> GS
  -> VBlank presentation
 ```
 
