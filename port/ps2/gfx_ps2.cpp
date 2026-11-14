@@ -6013,6 +6013,23 @@ __attribute__((constructor)) static void ps2_object_geometry_config_init(void)
     configRegisterInt("Video.Ps2ObjectGeometry", &s_object_geometry, 0, 1);
 }
 
+/*
+ * Video.Ps2Emotion3D (default 1): room leaves are compiled once and replayed
+ * through the object batches (port/fast3d/e3d_room_ps2.inc). 0 runs them as
+ * plain display lists, for A/B checks.
+ */
+static int32_t s_emotion3d = 1;
+
+__attribute__((constructor)) static void ps2_emotion3d_config_init(void)
+{
+    configRegisterInt("Video.Ps2Emotion3D", &s_emotion3d, 0, 1);
+}
+
+extern "C" bool gfxPs2Emotion3DEnabled(void)
+{
+    return s_emotion3d != 0;
+}
+
 extern "C" bool gfxPs2ObjectGeometryEnabled(void)
 {
     return s_object_geometry != 0 && ps2GsVu1QueueEnabled();
@@ -6601,6 +6618,7 @@ extern "C" void gfxPs2DirectDrawObject(
 }
 extern "C" bool gfxPs2DirectLutScale(const uint8_t *lut, float *scale) { (void)lut; (void)scale; return false; }
 extern "C" bool gfxPs2ObjectGeometryEnabled(void) { return false; }
+extern "C" bool gfxPs2Emotion3DEnabled(void) { return false; }
 extern "C" void gfxPs2DirectPeekGuard(float *gx, float *gy) { *gx = 1.0f; *gy = 1.0f; }
 extern "C" bool gfxPs2DirectFogLinear(void) { return false; }
 
