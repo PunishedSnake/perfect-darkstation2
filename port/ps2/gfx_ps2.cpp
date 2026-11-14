@@ -5324,10 +5324,11 @@ static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len,
     {
         const float half_w = (float)s_viewport.width * 0.5f;
         const float half_h = (float)s_viewport.height * 0.5f;
+        /* gsKit's offsets are in 12.4 fixed point (2048 px = 32768). */
         const float cx = (float)s_viewport.x + half_w +
-            (float)ps2GsCoreGetOffsetX();
+            (float)ps2GsCoreGetOffsetX() * (1.0f / 16.0f);
         const float cy = (float)s_viewport.y + half_h +
-            (float)ps2GsCoreGetOffsetY();
+            (float)ps2GsCoreGetOffsetY() * (1.0f / 16.0f);
         const float margin = 64.0f;
         float gx = half_w > 0.0f
             ? ((cx < 4095.0f - cx ? cx : 4095.0f - cx) - margin) / half_w : 1.0f;
@@ -5554,10 +5555,11 @@ extern "C" void gfxPs2DirectUpdateGuard(float *out_gx, float *out_gy)
     {
         const float half_w = (float)s_viewport.width * 0.5f;
         const float half_h = (float)s_viewport.height * 0.5f;
+        /* gsKit's offsets are in 12.4 fixed point (2048 px = 32768). */
         const float cx = (float)s_viewport.x + half_w +
-            (float)ps2GsCoreGetOffsetX();
+            (float)ps2GsCoreGetOffsetX() * (1.0f / 16.0f);
         const float cy = (float)s_viewport.y + half_h +
-            (float)ps2GsCoreGetOffsetY();
+            (float)ps2GsCoreGetOffsetY() * (1.0f / 16.0f);
         const float margin = 64.0f;
         float gx = half_w > 0.0f
             ? ((cx < 4095.0f - cx ? cx : 4095.0f - cx) - margin) / half_w : 1.0f;
