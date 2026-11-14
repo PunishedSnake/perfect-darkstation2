@@ -254,6 +254,20 @@ bool gfxPs2DirectQuery(struct GfxPs2DirectContext *ctx);
 int gfxPs2DirectQueryAT(void);
 void gfxPs2DirectUpdateGuard(float *guard_x, float *guard_y);
 void gfxPs2DirectFillAT(uint32_t slot, const float *vbo_vertex);
+/* The same fill from the loaded vertex's raw values: clip-space position,
+ * texture coordinates, the fog byte and the combiner inputs as bytes
+ * (missing inputs and alphas are 255). Bit-identical to the float path. */
+struct Ps2ATSource {
+    float pos[4];
+    float u[2];
+    float v[2];
+    uint8_t fog;
+    uint8_t in[3][4];
+};
+void gfxPs2DirectFillATSource(uint32_t slot, const struct Ps2ATSource *src);
+/* Unit table (i / 255) the frontend converts bytes with, so the backend's
+ * byte lookups reproduce the float path exactly. */
+void gfxPs2DirectSetUnitTable(const float *u8_unit);
 uint32_t gfxPs2DirectATCapacity(void);
 uint32_t gfxPs2DirectATCount(void);
 void gfxPs2DirectAppendAT(uint32_t a, uint32_t b, uint32_t c);

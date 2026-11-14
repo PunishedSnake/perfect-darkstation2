@@ -2623,6 +2623,64 @@ static void gfx_ps2_at_flush(void) {
     }
 }
 
+/* gfx_emit_vbo_vertex for the alpha-trilerp path, as bytes where the VBO
+ * has u8-derived floats (no clamps, grayscale or primitive depth here). */
+static inline void gfx_ps2_at_source(const struct GfxTriSetup* S, const struct LoadedVertex* V,
+                                     struct Ps2ATSource* out) {
+    const float w = V->w;
+    out->pos[0] = V->x;
+    out->pos[1] = S->invert_y ? -V->y : V->y;
+    out->pos[2] = S->z_is_from_0_to_1 ? (V->z + w) / 2.0f : V->z;
+    out->pos[3] = w;
+    for (int t = 0; t < 2; t++) {
+        if (S->used_textures[t]) {
+            out->u[t] = V->u * S->u_scale[t] + S->u_bias[t];
+            out->v[t] = V->v * S->v_scale[t] + S->v_bias[t];
+        }
+    }
+    out->fog = V->fog;
+    uint32_t* in32 = (uint32_t*)out->in;
+    in32[0] = in32[1] = in32[2] = 0xffffffffu;
+    const int n = S->num_inputs < 3 ? S->num_inputs : 3;
+    for (int j = 0; j < n; j++) {
+        uint8_t* d = out->in[j];
+        switch (S->in_kind[0][j]) {
+            case GFX_TRI_IN_SHADE:
+                d[0] = V->color.r; d[1] = V->color.g; d[2] = V->color.b;
+                break;
+            case GFX_TRI_IN_SHADE_ALPHA:
+                d[0] = d[1] = d[2] = V->color.a;
+                break;
+            case GFX_TRI_IN_LOD: {
+                const float distance_frac = std::max(0.f, std::min(w / 1024.f, 1.f));
+                d[0] = d[1] = d[2] = (uint8_t)((0.7f + distance_frac * 0.3f) * 255.f);
+                break;
+            }
+            default:
+                d[0] = S->in_const_u8[j][0]; d[1] = S->in_const_u8[j][1]; d[2] = S->in_const_u8[j][2];
+                break;
+        }
+        if (S->use_alpha) {
+            switch (S->in_kind[1][j]) {
+                case GFX_TRI_IN_SHADE:
+                    d[3] = V->color.a;
+                    break;
+                case GFX_TRI_IN_SHADE_ALPHA:
+                    d[3] = 0;
+                    break;
+                case GFX_TRI_IN_LOD: {
+                    const float distance_frac = std::max(0.f, std::min(w / 1024.f, 1.f));
+                    d[3] = (uint8_t)((0.7f + distance_frac * 0.3f) * 255.f);
+                    break;
+                }
+                default:
+                    d[3] = S->in_const_u8[j][3];
+                    break;
+            }
+        }
+    }
+}
+
 static bool gfx_ps2_at_tri(const struct GfxTriSetup* S, uint8_t a, uint8_t b, uint8_t c) {
     if (a >= MAX_VERTICES || b >= MAX_VERTICES || c >= MAX_VERTICES) {
         gfx_ps2_at_flush();
@@ -2632,10 +2690,10 @@ static bool gfx_ps2_at_tri(const struct GfxTriSetup* S, uint8_t a, uint8_t b, ui
     for (int k = 0; k < 3; ++k) {
         const uint8_t i = idx[k];
         if (gfx_ps2_at.tag[i] != gfx_ps2_at.serial) {
-            float v[32];
-            gfx_emit_vbo_vertex(S, &rsp.loaded_vertices[i], v);
-            gfx_ps2_at.codes[i] = ps2GsClipVertexCodes(v);
-            gfxPs2DirectFillAT(i, v);
+            struct Ps2ATSource src __attribute__((aligned(16)));
+            gfx_ps2_at_source(S, &rsp.loaded_vertices[i], &src);
+            gfx_ps2_at.codes[i] = ps2GsClipVertexCodes(src.pos);
+            gfxPs2DirectFillATSource(i, &src);
             gfx_ps2_at.tag[i] = gfx_ps2_at.serial;
         }
     }
@@ -3789,6 +3847,9 @@ extern "C" void gfx_get_dimensions(uint32_t* width, uint32_t* height, int32_t* p
 extern "C" void gfx_init(const GfxInitSettings *settings) {
     gfx_wapi = settings->wapi;
     gfx_init_u8_unit_table();
+#if defined(GFX_PS2_DIRECT)
+    gfxPs2DirectSetUnitTable(gfx_u8_unit);
+#endif
     gfx_rapi = settings->rapi;
     gfx_wapi->init(&settings->window_settings);
     gfx_rapi->init();
