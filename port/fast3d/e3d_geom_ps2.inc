@@ -645,22 +645,10 @@ static void e3d_chunk_fast(const struct E3dProg* P, const struct E3dChunk* K, in
             gfx_obj_start_batch(k);
         }
         struct Ps2GsVu1ObjectVertex* out =
-            (struct Ps2GsVu1ObjectVertex*)&gfx_ps2_direct.batch[gfx_ps2_direct.batch_count];
+            (struct Ps2GsVu1ObjectVertex*)gfx_ps2_direct.batch + gfx_ps2_direct.batch_count;
         for (int i = 0; i < 3; ++i) {
             const Vtx* v = vs[i];
-            const struct NormalColor col = G->cbase[(T->colseg >> i) & 1u][T->col[i] + (v->colour >> 2)];
-            out[i].pos[0] = v->v[0];
-            out[i].pos[1] = v->v[1];
-            out[i].pos[2] = v->v[2];
-            out[i].pos[3] = 0;
-            out[i].uv[0] = (short)(v->s * ts >> 16);
-            out[i].uv[1] = (short)(v->t * tt >> 16);
-            out[i].uv[2] = 0;
-            out[i].uv[3] = 0;
-            out[i].rgba[0] = col.r;
-            out[i].rgba[1] = col.g;
-            out[i].rgba[2] = col.b;
-            out[i].rgba[3] = col.a;
+            gfx_obj_store(&out[i], v, ts, tt, G->cbase[(T->colseg >> i) & 1u][T->col[i] + (v->colour >> 2)]);
         }
         gfx_ps2_direct.batch_count += 3;
         ++e3d.n_tris;
@@ -982,7 +970,19 @@ static void e3d_model_dl(Gfx* gdl, uint32_t depth) {
 }
 
 #include "ps2_renderer_stats.h"
+#include "gs_native_queue.h"
 static void e3d_log_stats(void) {
+    {
+        struct Ps2GsNativeQueueStats q;
+        ps2GsNativeQueueTakeStats(&q);
+        sysLogPrintf(LOG_NOTE, "E3D gsq submits=%u spills=%u qw=%u maxchain=%u uploads=%u upKB=%u finishes=%u (per second)"
+                     " waits us/frame submit=%u upload=%u present=%u",
+                     q.submits, q.spills, q.qwords, q.max_chain_qw, q.uploads, q.upload_bytes >> 10, q.finishes,
+                     q.submit_wait_us / 60, q.upload_wait_us / 60, q.finish_wait_us / 60);
+        sysLogPrintf(LOG_NOTE, "E3D gsq ad=%u qw/%u pk vtx=%u qw/%u pk vu1=%u qw/%u batches (obj %u tex %u) ref=%u qw (per frame)",
+                     q.gif_ad_qw / 60, q.gif_ad_packets / 60, q.gif_vtx_qw / 60, q.gif_vtx_packets / 60,
+                     q.vu1_qw / 60, q.vu1_batches / 60, q.vu1_obj_qw / 60, q.vu1_tex_qw / 60, q.ref_qw / 60);
+    }
     {
         static struct Ps2RendererStats prevr;
         struct Ps2RendererStats r;

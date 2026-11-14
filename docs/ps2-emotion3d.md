@@ -245,6 +245,86 @@ rewritten together with the GS-side libraries, where packet layout and
 draw volume are decided, rather than on its own. The stats build logs the
 VU1 counters as `E3D vu1`.
 
+## GS layer, part 1 (round 21)
+
+### What the GS side actually costs
+
+The stats build (`PD_PS2_OBJECT_STATS`) now logs the native queue once a
+second (`E3D gsq ...`): chains submitted and spilled, their size, IMAGE
+uploads, how the chain splits between A+D state, VU1 input and DMA-referenced
+templates, and how long the EE waited in each place. Defection intro and
+rooftop, PCSX2:
+
+| | cutscene | rooftop |
+|---|---|---|
+| chain per frame | 8-14 K QW (was 12-17 K) | 4-6 K QW |
+| VU1 input | object path dominates | EE-transformed path dominates |
+| EE wait for VIF1/GS at submit | ~0 us/frame | ~0 us/frame |
+| EE wait for IMAGE uploads | ~0 us/frame | 0 |
+
+So the EE never waits for the GS or VU1 in practice. The 7 % that the EE
+profile charged to `ps2GsNativeQueueSubmitInternal` is the flip wait for
+vsync, which is idle time. The GS receives about 40 draws and 100-250 KB a
+frame, which is far below what it can take. What remains expensive is the EE
+producing that stream.
+
+### Packed object vertices (VIF1 V4-16)
+
+Object-path vertices (rooms, rigid models, deferred blocks) were three
+quadwords of int32 lanes. Every value fits 16 bits: N64 s16 positions,
+scaled s16 texture coordinates and colour bytes. They are now 24 bytes:
+three 64-bit stores on the EE.
+
+VIF1 expands them with a V4-16 UNPACK, sign-extending each lane into the same
+int32 VU memory image the microprogram already read, so the microprogram did
+not change. A batch is now three UNPACKs: the V4-32 head (header, prefix
+slots, transform), the V4-16 vertices and the V4-32 suffix, then MSCAL
+(`ps2GsNativeQueueReserveVu1PackedBatch`).
+
+The result is half the EE stores, half the DMA, and no 48-byte staging copy.
+The cutscene chain fell from 12-17 K to 8-14 K QW per frame, and mid-frame
+spills there went from about one per frame to none. Gfx time is 0.15-0.65 ms
+lower per frame in the cutscene windows; PCSX2 undercharges uncached stores,
+so hardware should gain more.
+
+The VU test now also checks that a V4-16 unpack of the packed bytes
+reproduces the image the microprogram is tested on.
+
+### No more dropped frames from a full arena
+
+Only gs_core's own A+D reservations could spill to the second arena. A full
+arena hit through a VU1 batch, a template reference or a direct A+D
+reservation marked the frame overflowed, and the whole frame was not drawn.
+That happened at the end of the Defection intro, where frames reach 60-70 K
+QW.
+
+Every native-queue reservation now spills: it submits the full arena and
+continues the frame in the other one. GS state persists across chains, so
+nothing is replayed. Those frames are now drawn.
+
+### Found: the tiled alpha-trilerp material
+
+The 60-70 K QW frames come from alpha trilerp drawn through the tiled
+channel-shuffle graph: about 10 GS passes per 64x32 tile, and 1,300-1,800
+A+D packets plus 20-30 K QW of shuffle templates per frame.
+
+Logging the triangles that reach it shows a single material: a PSMT8 56x54
+window texture. Both taps sample the same texels, so it is not real mip
+blending. The only reason it misses the one-pass same-sample path is a
+per-vertex alpha add:
+
+    alpha = T.a * 0.5 + add(vertex),   add = 20..138
+
+The GS texture functions give `At*Av`, `At` or `At+Av` (the last also adds
+`Av` to the colour). The 16-bit framebuffer has one alpha bit, so no
+destination-alpha trick is available either. Making this one cheap means
+changing how the material is represented, which belongs with the engine
+rewrites rather than the transport layer.
+
+A GS hardware-mipmap path (TEX1 MXL=1 with LCM=1, MIPTBP1) for true
+two-level alpha trilerp was written and then removed: no triangle in these
+scenes needed it.
+
 ## Next: PS2-specific GS libraries
 
 * Measure on hardware where the GS time goes: alpha-trilerp passes, fill,

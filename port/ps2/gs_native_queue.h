@@ -64,6 +64,18 @@ uint32_t *ps2GsNativeQueueReserveVu1Batch(uint32_t input_qw,
     uint32_t program_address);
 
 /*
+ * One VU1 batch whose input is a V4-32 head (head_qw quadwords at TOPS), then
+ * v4_16_elements packed 16-bit elements (8 bytes each, expanded by VIF1 to
+ * one int32 quadword each, right after the head), then one V4-32 suffix
+ * quadword, then MSCAL program_address. Returns the head; the packed data
+ * (16-byte aligned, its last half quadword zeroed when unused) and the
+ * suffix through the out pointers. NULL when the arena cannot hold it.
+ */
+uint32_t *ps2GsNativeQueueReserveVu1PackedBatch(uint32_t head_qw,
+    uint32_t v4_16_elements, uint32_t program_address,
+    void **packed_out, uint32_t **suffix_out);
+
+/*
  * Submit one native GS FINISH token after all earlier PATH3 traffic and wait
  * for it. This is a full GS dependency fence, not merely GIF DMA completion.
  */
@@ -114,6 +126,21 @@ bool ps2GsNativeQueueReadbackTexture(
     void *destination, uint32_t destination_bytes,
     uint32_t vram, uint32_t tbw, uint32_t psm,
     uint32_t width, uint32_t height, uint32_t *image_bytes);
+
+struct Ps2GsNativeQueueStats {
+    uint32_t submits;       /* VIF1 chains kicked */
+    uint32_t spills;        /* of them, mid-frame because an arena filled */
+    uint32_t qwords;        /* their total size */
+    uint32_t max_chain_qw;
+    uint32_t uploads;       /* IMAGE uploads */
+    uint32_t upload_bytes;
+    uint32_t finishes;      /* GS FINISH fences */
+    /* chain composition, stats builds only */
+    uint32_t ref_qw, gif_ad_qw, gif_ad_packets, gif_vtx_qw, gif_vtx_packets, vu1_qw, vu1_batches, vu1_obj_qw, vu1_tex_qw;
+    uint32_t submit_wait_us, upload_wait_us, finish_wait_us;
+};
+/* Counters since the last call (diagnostics). */
+void ps2GsNativeQueueTakeStats(struct Ps2GsNativeQueueStats *out);
 
 uint32_t ps2GsNativeQueueUsedQwords(void);
 uint32_t ps2GsNativeQueueCapacityQwords(void);

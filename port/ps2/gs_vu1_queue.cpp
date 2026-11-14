@@ -468,16 +468,38 @@ extern "C" bool ps2GsVu1QueueSubmitObjectTransform(
         (flags & ~PS2_GS_VU1_TRANSFORM_FLAG_FOG) != 0u) {
         return false;
     }
-    uint32_t *payload = ps2GsNativeQueueReserveVu1Batch(planned.input_qw,
-        PS2_GS_VU1_OBJECT_PROGRAM_ADDRESS);
-    if (!payload) {
+    void *packed = NULL;
+    uint32_t *suffix_slot = NULL;
+    uint32_t *head = ps2GsNativeQueueReserveVu1PackedBatch(
+        PS2_GS_VU1_OBJECT_HEAD_QW, vertex_count * 3u,
+        PS2_GS_VU1_OBJECT_PROGRAM_ADDRESS, &packed, &suffix_slot);
+    if (!head) {
         return false;
     }
-    (void)ps2GsVu1BuildObjectTransformPayload(
-        payload, planned.input_qw, scale, offset, flags, xform,
-        prefix, prefix_count, vertices, vertex_count,
-        suffix, suffix_count, NULL);
-    ps2RendererTraceRecordPath1Qwords(payload, planned.input_qw,
+    struct Ps2GsPackedReg padded_suffix;
+    (void)ps2GsVu1BuildObjectTransformHead(head, &padded_suffix,
+        scale, offset, flags, xform, prefix, prefix_count, vertex_count,
+        suffix, suffix_count);
+    memcpy(suffix_slot, &padded_suffix, sizeof(padded_suffix));
+    /* 24 bytes a vertex: whole quadwords, then a trailing half quadword
+     * (the reservation already zeroed its other half) */
+    const size_t bytes = (size_t)vertex_count * sizeof(*vertices);
+    const size_t whole_qw = bytes / 16u;
+    if (((uintptr_t)vertices & 15u) != 0u) {
+        memcpy(packed, vertices, bytes);
+    } else {
+        typedef unsigned int ps2_qword __attribute__((mode(TI)));
+        ps2_qword *d = (ps2_qword *)packed;
+        const ps2_qword *src = (const ps2_qword *)vertices;
+        for (size_t i = 0u; i < whole_qw; ++i) {
+            d[i] = src[i];
+        }
+    }
+    if (bytes & 8u) {
+        memcpy((uint64_t *)packed + whole_qw * 2u,
+            (const uint8_t *)vertices + whole_qw * 16u, 8u);
+    }
+    ps2RendererTraceRecordPath1Qwords(head, PS2_GS_VU1_OBJECT_HEAD_QW,
         prefix_count + suffix_count + vertex_count * 3u,
         vertex_count, true);
     return true;
