@@ -101,19 +101,28 @@ bool ps2InputMapPad(const struct Ps2PadState *source,
             config->axis_deadzone[axis], config->axis_scale[axis]);
     }
 
-    const int move = config->swap_sticks ? 2 : 0;
-    const int look = config->swap_sticks ? 0 : 2;
-    destination->stick_x = ps2InputAxisToPad(mapped[move]);
-    destination->stick_y = ps2InputAxisToPad(mapped[move + 1]);
-
+    /*
+     * Dual analog (the desktop port's CONTROLMODE_PC, the default): the
+     * N64 stick is look/aim and the extra stick walks and strafes, so the
+     * right physical stick drives the N64 stick and the left one the extra
+     * stick. Without dual analog the left stick is the N64 stick and the
+     * right one emulates the C buttons, as on the N64 pad. swap_sticks
+     * exchanges the two physical sticks in both modes.
+     */
+    const int left = config->swap_sticks ? 2 : 0;
+    const int right = config->swap_sticks ? 0 : 2;
     if (config->dual_analog) {
-        destination->rstick_x = ps2InputAxisToPad(mapped[look]);
-        destination->rstick_y = ps2InputAxisToPad(mapped[look + 1]);
+        destination->stick_x = ps2InputAxisToPad(mapped[right]);
+        destination->stick_y = ps2InputAxisToPad(mapped[right + 1]);
+        destination->rstick_x = ps2InputAxisToPad(mapped[left]);
+        destination->rstick_y = ps2InputAxisToPad(mapped[left + 1]);
     } else {
-        if (mapped[look] < -0x4000) destination->button |= L_CBUTTONS;
-        if (mapped[look] >  0x4000) destination->button |= R_CBUTTONS;
-        if (mapped[look + 1] >  0x4000) destination->button |= U_CBUTTONS;
-        if (mapped[look + 1] < -0x4000) destination->button |= D_CBUTTONS;
+        destination->stick_x = ps2InputAxisToPad(mapped[left]);
+        destination->stick_y = ps2InputAxisToPad(mapped[left + 1]);
+        if (mapped[right] < -0x4000) destination->button |= L_CBUTTONS;
+        if (mapped[right] >  0x4000) destination->button |= R_CBUTTONS;
+        if (mapped[right + 1] >  0x4000) destination->button |= U_CBUTTONS;
+        if (mapped[right + 1] < -0x4000) destination->button |= D_CBUTTONS;
     }
 
     if (config->cancel_c_buttons) {

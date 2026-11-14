@@ -238,6 +238,8 @@ These are mainly for A/B checks on hardware:
 | `Video.Ps2Emotion3DSkin` | 1 | Character models on the VU1 skin path. |
 | `Video.Ps2Emotion3DModels` | 0 | Model display-list replay without the skin path (measured slower). |
 | `Video.Ps2ObjectGeometry` | 1 | Object-space geometry transformed on VU1. |
+| `Video.DisplayFPS` | 0 | FPS counter; on PS2 a second line shows milliseconds per frame for logic, gfx, audio and present (30-frame averages). |
+| `Debug.TraceCapture` | 0 | Select on controller 1 captures one renderer frame (stalls while writing). |
 
 ## Controls and video settings
 
@@ -250,7 +252,7 @@ Extended Options (pause menu → Options → Extended) are PS2-specific:
 
 The normal game build can record a single renderer frame without globally enabling synchronous file logging.
 
-Press **Select** on controller 1 in the scene you want to inspect. The next complete renderer frame is captured to:
+Set `Debug.TraceCapture=1` in `pd.ini` first (it is off by default because the capture stalls the game while it writes). Then press **Select** on controller 1 in the scene you want to inspect. The next complete renderer frame is captured to:
 
 ```text
 pdps2-gs-trace.bin

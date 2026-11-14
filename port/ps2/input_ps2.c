@@ -407,8 +407,19 @@ void inputUpdate(void)
     }
 }
 
+/*
+ * Debug.TraceCapture (default 0): Select on controller 1 records the next
+ * renderer frame to pdps2-gs-trace.bin. The capture writes synchronously to
+ * the launch device and stalls the game for seconds, so it is a developer
+ * switch, never on by default.
+ */
+static s32 s_trace_capture;
+
 s32 inputPs2TraceSelectHeld(void)
 {
+    if (!s_trace_capture) {
+        return 0;
+    }
     const struct Ps2PadState *pad = ps2PadGetState(0);
     return pad && pad->connected && (pad->held & PS2_PAD_SELECT) != 0u;
 }
@@ -713,6 +724,7 @@ u32 inputGetKeyModState(void) { return 0u; }
 PD_CONSTRUCTOR static void ps2InputConfigInit(void)
 {
     char key[96];
+    configRegisterInt("Debug.TraceCapture", &s_trace_capture, 0, 1);
     for (s32 controller = 0; controller < INPUT_MAX_CONTROLLERS;
          ++controller) {
         const s32 player = controller + 1;
