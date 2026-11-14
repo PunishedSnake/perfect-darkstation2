@@ -75,6 +75,9 @@
 #include "system.h"
 
 #ifdef PLATFORM_PS2
+#ifndef PD_PS2_EE_PROFILER_START_S
+#define PD_PS2_EE_PROFILER_START_S 60
+#endif
 #include "log_ps2.h"
 #endif
 
@@ -585,7 +588,7 @@ void mainLoop(void)
 				frameTimingEnd += frameEnd - tickEnd;
 				frameTimingFrames++;
 				osEepromFlushPending(0);
-				if (frameEnd >= 60000000ULL) {
+				if (frameEnd >= (u64)PD_PS2_EE_PROFILER_START_S * 1000000ULL) {
 					ps2EeProfilerStart();
 				}
 				ps2EeProfilerPoll();

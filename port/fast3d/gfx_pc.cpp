@@ -2723,68 +2723,17 @@ static bool gfx_ps2_at_tri(const struct GfxTriSetup* S, uint8_t a, uint8_t b, ui
 }
 #endif
 
-static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx, bool is_rect) {
+/*
+ * Everything after culling. Kept out of line so the culling front end
+ * (about half of all triangles end there) inlines into the G_TRI1/G_TRI4
+ * handlers without paying this body's large frame and register saves.
+ */
+__attribute__((noinline)) static void gfx_sp_tri1_emit(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx, bool is_rect) {
     struct LoadedVertex* v1 = &rsp.loaded_vertices[vtx1_idx];
     struct LoadedVertex* v2 = &rsp.loaded_vertices[vtx2_idx];
     struct LoadedVertex* v3 = &rsp.loaded_vertices[vtx3_idx];
     struct LoadedVertex* v_arr[3] = { v1, v2, v3 };
-
-    if ((rsp.extra_geometry_mode & G_NO_CLIPPING_EXT) == 0) {
-        if (v1->clip_rej & v2->clip_rej & v3->clip_rej) {
-            // The whole triangle lies outside the visible area
-            return;
-        }
-    }
-
-    if ((rsp.geometry_mode & G_CULL_BOTH) != 0) {
-#if defined(PLATFORM_PS2)
-        /*
-         * Division-free form of the test below. For non-zero W the projected
-         * cross product equals -det[x y w] / (w1 w2 w3), and the eye-plane
-         * flip multiplies by sign(w1 w2 w3) again, so the flipped cross has
-         * the sign of -det. Six FPU divides per triangle become nine
-         * multiplies (the EE's DIV.S is not pipelined).
-         */
-        float cross = v2->x * (v1->y * v3->w - v3->y * v1->w) - v1->x * (v2->y * v3->w - v3->y * v2->w) -
-                      v3->x * (v1->y * v2->w - v2->y * v1->w);
-#else
-        /* v2's projection is shared by both edges; compute it once. */
-        const float x2 = v2->x / (v2->w);
-        const float y2 = v2->y / (v2->w);
-        float dx1 = v1->x / (v1->w) - x2;
-        float dy1 = v1->y / (v1->w) - y2;
-        float dx2 = v3->x / (v3->w) - x2;
-        float dy2 = v3->y / (v3->w) - y2;
-        float cross = dx1 * dy2 - dy1 * dx2;
-
-        if ((v1->w < 0) ^ (v2->w < 0) ^ (v3->w < 0)) {
-            // If one vertex lies behind the eye, negating cross will give the correct result.
-            // If all vertices lie behind the eye, the triangle will be rejected anyway.
-            cross = -cross;
-        }
-#endif
-
-        // If inverted culling is requested, negate the cross
-        // if ((rsp.extra_geometry_mode & G_EX_INVERT_CULLING) == 1) {
-        //     cross = -cross;
-        // }
-
-        switch (rsp.geometry_mode & G_CULL_BOTH) {
-            case G_CULL_FRONT:
-                if (cross <= 0) {
-                    return;
-                }
-                break;
-            case G_CULL_BACK:
-                if (cross >= 0) {
-                    return;
-                }
-                break;
-            case G_CULL_BOTH:
-                // Why is this even an option?
-                return;
-        }
-    }
+    (void)v_arr;
 
     struct GfxTriSetup rect_setup;
     const struct GfxTriSetup* S = &gfx_tri_setup_cache;
@@ -2846,6 +2795,71 @@ static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx, bo
     if (++buf_vbo_num_tris == MAX_BUFFERED) {
         gfx_flush();
     }
+}
+
+static inline void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx, bool is_rect) {
+    struct LoadedVertex* v1 = &rsp.loaded_vertices[vtx1_idx];
+    struct LoadedVertex* v2 = &rsp.loaded_vertices[vtx2_idx];
+    struct LoadedVertex* v3 = &rsp.loaded_vertices[vtx3_idx];
+
+    if ((rsp.extra_geometry_mode & G_NO_CLIPPING_EXT) == 0) {
+        if (v1->clip_rej & v2->clip_rej & v3->clip_rej) {
+            // The whole triangle lies outside the visible area
+            return;
+        }
+    }
+
+    if ((rsp.geometry_mode & G_CULL_BOTH) != 0) {
+#if defined(PLATFORM_PS2)
+        /*
+         * Division-free form of the test below. For non-zero W the projected
+         * cross product equals -det[x y w] / (w1 w2 w3), and the eye-plane
+         * flip multiplies by sign(w1 w2 w3) again, so the flipped cross has
+         * the sign of -det. Six FPU divides per triangle become nine
+         * multiplies (the EE's DIV.S is not pipelined).
+         */
+        float cross = v2->x * (v1->y * v3->w - v3->y * v1->w) - v1->x * (v2->y * v3->w - v3->y * v2->w) -
+                      v3->x * (v1->y * v2->w - v2->y * v1->w);
+#else
+        /* v2's projection is shared by both edges; compute it once. */
+        const float x2 = v2->x / (v2->w);
+        const float y2 = v2->y / (v2->w);
+        float dx1 = v1->x / (v1->w) - x2;
+        float dy1 = v1->y / (v1->w) - y2;
+        float dx2 = v3->x / (v3->w) - x2;
+        float dy2 = v3->y / (v3->w) - y2;
+        float cross = dx1 * dy2 - dy1 * dx2;
+
+        if ((v1->w < 0) ^ (v2->w < 0) ^ (v3->w < 0)) {
+            // If one vertex lies behind the eye, negating cross will give the correct result.
+            // If all vertices lie behind the eye, the triangle will be rejected anyway.
+            cross = -cross;
+        }
+#endif
+
+        // If inverted culling is requested, negate the cross
+        // if ((rsp.extra_geometry_mode & G_EX_INVERT_CULLING) == 1) {
+        //     cross = -cross;
+        // }
+
+        switch (rsp.geometry_mode & G_CULL_BOTH) {
+            case G_CULL_FRONT:
+                if (cross <= 0) {
+                    return;
+                }
+                break;
+            case G_CULL_BACK:
+                if (cross >= 0) {
+                    return;
+                }
+                break;
+            case G_CULL_BOTH:
+                // Why is this even an option?
+                return;
+        }
+    }
+
+    gfx_sp_tri1_emit(vtx1_idx, vtx2_idx, vtx3_idx, is_rect);
 }
 
 static inline void gfx_sp_tri4(Gfx *cmd) {
