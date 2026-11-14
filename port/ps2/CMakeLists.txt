@@ -532,6 +532,9 @@ set(PD_PS2_CORRECTNESS_FLAGS
   -fno-strict-aliasing
   -funsigned-char
   -fwrapv
+  # Only errno: lets sqrtf and friends inline as their R5900 instruction
+  # instead of a call (nothing reads errno after a math call).
+  -fno-math-errno
 )
 
 set(PD_PS2_GAME_DEFINITIONS
@@ -836,6 +839,8 @@ set(PD_PS2_GAME_RUNTIME_SOURCES
   iop_registry_ps2.c
   memory_card_ps2.c
   fast_math_ps2.c
+  rt/ee_softdouble.c
+  rt/ee_string.c
   audio_ps2.c
   audio_ps2_queue.c
   spu2_voices_ps2.c
@@ -916,6 +921,12 @@ if(PD_PS2_HOT_PATH_O2 AND PD_PS2_OPTIMIZATION STREQUAL "Og")
     PROPERTIES COMPILE_OPTIONS "-O2"
   )
 endif()
+
+# The frontend clears short per-vertex arrays (4-128 bytes) on every G_VTX
+# with plain store loops; GCC's loop-idiom pass would turn each back into a
+# memset call that costs more than the stores.
+set_property(SOURCE "${PD_PS2_FAST3D_LIVE_CPP}" APPEND PROPERTY
+  COMPILE_OPTIONS "-fno-tree-loop-distribute-patterns")
 
 add_executable(pd_ps2_game
   ${PD_PS2_GAME_RUNTIME_SOURCES}

@@ -138,6 +138,12 @@ jobs:
             tools/ps2/pd_spu2bank.c \
             port/ps2/spu2_adpcm.c \
             -lz -lm -o /tmp/pd_spu2bank
+          gcc -std=c11 -O2 -Wall -Wextra -Werror \
+            -DEE_SOFTDOUBLE_PREFIX \
+            port/ps2/rt/ee_softdouble.c \
+            port/ps2/rt/ee_softdouble_test.c \
+            -lm -o /tmp/ee_softdouble_test
+          /tmp/ee_softdouble_test
 
       - name: Test GS command budget and VRAM allocator
         run: |
