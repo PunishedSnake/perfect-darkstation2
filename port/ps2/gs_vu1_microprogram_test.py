@@ -252,7 +252,7 @@ class ObjectXform(c.Structure):
 
 
 class ObjectVertex(c.Structure):
-    _fields_ = [('pos', c.c_int32 * 4), ('uv', c.c_int32 * 4), ('rgba', c.c_int32 * 4)]
+    _fields_ = [('pos', c.c_int16 * 4), ('uv', c.c_int16 * 4), ('rgba', c.c_int16 * 4)]
 
 
 def run_object_tests(library):
@@ -299,6 +299,13 @@ def run_object_tests(library):
                 payload = (c.c_uint32 * 1024)()
                 assert build(payload, 256, scale, offset, fog, c.byref(xform),
                              prefix, 2, vertices, count, c.byref(suffix), 1, None)
+                # VIF1 V4-16 UNPACK of the packed transport (sign-extended
+                # 16-bit lanes) must reproduce the image's vertex quadwords.
+                raw = bytes(vertices)
+                for e in range(count * 3):
+                    lanes = struct.unpack_from('<4h', raw, e * 8)
+                    want = [l & 0xffffffff for l in lanes]
+                    assert list(payload[(24 + e) * 4:(25 + e) * 4]) == want, (e, lanes)
                 memory = [[0xdeadbeef] * 4 for _ in range(1024)]
                 input_qw, output_qw = 25 + count * 3, 9 + count * 3
                 for i in range(input_qw):

@@ -3407,23 +3407,22 @@ static void gfx_obj_start_batch(int k) {
     }
 }
 
-/* The raw vertex VU1 builds the record from (struct Ps2GsVu1ObjectVertex). */
+/*
+ * The raw vertex VU1 builds the record from (struct Ps2GsVu1ObjectVertex):
+ * three 64-bit stores of 16-bit lanes, expanded by VIF1.
+ */
+__attribute__((always_inline)) static inline void gfx_obj_store(struct Ps2GsVu1ObjectVertex* o, const Vtx* v,
+                                                                int32_t ts, int32_t tt, struct NormalColor col) {
+    uint64_t* q = (uint64_t*)o;
+    q[0] = (uint64_t)(uint16_t)v->v[0] | (uint64_t)(uint16_t)v->v[1] << 16 | (uint64_t)(uint16_t)v->v[2] << 32;
+    /* LoadedVertex u/v exactly as gfx_sp_vertex derives them */
+    q[1] = (uint64_t)(uint16_t)(short)(v->s * ts >> 16) | (uint64_t)(uint16_t)(short)(v->t * tt >> 16) << 16;
+    q[2] = (uint64_t)col.r | (uint64_t)col.g << 16 | (uint64_t)col.b << 32 | (uint64_t)col.a << 48;
+}
 __attribute__((always_inline)) static inline void gfx_obj_pack(uint8_t idx, const struct GfxObjCtx* X, struct Ps2GsVu1ObjectVertex* o) {
     const Vtx* v = gfx_obj.src[idx];
     const struct NormalColor col = gfx_obj.cols[idx][v->colour >> 2];
-    o->pos[0] = v->v[0];
-    o->pos[1] = v->v[1];
-    o->pos[2] = v->v[2];
-    o->pos[3] = 0;
-    /* LoadedVertex u/v exactly as gfx_sp_vertex derives them */
-    o->uv[0] = (short)(v->s * (int32_t)X->tex_s >> 16);
-    o->uv[1] = (short)(v->t * (int32_t)X->tex_t >> 16);
-    o->uv[2] = 0;
-    o->uv[3] = 0;
-    o->rgba[0] = col.r;
-    o->rgba[1] = col.g;
-    o->rgba[2] = col.b;
-    o->rgba[3] = col.a;
+    gfx_obj_store(o, v, (int32_t)X->tex_s, (int32_t)X->tex_t, col);
 }
 
 __attribute__((always_inline)) static inline void gfx_obj_pos(uint8_t idx, float p[3]) {
@@ -3495,7 +3494,7 @@ static bool gfx_obj_tri(uint8_t a, uint8_t b, uint8_t c) {
                     gfx_obj_start_batch(k);
                 }
                 struct Ps2GsVu1ObjectVertex* out =
-                    (struct Ps2GsVu1ObjectVertex*)&gfx_ps2_direct.batch[gfx_ps2_direct.batch_count];
+                    (struct Ps2GsVu1ObjectVertex*)gfx_ps2_direct.batch + gfx_ps2_direct.batch_count;
                 gfx_obj_pack(a, X, &out[0]);
                 gfx_obj_pack(b, X, &out[1]);
                 gfx_obj_pack(c, X, &out[2]);

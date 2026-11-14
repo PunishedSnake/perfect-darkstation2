@@ -170,34 +170,16 @@ extern "C" bool ps2GsVu1PlanObjectTransform(uint32_t vertex_count,
     return layout->input_qw <= PS2_GS_VU1_BUFFER_QW;
 }
 
-static bool ps2GsVu1BuildTransformPayloadImpl(
-    uint32_t *destination, uint32_t capacity_qw,
+/*
+ * Header, padded prefix slots and (object program) transform constants: the
+ * first planned quadwords of the payload. Returns the cursor after them.
+ */
+static uint8_t *ps2GsVu1BuildTransformHead(uint8_t *cursor,
     const float scale[4], const float offset[4], uint32_t flags,
     const struct Ps2GsVu1ObjectTransform *xform,
     const struct Ps2GsPackedReg *prefix, uint32_t prefix_count,
-    const struct Ps2GsVu1TransformVertex *vertices, uint32_t vertex_count,
-    const struct Ps2GsPackedReg *suffix, uint32_t suffix_count,
-    struct Ps2GsVu1TransformLayout *layout)
+    uint32_t vertex_count, uint32_t suffix_count)
 {
-    struct Ps2GsVu1TransformLayout planned;
-    if (!destination || !scale || !offset || !vertices ||
-        (flags & ~PS2_GS_VU1_TRANSFORM_FLAG_FOG) != 0u ||
-        (prefix_count != 0u && !prefix) ||
-        (suffix_count != 0u && !suffix) ||
-        !(xform ? ps2GsVu1PlanObjectTransform(
-                vertex_count, prefix_count, suffix_count, &planned)
-            : ps2GsVu1PlanTexturedTransform(
-                vertex_count, prefix_count, suffix_count, &planned)) ||
-        capacity_qw < planned.input_qw) {
-        return false;
-    }
-
-    /*
-     * The payload is written completely: header, fixed prefix slots, vertices
-     * and the fixed suffix slot together occupy exactly planned.input_qw.
-     * Skip a preparatory memset; on UCAB destinations it doubled the uncached
-     * write traffic of every textured VU1 batch.
-     */
     struct Ps2GsVu1TransformHeader header = {};
     header.control[0] = vertex_count;
     header.control[1] = prefix_count;
@@ -220,7 +202,6 @@ static bool ps2GsVu1BuildTransformPayloadImpl(
         PS2_GS_VU1_TRANSFORM_MAX_SUFFIX_RECORDS, true, 1u);
     header.suffix_tag.registers = PS2_GIF_REG_AD;
 
-    uint8_t *cursor = (uint8_t *)destination;
     memcpy(cursor, &header, sizeof(header));
     cursor += sizeof(header);
 
@@ -243,25 +224,107 @@ static bool ps2GsVu1BuildTransformPayloadImpl(
         memcpy(cursor, xform, sizeof(*xform));
         cursor += sizeof(*xform);
     }
+    return cursor;
+}
 
-    /*
-     * The destination is the uncached-accelerated VIF1 arena: quadword
-     * stores are the fast path; a library memcpy here was the largest
-     * remaining copy on the EE once VU1 took most world geometry.
-     */
-    gfxPs2CopyQwords(cursor, vertices,
-        (size_t)vertex_count * sizeof(*vertices) / 16u);
-    cursor += (size_t)vertex_count * sizeof(*vertices);
-
+static struct Ps2GsPackedReg ps2GsVu1PaddedSuffix(
+    const struct Ps2GsPackedReg *suffix, uint32_t suffix_count)
+{
     struct Ps2GsPackedReg padded_suffix = { 0u, PS2_GS_REG_NOP };
     if (suffix_count != 0u) {
         padded_suffix = suffix[0];
     }
+    return padded_suffix;
+}
+
+static bool ps2GsVu1BuildTransformPayloadImpl(
+    uint32_t *destination, uint32_t capacity_qw,
+    const float scale[4], const float offset[4], uint32_t flags,
+    const struct Ps2GsVu1ObjectTransform *xform,
+    const struct Ps2GsPackedReg *prefix, uint32_t prefix_count,
+    const void *vertices, uint32_t vertex_count,
+    const struct Ps2GsPackedReg *suffix, uint32_t suffix_count,
+    struct Ps2GsVu1TransformLayout *layout)
+{
+    struct Ps2GsVu1TransformLayout planned;
+    if (!destination || !scale || !offset || !vertices ||
+        (flags & ~PS2_GS_VU1_TRANSFORM_FLAG_FOG) != 0u ||
+        (prefix_count != 0u && !prefix) ||
+        (suffix_count != 0u && !suffix) ||
+        !(xform ? ps2GsVu1PlanObjectTransform(
+                vertex_count, prefix_count, suffix_count, &planned)
+            : ps2GsVu1PlanTexturedTransform(
+                vertex_count, prefix_count, suffix_count, &planned)) ||
+        capacity_qw < planned.input_qw) {
+        return false;
+    }
+
+    /*
+     * The payload is written completely: header, fixed prefix slots, vertices
+     * and the fixed suffix slot together occupy exactly planned.input_qw.
+     * Skip a preparatory memset; on UCAB destinations it doubled the uncached
+     * write traffic of every textured VU1 batch.
+     */
+    uint8_t *cursor = ps2GsVu1BuildTransformHead((uint8_t *)destination,
+        scale, offset, flags, xform, prefix, prefix_count,
+        vertex_count, suffix_count);
+
+    if (xform) {
+        /* the VU1 memory image of the packed vertices (V4-16 UNPACK) */
+        const struct Ps2GsVu1ObjectVertex *in =
+            (const struct Ps2GsVu1ObjectVertex *)vertices;
+        int32_t *out = (int32_t *)cursor;
+        for (uint32_t i = 0u; i < vertex_count; ++i) {
+            for (int k = 0; k < 4; ++k) {
+                out[k] = in[i].pos[k];
+                out[4 + k] = in[i].uv[k];
+                out[8 + k] = in[i].rgba[k];
+            }
+            out += 12;
+        }
+        cursor = (uint8_t *)out;
+    } else {
+        /*
+         * The destination is the uncached-accelerated VIF1 arena: quadword
+         * stores are the fast path; a library memcpy here was the largest
+         * remaining copy on the EE once VU1 took most world geometry.
+         */
+        gfxPs2CopyQwords(cursor, vertices,
+            (size_t)vertex_count * PS2_GS_VU1_TRANSFORM_VERTEX_QW);
+        cursor += (size_t)vertex_count *
+            sizeof(struct Ps2GsVu1TransformVertex);
+    }
+
+    const struct Ps2GsPackedReg padded_suffix =
+        ps2GsVu1PaddedSuffix(suffix, suffix_count);
     memcpy(cursor, &padded_suffix, sizeof(padded_suffix));
 
     if (layout) {
         *layout = planned;
     }
+    return true;
+}
+
+extern "C" bool ps2GsVu1BuildObjectTransformHead(
+    uint32_t *head, struct Ps2GsPackedReg *suffix_out,
+    const float scale[4], const float offset[4], uint32_t flags,
+    const struct Ps2GsVu1ObjectTransform *xform,
+    const struct Ps2GsPackedReg *prefix, uint32_t prefix_count,
+    uint32_t vertex_count,
+    const struct Ps2GsPackedReg *suffix, uint32_t suffix_count)
+{
+    struct Ps2GsVu1TransformLayout planned;
+    if (!head || !suffix_out || !scale || !offset || !xform ||
+        (flags & ~PS2_GS_VU1_TRANSFORM_FLAG_FOG) != 0u ||
+        (prefix_count != 0u && !prefix) ||
+        (suffix_count != 0u && !suffix) ||
+        !ps2GsVu1PlanObjectTransform(
+            vertex_count, prefix_count, suffix_count, &planned)) {
+        return false;
+    }
+    (void)ps2GsVu1BuildTransformHead((uint8_t *)head, scale, offset, flags,
+        xform, prefix, prefix_count, vertex_count, suffix_count);
+    *suffix_out = ps2GsVu1PaddedSuffix(suffix, suffix_count);
     return true;
 }
 
@@ -287,15 +350,16 @@ extern "C" bool ps2GsVu1BuildObjectTransformPayload(
     const struct Ps2GsPackedReg *suffix, uint32_t suffix_count,
     struct Ps2GsVu1TransformLayout *layout)
 {
-    static_assert(sizeof(struct Ps2GsVu1ObjectVertex) ==
-            sizeof(struct Ps2GsVu1TransformVertex),
-        "object vertices occupy the same three quadwords");
+    static_assert(sizeof(struct Ps2GsVu1ObjectVertex) == 24u,
+        "object vertices are three V4-16 elements");
+    static_assert(PS2_GS_VU1_OBJECT_HEAD_QW == 24u,
+        "object head layout");
     if (!xform) {
         return false;
     }
     return ps2GsVu1BuildTransformPayloadImpl(destination, capacity_qw,
         scale, offset, flags, xform, prefix, prefix_count,
-        (const struct Ps2GsVu1TransformVertex *)vertices, vertex_count,
+        vertices, vertex_count,
         suffix, suffix_count, layout);
 }
 

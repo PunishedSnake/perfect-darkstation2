@@ -81,16 +81,42 @@ struct Ps2GsVu1ObjectTransform {
     float color_add[4];
 };
 
+/*
+ * Packed for transport: three 16-bit lanes per quadword the program reads.
+ * VIF1 expands them with a V4-16 UNPACK (sign-extended to the int32 lanes
+ * the program expects), so the EE writes and DMA moves 24 bytes per vertex
+ * instead of 48. The lane values all fit: positions are the N64 s16
+ * coordinates, uv the s16 scaled texture coordinates, rgba bytes.
+ */
 struct Ps2GsVu1ObjectVertex {
-    int32_t pos[4];
-    int32_t uv[4];
-    int32_t rgba[4];
+    int16_t pos[4];
+    int16_t uv[4];
+    int16_t rgba[4];
 };
+
+/* header, prefix slots and transform constants: one V4-32 UNPACK */
+#define PS2_GS_VU1_OBJECT_HEAD_QW \
+    (PS2_GS_VU1_TRANSFORM_HEADER_QW + PS2_GS_VU1_TRANSFORM_MAX_PREFIX_RECORDS + \
+     PS2_GS_VU1_OBJECT_XFORM_QW)
 
 bool ps2GsVu1PlanObjectTransform(uint32_t vertex_count,
     uint32_t prefix_count, uint32_t suffix_count,
     struct Ps2GsVu1TransformLayout *layout);
 
+/*
+ * The transport form: the head (PS2_GS_VU1_OBJECT_HEAD_QW quadwords, VU1
+ * memory image) and the one suffix record. The packed vertices go between
+ * them in VU1 memory by their own UNPACK.
+ */
+bool ps2GsVu1BuildObjectTransformHead(
+    uint32_t *head, struct Ps2GsPackedReg *suffix_out,
+    const float scale[4], const float offset[4], uint32_t flags,
+    const struct Ps2GsVu1ObjectTransform *xform,
+    const struct Ps2GsPackedReg *prefix, uint32_t prefix_count,
+    uint32_t vertex_count,
+    const struct Ps2GsPackedReg *suffix, uint32_t suffix_count);
+
+/* The whole VU1 memory image (vertices widened to int32 lanes): tests. */
 bool ps2GsVu1BuildObjectTransformPayload(
     uint32_t *destination, uint32_t capacity_qw,
     const float scale[4], const float offset[4], uint32_t flags,

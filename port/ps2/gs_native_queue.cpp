@@ -73,6 +73,7 @@ static union {
 #define PS2_VIF_MSCAL 0x14u
 #define PS2_VIF_DIRECT 0x50u
 #define PS2_VIF_UNPACK_V4_32 0x6cu
+#define PS2_VIF_UNPACK_V4_16 0x6du
 #define PS2_VIF_UNPACK_FLAG_TOPS 0x8000u
 #define PS2_VIF_DIRECT_MAX_QW 0xffffu
 #define PS2_GS_NATIVE_SEGMENT_NONE UINT32_MAX
@@ -106,6 +107,36 @@ static uint64_t *s_present_ucab;
 static uint32_t s_build_arena;
 static uint32_t s_upload_slot;
 static bool s_initialized;
+static struct Ps2GsNativeQueueStats s_stats;
+static bool ps2GsNativeQueueSubmitInternal(bool *vif_idle_after_submit);
+
+/*
+ * The open arena cannot take need_qw more quadwords (plus the closing
+ * tags): hand it to VIF1 and continue the frame in the other arena. GS
+ * register state persists across ordered chains, so nothing is replayed.
+ * The wait this costs (for the previous chain) is the price of a frame
+ * larger than one arena; without it the frame used to be dropped whole.
+ */
+static bool ps2GsNativeSpillFor(uint32_t need_qw)
+{
+    struct Ps2GsNativeArena *arena = &s_arenas[s_build_arena];
+    if (arena->overflowed || arena->used_qw == 0u ||
+        need_qw + PS2_GS_NATIVE_TAIL_QW + 1u > arena->capacity_qw) {
+        return false;
+    }
+    if (!ps2GsNativeQueueSubmitInternal(NULL)) {
+        return false;
+    }
+    ++s_stats.spills;
+    return true;
+}
+
+static inline bool ps2GsNativeFits(const struct Ps2GsNativeArena *arena,
+    uint32_t need_qw)
+{
+    return arena->used_qw + PS2_GS_NATIVE_TAIL_QW <= arena->capacity_qw &&
+        need_qw <= arena->capacity_qw - PS2_GS_NATIVE_TAIL_QW - arena->used_qw;
+}
 
 static_assert(sizeof(struct Ps2GsPackedReg) == 16,
     "native A+D records must occupy exactly one GIF quadword");
@@ -365,8 +396,11 @@ extern "C" struct Ps2GsPackedReg *ps2GsNativeQueueReserveAd(uint32_t reg_count)
         return NULL;
     }
 
-    struct Ps2GsNativeArena *arena = &s_arenas[s_build_arena];
     const uint32_t packet_qw = reg_count + 1u;
+    if (!ps2GsNativeFits(&s_arenas[s_build_arena], packet_qw + 1u)) {
+        (void)ps2GsNativeSpillFor(packet_qw + 1u);
+    }
+    struct Ps2GsNativeArena *arena = &s_arenas[s_build_arena];
     if (arena->open_tag_qw != PS2_GS_NATIVE_SEGMENT_NONE &&
         arena->open_qw + packet_qw > PS2_VIF_DIRECT_MAX_QW) {
         ps2GsNativeCloseSegment(arena);
@@ -417,9 +451,12 @@ extern "C" bool ps2GsNativeQueueAppendAdRefs(
     if (nloop > PS2_GIF_MAX_NLOOP) {
         return false;
     }
-    struct Ps2GsNativeArena *arena = &s_arenas[s_build_arena];
     /* head tag + GIF tag + head registers, then one REF tag per part */
     const uint32_t need_qw = 2u + head_count + part_total;
+    if (!ps2GsNativeFits(&s_arenas[s_build_arena], need_qw + 1u)) {
+        (void)ps2GsNativeSpillFor(need_qw + 1u);
+    }
+    struct Ps2GsNativeArena *arena = &s_arenas[s_build_arena];
     if (arena->used_qw + PS2_GS_NATIVE_TAIL_QW > arena->capacity_qw ||
         need_qw + 1u > arena->capacity_qw - PS2_GS_NATIVE_TAIL_QW - arena->used_qw) {
         return false;
@@ -456,9 +493,12 @@ extern "C" uint32_t *ps2GsNativeQueueReserveVu1Batch(uint32_t input_qw,
     if (!s_initialized || input_qw == 0u || input_qw > 256u) {
         return NULL;
     }
+    const uint32_t need_qw = input_qw + 2u;
+    if (!ps2GsNativeFits(&s_arenas[s_build_arena], need_qw + 1u)) {
+        (void)ps2GsNativeSpillFor(need_qw + 1u);
+    }
     struct Ps2GsNativeArena *arena = &s_arenas[s_build_arena];
     ps2GsNativeCloseSegment(arena);
-    const uint32_t need_qw = input_qw + 2u;
     if (arena->used_qw + PS2_GS_NATIVE_TAIL_QW > arena->capacity_qw ||
         need_qw > arena->capacity_qw - PS2_GS_NATIVE_TAIL_QW -
             arena->used_qw) {
@@ -479,6 +519,65 @@ extern "C" uint32_t *ps2GsNativeQueueReserveVu1Batch(uint32_t input_qw,
     arena->last_was_vu1 = true;
     arena->has_gif_since_vu1 = false;
     return (uint32_t *)(unpack + 2u);
+}
+
+extern "C" uint32_t *ps2GsNativeQueueReserveVu1PackedBatch(uint32_t head_qw,
+    uint32_t v4_16_elements, uint32_t program_address,
+    void **packed_out, uint32_t **suffix_out)
+{
+    if (!s_initialized || head_qw == 0u || v4_16_elements == 0u ||
+        v4_16_elements > 256u || head_qw + v4_16_elements + 1u > 256u ||
+        !packed_out || !suffix_out) {
+        return NULL;
+    }
+    const uint32_t packed_qw = (v4_16_elements * 8u + 15u) / 16u;
+    /* three UNPACK tags, the MSCAL tag, the data */
+    const uint32_t need_qw = 4u + head_qw + packed_qw + 1u;
+    if (!ps2GsNativeFits(&s_arenas[s_build_arena], need_qw + 1u)) {
+        (void)ps2GsNativeSpillFor(need_qw + 1u);
+    }
+    struct Ps2GsNativeArena *arena = &s_arenas[s_build_arena];
+    ps2GsNativeCloseSegment(arena);
+    if (arena->used_qw + PS2_GS_NATIVE_TAIL_QW > arena->capacity_qw ||
+        need_qw > arena->capacity_qw - PS2_GS_NATIVE_TAIL_QW -
+            arena->used_qw) {
+        return NULL;
+    }
+
+    uint64_t *q = arena->ucab + (size_t)arena->used_qw * 2u;
+    /* head: V4-32 at TOPS + 0 */
+    ps2GsNativeWriteTag(q, head_qw, PS2_DMA_TAG_ID_CNT,
+        ps2VifCode(0x0101u, 0u, PS2_VIF_STCYCL),
+        ps2VifCode(PS2_VIF_UNPACK_FLAG_TOPS, head_qw, PS2_VIF_UNPACK_V4_32));
+    uint32_t *head = (uint32_t *)(q + 2u);
+    q += 2u + (size_t)head_qw * 2u;
+    /* packed elements: V4-16, sign-extended, at TOPS + head_qw */
+    ps2GsNativeWriteTag(q, packed_qw, PS2_DMA_TAG_ID_CNT,
+        ps2VifCode(0u, 0u, PS2_VIF_NOP),
+        ps2VifCode(PS2_VIF_UNPACK_FLAG_TOPS | head_qw,
+            v4_16_elements == 256u ? 0u : v4_16_elements,
+            PS2_VIF_UNPACK_V4_16));
+    uint64_t *packed = q + 2u;
+    /* a half-filled last quadword continues as VIF NOPs */
+    packed[(size_t)packed_qw * 2u - 1u] = 0u;
+    q += 2u + (size_t)packed_qw * 2u;
+    /* suffix record: V4-32 after the expanded elements */
+    ps2GsNativeWriteTag(q, 1u, PS2_DMA_TAG_ID_CNT,
+        ps2VifCode(0u, 0u, PS2_VIF_NOP),
+        ps2VifCode(PS2_VIF_UNPACK_FLAG_TOPS | (head_qw + v4_16_elements), 1u,
+            PS2_VIF_UNPACK_V4_32));
+    uint32_t *suffix = (uint32_t *)(q + 2u);
+    q += 4u;
+    ps2GsNativeWriteTag(q, 0u, PS2_DMA_TAG_ID_CNT,
+        ps2VifCode(0u, 0u,
+            arena->has_gif_since_vu1 ? PS2_VIF_FLUSHA : PS2_VIF_NOP),
+        ps2VifCode(program_address, 0u, PS2_VIF_MSCAL));
+    arena->used_qw += need_qw;
+    arena->last_was_vu1 = true;
+    arena->has_gif_since_vu1 = false;
+    *packed_out = packed;
+    *suffix_out = suffix;
+    return head;
 }
 
 /* Bounded wait for the VIF1 chain, VU1 and their GIF hand-off to finish. */
@@ -708,7 +807,15 @@ static bool ps2GsNativeQueueUploadTextureInternal(GSGLOBAL *gs,
      */
     const uint64_t upload_wait_start = ps2RendererTraceIsCapturing()
         ? sysGetMicroseconds() : 0u;
+    ++s_stats.uploads;
+    s_stats.upload_bytes += payload_bytes;
+#if defined(PD_PS2_OBJECT_STATS)
+    const uint64_t stats_up_start = sysGetMicroseconds();
+#endif
     const bool upload_vu1_idle = ps2GsNativeWaitVif1Idle();
+#if defined(PD_PS2_OBJECT_STATS)
+    s_stats.upload_wait_us += (uint32_t)(sysGetMicroseconds() - stats_up_start);
+#endif
     const int upload_gif_wait = upload_vu1_idle
         ? dmaKit_wait(DMA_CHANNEL_GIF, 0) : -1;
     if (ps2RendererTraceIsCapturing()) {
@@ -901,9 +1008,15 @@ static bool ps2GsNativeQueueSubmitInternal(bool *vif_idle_after_submit)
 
     const uint64_t submit_wait_start = ps2RendererTraceIsCapturing()
         ? sysGetMicroseconds() : 0u;
+#if defined(PD_PS2_OBJECT_STATS)
+    const uint64_t stats_wait_start = sysGetMicroseconds();
+#endif
     const bool submit_vif_idle = ps2GsNativeWaitVif1Idle();
     const int submit_gif_wait = submit_vif_idle
         ? dmaKit_wait(DMA_CHANNEL_GIF, 0) : -1;
+#if defined(PD_PS2_OBJECT_STATS)
+    s_stats.submit_wait_us += (uint32_t)(sysGetMicroseconds() - stats_wait_start);
+#endif
     if (ps2RendererTraceIsCapturing()) {
         const uint64_t submit_wait_end = sysGetMicroseconds();
         ps2RendererTraceRecord(PS2_TRACE_QUEUE_WAIT,
@@ -923,6 +1036,62 @@ static bool ps2GsNativeQueueSubmitInternal(bool *vif_idle_after_submit)
 
     ps2GsNativeQueueWaitPendingFlip();
     ps2GsVu1QueueMarkPending();
+    ++s_stats.submits;
+    s_stats.qwords += chain_qw;
+#if defined(PD_PS2_OBJECT_STATS)
+    /* Walk the chain: what the qwords are. */
+    for (uint32_t q = 0u; q < chain_qw;) {
+        const uint64_t *tag = arena->ucab + (size_t)q * 2u;
+        const uint32_t qwc = (uint32_t)(tag[0] & 0xffffu);
+        const uint32_t id = (uint32_t)(tag[0] >> 28) & 7u;
+        const uint32_t vif1 = (uint32_t)(tag[1] >> 32);
+        const uint32_t cmd = (vif1 >> 24) & 0x7fu;
+        if (id == PS2_DMA_TAG_ID_REF) {
+            s_stats.ref_qw += qwc;
+            q += 1u;
+            continue;
+        }
+        if (cmd == PS2_VIF_DIRECT) {
+            /* GIF packets inside */
+            uint32_t g = q + 1u;
+            const uint32_t end = q + 1u + qwc;
+            while (g < end) {
+                const uint64_t *gt = arena->ucab + (size_t)g * 2u;
+                const uint32_t nloop = (uint32_t)(gt[0] & 0x7fffu);
+                const uint32_t flg = (uint32_t)(gt[0] >> 58) & 3u;
+                uint32_t nreg = (uint32_t)(gt[0] >> 60) & 15u;
+                nreg = nreg ? nreg : 16u;
+                const bool ad = flg == 0u && nreg == 1u && (gt[1] & 0xfu) == 0xeu;
+                uint32_t body = flg == 0u ? nloop * nreg : flg == 1u ? (nloop * nreg + 1u) / 2u : nloop;
+                if (ad) {
+                    s_stats.gif_ad_qw += body + 1u;
+                    ++s_stats.gif_ad_packets;
+                } else {
+                    s_stats.gif_vtx_qw += body + 1u;
+                    ++s_stats.gif_vtx_packets;
+                }
+                g += 1u + body;
+            }
+        } else if (cmd == PS2_VIF_UNPACK_V4_16) {
+            s_stats.vu1_qw += qwc;
+            s_stats.vu1_obj_qw += qwc;
+        } else if (cmd == PS2_VIF_UNPACK_V4_32) {
+            s_stats.vu1_qw += qwc;
+            ++s_stats.vu1_batches;
+            const uint64_t *ms = arena->ucab + (size_t)(q + 1u + qwc) * 2u;
+            const uint32_t prog = (uint32_t)(ms[1] >> 32) & 0xffffu;
+            if (prog == 256u) {
+                s_stats.vu1_obj_qw += qwc;
+            } else if (prog == 64u) {
+                s_stats.vu1_tex_qw += qwc;
+            }
+        }
+        q += 1u + qwc;
+    }
+#endif
+    if (chain_qw > s_stats.max_chain_qw) {
+        s_stats.max_chain_qw = chain_qw;
+    }
     dmaKit_send_chain_ucab(DMA_CHANNEL_VIF1, arena->ucab);
     s_build_arena ^= 1u;
     ps2GsNativeResetArena(&s_arenas[s_build_arena]);
@@ -957,6 +1126,9 @@ extern "C" bool ps2GsNativeQueueWaitGs(void)
      */
     const bool trace_capture = ps2RendererTraceIsCapturing();
     const uint64_t wait_start = trace_capture ? sysGetMicroseconds() : 0u;
+#if defined(PD_PS2_OBJECT_STATS)
+    const uint64_t stats_fin_start = sysGetMicroseconds();
+#endif
     const bool vu1_idle = ps2GsNativeWaitVif1Idle();
     const int ownership_wait = vu1_idle
         ? dmaKit_wait(DMA_CHANNEL_GIF, 0) : -1;
@@ -972,6 +1144,7 @@ extern "C" bool ps2GsNativeQueueWaitGs(void)
         return false;
     }
 
+    ++s_stats.finishes;
     GS_SETREG_CSR_FINISH(1);
     dmaKit_send_ucab(DMA_CHANNEL_GIF, s_finish_ucab, 2);
     const int finish_dma_wait = dmaKit_wait(DMA_CHANNEL_GIF, 0);
@@ -991,6 +1164,9 @@ extern "C" bool ps2GsNativeQueueWaitGs(void)
         trace_capture ? sysGetMicroseconds() : 0u;
     while (!(GS_CSR_FINISH)) {
     }
+#if defined(PD_PS2_OBJECT_STATS)
+    s_stats.finish_wait_us += (uint32_t)(sysGetMicroseconds() - stats_fin_start);
+#endif
     if (trace_capture) {
         const uint64_t finish_end = sysGetMicroseconds();
         ps2RendererTraceRecord(PS2_TRACE_QUEUE_WAIT, 2u,
@@ -1113,6 +1289,12 @@ extern "C" bool ps2GsNativeQueuePresent(GSGLOBAL *gs)
 
     dmaKit_send_ucab(DMA_CHANNEL_GIF, s_present_ucab, 5);
     return true;
+}
+
+extern "C" void ps2GsNativeQueueTakeStats(struct Ps2GsNativeQueueStats *out)
+{
+    *out = s_stats;
+    memset(&s_stats, 0, sizeof(s_stats));
 }
 
 extern "C" uint32_t ps2GsNativeQueueUsedQwords(void)
