@@ -2389,7 +2389,11 @@ void lvTick(void)
 		sndTick();
 		pakExecuteDebugOperations();
 		lightingTick();
+#ifndef PLATFORM_PS2
+		// Debug high-water marks only (nothing reads them); scans every
+		// model and animation slot each frame.
 		modelmgrPrintCounts();
+#endif
 		boltbeamsTick();
 		amTick();
 		menuTick();
