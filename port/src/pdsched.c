@@ -221,6 +221,7 @@ void schedStartFrame(OSSched *sc)
 
 #ifdef PLATFORM_PS2
 u64 g_Ps2PhaseAudioUs;
+u32 g_Ps2HudTenthsMs[4];
 #endif
 
 void schedAudioFrame(OSSched *sc)

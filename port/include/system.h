@@ -64,6 +64,8 @@ void osEepromFlushPending(s32 force);
 extern u64 g_Ps2PhaseAudioUs;
 extern u64 g_Ps2PhaseGfxUs;
 extern u64 g_Ps2PhaseFlipWaitUs; // EE idle waiting for the previous scanout flip
+// Display FPS breakdown: logic, gfx, audio, present (0.1 ms, 30-frame average)
+extern u32 g_Ps2HudTenthsMs[4];
 #endif
 
 #endif

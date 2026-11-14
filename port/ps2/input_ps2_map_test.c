@@ -62,17 +62,26 @@ static void test_axes_deadzone_and_swap(void)
     struct Ps2InputMapConfig config = defaultConfig();
     OSContPad destination;
     assert(ps2InputMapPad(&source, &config, &destination));
+    /* dual analog: right stick looks (N64 stick), left stick moves */
+    assert(destination.stick_x == -128);
+    assert(destination.stick_y < 0);
+    assert(destination.rstick_x == 0);
+    assert(destination.rstick_y == 127);
+
+    config.swap_sticks = true;
+    assert(ps2InputMapPad(&source, &config, &destination));
     assert(destination.stick_x == 0);
     assert(destination.stick_y == 127);
     assert(destination.rstick_x == -128);
     assert(destination.rstick_y < 0);
 
-    config.swap_sticks = true;
+    /* without dual analog the left stick is the N64 stick */
+    config.swap_sticks = false;
+    config.dual_analog = false;
     assert(ps2InputMapPad(&source, &config, &destination));
-    assert(destination.stick_x == -128);
-    assert(destination.stick_y < 0);
-    assert(destination.rstick_x == 0);
-    assert(destination.rstick_y == 127);
+    assert(destination.stick_x == 0);
+    assert(destination.stick_y == 127);
+    assert((destination.button & L_CBUTTONS) != 0u);
 }
 
 static void test_c_button_emulation_and_cancellation(void)

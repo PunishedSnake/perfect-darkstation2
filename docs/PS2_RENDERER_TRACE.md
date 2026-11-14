@@ -12,7 +12,7 @@ the filesystem.
 1. Start the normal `pd-ps2-game.elf` build from USB.
 2. Move to the scene and camera angle you want to inspect. You can capture
    from the menu, Carrington Institute or a mission.
-3. Press **Select** on controller 1 once. The next complete renderer frame is
+3. With `Debug.TraceCapture=1` in `pd.ini` (off by default), press **Select** on controller 1 once. The next complete renderer frame is
    buffered in EE memory and written as `pdps2-gs-trace.bin` beside the ELF.
 4. Wait for USB activity to finish before resetting or removing the device.
 

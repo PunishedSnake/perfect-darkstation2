@@ -384,6 +384,12 @@ Still on the plain path:
 * the two-pass input-lerp graph (2);
 * independent-alpha trilerp (graph 4).
 
+### Hardware fixes (round 24)
+
+* The skin cull sign was inverted: back-face-culled models (the Carrington
+  Institute couch) lost their front faces and showed their insides. Checked
+  in PCSX2 against the plain path in CI and against Joanna in Defection.
+
 ## Next: PS2-specific GS libraries
 
 * Measure on hardware where the GS time goes: alpha-trilerp passes, fill,

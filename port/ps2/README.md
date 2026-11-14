@@ -44,7 +44,7 @@ eeprom.bin   emulated 16 Kbit cartridge EEPROM, exactly 2048 bytes
 
 `pdps2.log` is created after the owned USB/HDD stack is ready only when
 `--file-log` is enabled or a file-logging build is used. `pdps2-gs-trace.bin` is created after a press of
-Select on controller 1 as described in
+Select on controller 1 (with `Debug.TraceCapture=1`) as described in
 [the trace guide](../../docs/PS2_RENDERER_TRACE.md).
 
 The ELF directory is the default base and save directory because PS2 launchers

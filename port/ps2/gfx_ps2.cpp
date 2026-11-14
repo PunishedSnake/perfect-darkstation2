@@ -965,8 +965,29 @@ extern "C" bool gfxPs2UploadTmemTexture(
         bool mirror_s;
         bool mirror_t;
         ps2_effective_upload_mirror(width, height, &mirror_s, &mirror_t);
+        /*
+         * The game's texture decompressor writes RGBA32 texels as native
+         * 32-bit words, so in memory (and in the TMEM model, which copies
+         * bytes as loaded) a texel is A, B, G, R on the little-endian EE.
+         * The desktop import fixes this with PD_BE32; the GS wants R, G, B,
+         * A bytes, so reverse each texel here.
+         */
+        static uint8_t s_rgba32_swapped[GFX_RDP_TMEM_BYTES] __attribute__((aligned(16)));
+        const uint32_t texel_count = width * height;
+        if ((size_t)texel_count * 4u > sizeof(s_rgba32_swapped)) {
+            return false;
+        }
+        {
+            const uint32_t *src = (const uint32_t *)(const void *)view->texels;
+            uint32_t *dst = (uint32_t *)(void *)s_rgba32_swapped;
+            for (uint32_t i = 0u; i < texel_count; ++i) {
+                uint32_t w;
+                memcpy(&w, &src[i], 4u);
+                dst[i] = __builtin_bswap32(w);
+            }
+        }
         if (!ps2GsCoreUploadTextureRgba32(
-                handle, view->texels, width, height,
+                handle, s_rgba32_swapped, width, height,
                 mirror_s, mirror_t)) {
             return false;
         }
@@ -975,7 +996,7 @@ extern "C" bool gfxPs2UploadTmemTexture(
         if (handle < PS2_GFX_TEXTURE_STATE_SLOTS) {
             s_texture_sampler[handle].monochrome_rgb =
                 gfxPs2Rgba32IsMonochrome(
-                    view->texels, width * height);
+                    s_rgba32_swapped, texel_count);
         }
         ps2_record_texture_provenance(
             handle, format, size, palette_format, view->palette_count,

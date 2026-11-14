@@ -587,6 +587,28 @@ void mainLoop(void)
 				frameTimingTick += tickEnd - frameStart;
 				frameTimingEnd += frameEnd - tickEnd;
 				frameTimingFrames++;
+				{
+					/* on-screen breakdown (Display FPS): averages over 30
+					 * frames of logic, gfx, audio and present, in 0.1 ms */
+					static u64 hudTick, hudEnd, hudAudio0, hudGfx0;
+					static u32 hudFrames;
+					hudTick += tickEnd - frameStart;
+					hudEnd += frameEnd - tickEnd;
+					if (++hudFrames == 30u) {
+						/* the 5 s log may have reset the counters meanwhile */
+						const u64 audio = g_Ps2PhaseAudioUs >= hudAudio0 ? g_Ps2PhaseAudioUs - hudAudio0 : g_Ps2PhaseAudioUs;
+						const u64 gfx = g_Ps2PhaseGfxUs >= hudGfx0 ? g_Ps2PhaseGfxUs - hudGfx0 : g_Ps2PhaseGfxUs;
+						const u64 logic = hudTick > audio + gfx ? hudTick - audio - gfx : 0;
+						g_Ps2HudTenthsMs[0] = (u32)(logic / 3000u);
+						g_Ps2HudTenthsMs[1] = (u32)(gfx / 3000u);
+						g_Ps2HudTenthsMs[2] = (u32)(audio / 3000u);
+						g_Ps2HudTenthsMs[3] = (u32)(hudEnd / 3000u);
+						hudTick = hudEnd = 0;
+						hudFrames = 0;
+						hudAudio0 = g_Ps2PhaseAudioUs;
+						hudGfx0 = g_Ps2PhaseGfxUs;
+					}
+				}
 				osEepromFlushPending(0);
 				if (frameEnd >= (u64)PD_PS2_EE_PROFILER_START_S * 1000000ULL) {
 					ps2EeProfilerStart();

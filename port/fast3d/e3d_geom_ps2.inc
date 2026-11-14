@@ -1290,7 +1290,10 @@ static bool e3d_skin_geom(const struct E3dProg* P, const struct E3dOp* O, struct
     const int32_t ts = rsp.texture_scaling_factor.s, tt = rsp.texture_scaling_factor.t;
     K->misc[0] = (float)ts * 0.25f;
     K->misc[1] = (float)tt * 0.25f;
-    K->misc[2] = (cull == G_CULL_FRONT ? -1.0f : 1.0f) * (X.invert_y ? -1.0f : 1.0f);
+    /* the microprogram keeps a triangle iff its screen-space cross product
+     * times this is negative (checked against Fast3D in CI and Defection:
+     * back-face culling keeps sign -1 with no y flip) */
+    K->misc[2] = (cull == G_CULL_FRONT ? 1.0f : -1.0f) * (X.invert_y ? -1.0f : 1.0f);
     K->misc[3] = -18446744073709551616.0f;
     K->lod[0] = 1.0f / 1024.0f;
     K->lod[1] = 0.3f * 255.0f;

@@ -955,6 +955,10 @@ void lvFindThreats(void)
 }
 
 #ifndef PLATFORM_N64
+#ifdef PLATFORM_PS2
+extern u32 g_Ps2HudTenthsMs[4];
+#endif
+
 Gfx *lvRenderFPS(Gfx *gdl)
 {
 	const f32 fps = videoGetAverageFPS();
@@ -984,6 +988,21 @@ Gfx *lvRenderFPS(Gfx *gdl)
 
 		gdl = text0f153628(gdl);
 		gdl = textRender(gdl, &x, &y, buffer, g_CharsNumeric, g_FontNumeric, color, 0x000000a0, viGetWidth(), viGetHeight(), 0, 0);
+#ifdef PLATFORM_PS2
+		{
+			/* milliseconds per frame: logic, gfx, audio, present */
+			static const u32 colors[4] = { 0xffffffa0, 0x40c0ffa0, 0xffc040a0, 0xc0c0c0a0 };
+			s32 i;
+			x = 27;
+			y += 12;
+			for (i = 0; i < 4; i++) {
+				char part[16];
+				const u32 t = g_Ps2HudTenthsMs[i];
+				snprintf(part, sizeof part, "%u.%u ", (unsigned)(t / 10), (unsigned)(t % 10));
+				gdl = textRender(gdl, &x, &y, part, g_CharsNumeric, g_FontNumeric, colors[i], 0x000000a0, viGetWidth(), viGetHeight(), 0, 0);
+			}
+		}
+#endif
 		gdl = text0f153780(gdl);
 
 		gSPClearExtraGeometryModeEXT(gdl++, g_HudAlignModeL);
