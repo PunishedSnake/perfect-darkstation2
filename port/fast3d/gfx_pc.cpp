@@ -3302,8 +3302,9 @@ static inline void gfx_obj_bounds(const Vtx* v, size_t n, float lo[3], float hi[
 }
 
 extern "C" bool gfxPs2ObjectDeferEnabled(void);
+static bool g_e3d_no_defer; /* Emotion3D: replaying a skinned (linear) epoch */
 static bool gfx_obj_try_defer(size_t n_vertices, size_t dest_index, const Vtx* vertices) {
-    if (!gfx_obj.enabled || !gfxPs2ObjectDeferEnabled() || gfx_obj.materializing || !gfx_obj.setup_ok || n_vertices == 0 ||
+    if (!gfx_obj.enabled || g_e3d_no_defer || !gfxPs2ObjectDeferEnabled() || gfx_obj.materializing || !gfx_obj.setup_ok || n_vertices == 0 ||
         dest_index >= MAX_VERTICES ||
         n_vertices > MAX_VERTICES - dest_index || (rsp.geometry_mode & G_LIGHTING) != 0 ||
         rsp.vertex_colors == nullptr) {
@@ -3519,7 +3520,8 @@ static bool gfx_obj_tri(uint8_t a, uint8_t b, uint8_t c) {
     return false;
 }
 
-#include "e3d_room_ps2.inc"
+uint32_t num_dls = 0; /* frames: gfx_run calls */
+#include "e3d_geom_ps2.inc"
 #endif
 
 /*
@@ -4312,6 +4314,7 @@ static inline bool gfx_opcode_keeps_tri_setup(uint32_t opcode) {
         case (uint8_t)G_COL:
 #if defined(PLATFORM_PS2)
         case (uint8_t)G_E3D_ROOMLEAF_EXT: /* its own state ops invalidate as they run */
+        case (uint8_t)G_E3D_MODELDL_EXT:
 #endif
         case (uint8_t)G_MTX:
         case (uint8_t)G_POPMTX:
@@ -4447,6 +4450,13 @@ static void gfx_run_dl(Gfx* cmd) {
                 e3d_room_leaf(C0(0, 16), (Gfx*)cmd->words.w1, ps2_trace_depth);
 #else
                 gfx_run_dl((Gfx*)cmd->words.w1, ps2_trace_depth + 1u);
+#endif
+                break;
+            case (uint8_t)G_E3D_MODELDL_EXT:
+#if defined(GFX_PS2_DIRECT)
+                e3d_model_dl((Gfx*)seg_addr(cmd->words.w1), ps2_trace_depth);
+#else
+                gfx_run_dl((Gfx*)seg_addr(cmd->words.w1), ps2_trace_depth + 1u);
 #endif
                 break;
 #endif
@@ -4811,7 +4821,6 @@ extern "C" void gfx_start_frame(void) {
     gfx_update_aspect_mode();
 }
 
-uint32_t num_dls = 0;
 
 extern "C" void gfx_run(Gfx* commands) {
     ++num_dls;

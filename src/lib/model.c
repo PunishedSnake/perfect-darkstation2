@@ -3201,6 +3201,22 @@ void modelRenderNodeGundl(struct modelrenderdata *renderdata, struct model *mode
 	}
 }
 
+/**
+ * Queue a DL node's display list. On PS2 it goes to Emotion3D, which
+ * compiles model lists once and replays them against the instance's
+ * vertices, colours and matrices (port/fast3d/e3d_geom_ps2.inc).
+ */
+static void modelGdlNodeDl(struct modelrenderdata *renderdata, Gfx *gdl)
+{
+#ifdef PLATFORM_PS2
+	renderdata->gdl->words.w0 = (uintptr_t)G_E3D_MODELDL_EXT << 24;
+	renderdata->gdl->words.w1 = (uintptr_t)gdl;
+	renderdata->gdl++;
+#else
+	gSPDisplayList(renderdata->gdl++, gdl);
+#endif
+}
+
 void modelRenderNodeDl(struct modelrenderdata *renderdata, struct model *model, struct modelnode *node)
 {
 	union modelrodata *rodata = node->rodata;
@@ -3237,12 +3253,12 @@ void modelRenderNodeDl(struct modelrenderdata *renderdata, struct model *model, 
 			gSPSegment(renderdata->gdl++, SPSEGMENT_MODEL_VTX, osVirtualToPhysical(rwdata->dl.vertices));
 			gSPSegment(renderdata->gdl++, SPSEGMENT_MODEL_COL2, osVirtualToPhysical(rwdata->dl.colours));
 
-			gSPDisplayList(renderdata->gdl++, rwdata->dl.gdl);
+			modelGdlNodeDl(renderdata, rwdata->dl.gdl);
 
 			if (rodata->dl.mcount == 3 && rodata->dl.xlugdl) {
 				modelApplyRenderModeType3(renderdata, false);
 
-				gSPDisplayList(renderdata->gdl++, rodata->dl.xlugdl);
+				modelGdlNodeDl(renderdata, rodata->dl.xlugdl);
 			}
 		}
 	}
@@ -3262,7 +3278,7 @@ void modelRenderNodeDl(struct modelrenderdata *renderdata, struct model *model, 
 
 			modelApplyRenderModeType4(renderdata, false);
 
-			gSPDisplayList(renderdata->gdl++, rodata->dl.xlugdl);
+			modelGdlNodeDl(renderdata, rodata->dl.xlugdl);
 		}
 	}
 }
