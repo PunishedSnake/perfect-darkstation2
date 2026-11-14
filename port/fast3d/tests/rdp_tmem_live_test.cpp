@@ -256,6 +256,12 @@ static uint64_t run_lazy_stream(bool eager, uint8_t *final_bytes,
     if (!eager) {
         /* both the pending-block identity and the copy-free path ran */
         assert(stats.fingerprint_source_hash > 100u);
+        /* palettes were deferred, identified from source and elided */
+        fprintf(stderr, "lazy stream: tlut deferred=%u flushed=%u elided=%u source fingerprints=%u\n",
+            stats.load_tlut_deferred, stats.load_tlut_flushed, stats.load_tlut_elided,
+            stats.fingerprint_tlut_source);
+        assert(stats.load_tlut_deferred > 100u);
+        assert(stats.fingerprint_tlut_source > 5u);
     }
     const struct GfxRdpTmem *tmem = gfxRdpTmemLiveState();
     memcpy(final_bytes, tmem->bytes, GFX_RDP_TMEM_BYTES);

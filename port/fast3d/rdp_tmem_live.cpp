@@ -34,9 +34,41 @@ struct GfxRdpTmemLiveDeferredLoad {
     uint64_t hash;
 };
 
+/*
+ * Emotion3D lazy palette (docs/ps2-emotion3d.md, stage 2). Perfect Dark
+ * reloads a different palette before nearly every colour-indexed draw.
+ * Writing it costs four stores, validity bytes and a hash mix per entry,
+ * yet a draw whose texture is already cached on the GS only needs the
+ * palette's identity. So a well-formed TLUT load is recorded, its identity
+ * comes from the source entries (bit-identical to hashing the written TMEM
+ * words, memoized per texture-memory epoch), and the TMEM write happens
+ * only when something reads or overlaps those words.
+ *
+ * The memo keeps a copy of each palette and compares it with the source on
+ * every use, so palettes the game rewrites in place are never stale; no
+ * epoch is trusted here.
+ */
+struct GfxRdpTmemLiveDeferredTlut {
+    bool active;
+    const uint8_t *source; /* first entry, two bytes each */
+    uint32_t first_word;
+    uint32_t count;
+};
+
+enum { GFX_RDP_TMEM_LIVE_TLUT_MEMO = 32 };
+struct GfxRdpTmemLiveTlutMemo {
+    const uint8_t *source;
+    uint32_t count;
+    uint32_t pad;
+    uint64_t hash;
+    uint8_t copy[512] __attribute__((aligned(16)));
+};
+
 static struct {
     bool initialized;
     struct GfxRdpTmemRuntime runtime;
+    struct GfxRdpTmemLiveDeferredTlut tlut;
+    struct GfxRdpTmemLiveTlutMemo tlut_memo[GFX_RDP_TMEM_LIVE_TLUT_MEMO];
     struct GfxRdpTmemLiveStats stats;
     struct GfxRdpTmemLiveDeferredLoad deferred[GFX_RDP_TMEM_LIVE_DEFERRED];
     uint32_t deferred_next;
@@ -63,6 +95,63 @@ static void gfxRdpTmemLiveFlushOne(struct GfxRdpTmemLiveDeferredLoad *load)
         load->word_count, load->dxt);
 }
 
+/* Write the pending palette into TMEM now. */
+static void gfxRdpTmemLiveFlushTlut(void)
+{
+    if (!s_live.tlut.active) {
+        return;
+    }
+    s_live.tlut.active = false;
+    /* Cannot fail: the load was validated when it was deferred. */
+    (void)gfxRdpTmemWriteTlutBytes(&s_live.runtime.tmem,
+        s_live.tlut.first_word, s_live.tlut.source, s_live.tlut.count);
+    ++s_live.stats.load_tlut_flushed;
+}
+
+static inline bool gfxRdpTmemLiveTlutOverlap(uint32_t first_word,
+    uint32_t word_count)
+{
+    return s_live.tlut.active &&
+        first_word < s_live.tlut.first_word + s_live.tlut.count &&
+        s_live.tlut.first_word < first_word + word_count;
+}
+
+static void gfxRdpTmemLiveFlushTlutOverlapping(uint32_t first_word,
+    uint32_t word_count)
+{
+    if (gfxRdpTmemLiveTlutOverlap(first_word, word_count)) {
+        gfxRdpTmemLiveFlushTlut();
+    }
+}
+
+/*
+ * Hash of entries [first, first + count) of a palette as gfxRdpTmemWriteTlut
+ * stores and hashes them: each entry is four copies of its 16-bit value.
+ */
+static uint64_t gfxRdpTmemLiveTlutSourceHash(const uint8_t *source,
+    uint32_t count)
+{
+    const uint32_t slot = ((uint32_t)(uintptr_t)source * 0x9e3779b1u ^
+        count * 0x85ebca6bu) >> 27; /* 0..31 */
+    struct GfxRdpTmemLiveTlutMemo *m = &s_live.tlut_memo[slot];
+    if (m->source == source && m->count == count &&
+            memcmp(m->copy, source, count * 2u) == 0) {
+        return m->hash;
+    }
+    uint64_t h = GFX_RDP_TMEM_HASH_SEED;
+    for (uint32_t i = 0; i < count; ++i) {
+        const uint32_t half = (uint32_t)source[i * 2u] |
+            ((uint32_t)source[i * 2u + 1u] << 8);
+        const uint32_t pair = half | (half << 16);
+        gfxRdpTmemHashMix(&h, pair, pair);
+    }
+    m->source = source;
+    m->count = count;
+    m->hash = h;
+    memcpy(m->copy, source, count * 2u);
+    return h;
+}
+
 extern "C" void gfxRdpTmemLiveFlush(void)
 {
     if (!s_live.initialized) {
@@ -71,6 +160,7 @@ extern "C" void gfxRdpTmemLiveFlush(void)
     for (uint32_t i = 0; i < GFX_RDP_TMEM_LIVE_DEFERRED; ++i) {
         gfxRdpTmemLiveFlushOne(&s_live.deferred[i]);
     }
+    gfxRdpTmemLiveFlushTlut();
 }
 
 static bool gfxRdpTmemLiveDeferredOverlap(
@@ -83,6 +173,9 @@ static bool gfxRdpTmemLiveDeferredOverlap(
 }
 
 /* Settle every pending load that touches [first_word, +word_count). */
+static void gfxRdpTmemLiveFlushTlutOverlapping(uint32_t first_word,
+    uint32_t word_count);
+
 static void gfxRdpTmemLiveFlushOverlapping(uint32_t first_word,
     uint32_t word_count)
 {
@@ -92,6 +185,7 @@ static void gfxRdpTmemLiveFlushOverlapping(uint32_t first_word,
             gfxRdpTmemLiveFlushOne(&s_live.deferred[i]);
         }
     }
+    gfxRdpTmemLiveFlushTlutOverlapping(first_word, word_count);
 }
 
 /*
@@ -370,6 +464,7 @@ extern "C" void gfxRdpTmemLiveSetTile(uint8_t fmt, uint32_t siz, uint32_t line,
     if (!gfxRdpTmemRuntimeSetTile(&s_live.runtime,
             tile, fmt, (uint8_t)siz, (uint16_t)line, (uint16_t)tmem)) {
         ++s_live.stats.malformed_or_unsupported;
+        s_live.tlut.active = false; /* invalidated below in any case */
         (void)gfxRdpTmemInvalidatePhysical(&s_live.runtime.tmem,
             0u, GFX_RDP_TMEM_BYTES);
     }
@@ -398,10 +493,34 @@ extern "C" void gfxRdpTmemLiveLoadTlut(uint8_t tile,
                 t->tmem_word >= GFX_RDP_TMEM_HALF_WORDS &&
                 count <= GFX_RDP_TMEM_WORDS - t->tmem_word) {
             gfxRdpTmemLiveDropCovered(t->tmem_word, (uint32_t)count);
+            /* An older pending palette is dead if this one covers it. */
+            if (s_live.tlut.active) {
+                if (t->tmem_word <= s_live.tlut.first_word &&
+                        s_live.tlut.first_word + s_live.tlut.count <=
+                            t->tmem_word + (uint32_t)count) {
+                    s_live.tlut.active = false;
+                    ++s_live.stats.load_tlut_elided;
+                } else {
+                    gfxRdpTmemLiveFlushTlut();
+                }
+            }
+            const uint32_t pitch =
+                (uint32_t)s_live.runtime.image.width_minus_one + 1u;
+            s_live.tlut.active = true;
+            s_live.tlut.source = (const uint8_t *)s_live.runtime.image.addr +
+                ((uint64_t)pitch * ult + uls) * 2u;
+            s_live.tlut.first_word = t->tmem_word;
+            s_live.tlut.count = (uint32_t)count;
+            ++s_live.stats.load_tlut_deferred;
+            ++s_live.stats.load_tlut_exact;
+            return;
         } else {
             gfxRdpTmemLiveFlushOverlapping(t->tmem_word, 256u);
         }
     }
+    /* A load that is not deferred may invalidate all of TMEM: an older
+     * pending palette logically precedes it. */
+    gfxRdpTmemLiveFlushTlut();
     const enum GfxRdpTmemLoadResult result = gfxRdpTmemRuntimeLoadTlut(
         &s_live.runtime, tile, uls, ult, lrs, lrt);
     if (result != GFX_RDP_TMEM_LOAD_EXACT && gfxRdpTmemLiveAnyDeferred()) {
@@ -456,6 +575,16 @@ extern "C" void gfxRdpTmemLiveLoadBlock(uint8_t tile,
             const uint32_t words =
                 (uint32_t)(size64 / GFX_RDP_TMEM_WORD_BYTES);
             gfxRdpTmemLiveDropCovered(t->tmem_word, words);
+            if (gfxRdpTmemLiveTlutOverlap(t->tmem_word, words)) {
+                if (t->tmem_word <= s_live.tlut.first_word &&
+                        s_live.tlut.first_word + s_live.tlut.count <=
+                            t->tmem_word + words) {
+                    s_live.tlut.active = false; /* overwritten in full */
+                    ++s_live.stats.load_tlut_elided;
+                } else {
+                    gfxRdpTmemLiveFlushTlut();
+                }
+            }
             struct GfxRdpTmemLiveDeferredLoad *slot = NULL;
             for (uint32_t i = 0; i < GFX_RDP_TMEM_LIVE_DEFERRED; ++i) {
                 if (!s_live.deferred[i].active) {
@@ -579,9 +708,21 @@ extern "C" bool gfxRdpTmemLiveTextureFingerprint(uint8_t tile_index,
             hashed = true;
             ++s_live.stats.fingerprint_source_hash;
         } else {
-            /* Rows may be scattered; settle everything they could read. */
-            gfxRdpTmemLiveFlush();
+            /* Rows may be scattered; settle every pending block they could
+             * read (a pending palette is handled with the rows below). */
+            for (uint32_t i = 0; i < GFX_RDP_TMEM_LIVE_DEFERRED; ++i) {
+                gfxRdpTmemLiveFlushOne(&s_live.deferred[i]);
+            }
         }
+    }
+
+    if (!hashed) {
+        /* the rows read TMEM below: a pending palette under them must be
+         * there (split RGBA32 reads both halves) */
+        const uint64_t span64 = split_rgba32 ? GFX_RDP_TMEM_WORDS
+            : (uint64_t)row_count * tile->line_words;
+        gfxRdpTmemLiveFlushTlutOverlapping(split_rgba32 ? 0u : tile->tmem_word,
+            span64 > GFX_RDP_TMEM_WORDS ? GFX_RDP_TMEM_WORDS : (uint32_t)span64);
     }
 
     if (!hashed && !split_rgba32) {
@@ -628,9 +769,19 @@ extern "C" bool gfxRdpTmemLiveTextureFingerprint(uint8_t tile_index,
             return false;
         }
 
-        gfxRdpTmemLiveFlushOverlapping(first_palette_word, palette_words);
         uint64_t palette_hash;
-        if (gfxRdpTmemLiveHashValidRange(tmem, first_palette_word,
+        if (s_live.tlut.active && first_palette_word >= s_live.tlut.first_word &&
+                first_palette_word + palette_words <=
+                    s_live.tlut.first_word + s_live.tlut.count) {
+            /* Same value as hashing the words after the write. Blocks never
+             * stay pending under a pending palette, so this is all of it. */
+            palette_hash = gfxRdpTmemLiveTlutSourceHash(s_live.tlut.source +
+                (first_palette_word - s_live.tlut.first_word) * 2u, palette_words);
+            gfxRdpTmemHashMix(&hash, 0x7a1e7a1eu, palette_words);
+            gfxRdpTmemHashMix64(&hash, palette_hash);
+            ++s_live.stats.fingerprint_tlut_source;
+        } else if (gfxRdpTmemLiveFlushOverlapping(first_palette_word, palette_words),
+                gfxRdpTmemLiveHashValidRange(tmem, first_palette_word,
                 palette_words, &palette_hash)) {
             gfxRdpTmemHashMix(&hash, 0x7a1e7a1eu, palette_words);
             gfxRdpTmemHashMix64(&hash, palette_hash);
@@ -727,6 +878,10 @@ extern "C" bool gfxRdpTmemLiveFillTextureView(uint8_t tile_index,
      * is settled here, so the rest can stay lazy: a later block that covers
      * them still elides the copy, and the final TMEM state is unchanged.
      */
+    if (s_live.tlut.active) {
+        /* reading texels and palette from TMEM: the palette must be there */
+        gfxRdpTmemLiveFlushTlut();
+    }
     if (gfxRdpTmemLiveAnyDeferred()) {
         bool targeted = false;
         if (view && tile_index < GFX_RDP_TMEM_RUNTIME_TILES &&

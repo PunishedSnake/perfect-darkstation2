@@ -590,6 +590,18 @@ static void e3d_room_leaf(uint32_t room, Gfx* gdl, uint32_t depth) {
 }
 
 static void e3d_log_stats(void) {
+    {
+        static struct GfxRdpTmemLiveStats prev;
+        struct GfxRdpTmemLiveStats now;
+        gfxRdpTmemLiveGetStats(&now);
+        sysLogPrintf(LOG_NOTE, "E3D tlut deferred=%u flushed=%u elided=%u source_ids=%u fingerprints=%u (per frame)",
+                     (now.load_tlut_deferred - prev.load_tlut_deferred) / 60,
+                     (now.load_tlut_flushed - prev.load_tlut_flushed) / 60,
+                     (now.load_tlut_elided - prev.load_tlut_elided) / 60,
+                     (now.fingerprint_tlut_source - prev.fingerprint_tlut_source) / 60,
+                     (now.fingerprint_exact - prev.fingerprint_exact) / 60);
+        prev = now;
+    }
     sysLogPrintf(LOG_NOTE,
                  "E3D leaves=%u fallback=%u compiles=%u resets=%u chunks inside=%u outside=%u mixed=%u unfit=%u "
                  "tris fast=%u slow=%u arena=%u KiB (per frame)",
