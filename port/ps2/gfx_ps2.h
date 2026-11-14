@@ -226,6 +226,7 @@ struct Ps2GsVu1TransformVertex;
  */
 struct GfxPs2DirectContext {
     uint8_t trilerp;     /* same-tap opaque trilerp submission */
+    uint8_t color_only;  /* untextured: records carry no texture coordinates */
     uint8_t fog;         /* write the fog coefficient (fog_lut) */
     uint8_t use_alpha;   /* shader parses an alpha per input */
     uint8_t num_inputs;  /* shader combiner inputs */

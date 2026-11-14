@@ -1646,6 +1646,15 @@ void bgReset(s32 stagenum)
 	}
 }
 
+#ifdef PLATFORM_PS2
+void roomHighlightResetCache(s32 roomcount);
+#endif
+#ifndef PLATFORM_N64
+static s32 g_PortalBboxCount;
+static struct coord *g_PortalBboxes;
+static u8 *g_PortalBboxValid;
+#endif
+
 void bgBuildTables(s32 stagenum)
 {
 	s32 i;
@@ -1676,6 +1685,9 @@ void bgBuildTables(s32 stagenum)
 	u8 *numlightsptr;
 
 	g_Rooms = mempAlloc(ALIGN16(g_Vars.roomcount * sizeof(struct room)), MEMPOOL_STAGE);
+#ifdef PLATFORM_PS2
+	roomHighlightResetCache(g_Vars.roomcount);
+#endif
 	g_BgDrawSlotsByRoom = mempAlloc(ALIGN16(g_Vars.roomcount * sizeof(struct drawslotpointer)), MEMPOOL_STAGE);
 
 	for (i = 0; i < g_Vars.roomcount; i++) {
@@ -1713,6 +1725,12 @@ void bgBuildTables(s32 stagenum)
 
 	mtx00016748(1);
 
+#ifndef PLATFORM_N64
+	g_PortalBboxCount = 0;
+	g_PortalBboxes = NULL;
+	g_PortalBboxValid = NULL;
+#endif
+
 	if (var800a4920 == 0) {
 		numportals = 0;
 
@@ -1722,6 +1740,19 @@ void bgBuildTables(s32 stagenum)
 
 		g_BgNumPortalCameraCacheItems = numportals;
 		g_PortalCameraCache = mempAlloc(ALIGN16(g_BgNumPortalCameraCacheItems * sizeof(struct portalcamcacheitem)), MEMPOOL_STAGE);
+#ifndef PLATFORM_N64
+		// Portal vertices are static stage data; bgCalculatePortalBbox is
+		// called for every portal of every room a moving prop touches, every
+		// frame. Cache each bbox the first time it is computed.
+		g_PortalBboxCount = numportals;
+		g_PortalBboxes = mempAlloc(ALIGN16((numportals == 0 ? 1 : numportals) * 2 * sizeof(struct coord)), MEMPOOL_STAGE);
+		g_PortalBboxValid = mempAlloc(ALIGN16(numportals == 0 ? 1 : numportals), MEMPOOL_STAGE);
+		if (g_PortalBboxValid) {
+			for (i = 0; i < numportals; i++) {
+				g_PortalBboxValid[i] = 0;
+			}
+		}
+#endif
 
 		// Iterate the portals and update their verticesoffset value. In
 		// storage, the g_BgPortals array is followed by vertice data, and each
@@ -6313,6 +6344,14 @@ void bgCalculatePortalBbox(s32 portalnum, struct coord *bbmin, struct coord *bbm
 	s32 i;
 	s32 j;
 
+#ifndef PLATFORM_N64
+	if (g_PortalBboxValid && portalnum >= 0 && portalnum < g_PortalBboxCount && g_PortalBboxValid[portalnum]) {
+		*bbmin = g_PortalBboxes[portalnum * 2];
+		*bbmax = g_PortalBboxes[portalnum * 2 + 1];
+		return;
+	}
+#endif
+
 	bbmin->x = MAXFLOAT;
 	bbmin->y = MAXFLOAT;
 	bbmin->z = MAXFLOAT;
@@ -6336,6 +6375,14 @@ void bgCalculatePortalBbox(s32 portalnum, struct coord *bbmin, struct coord *bbm
 			}
 		}
 	}
+
+#ifndef PLATFORM_N64
+	if (g_PortalBboxValid && portalnum >= 0 && portalnum < g_PortalBboxCount) {
+		g_PortalBboxes[portalnum * 2] = *bbmin;
+		g_PortalBboxes[portalnum * 2 + 1] = *bbmax;
+		g_PortalBboxValid[portalnum] = 1;
+	}
+#endif
 }
 
 void bgFindEnteredRooms(struct coord *bbmin, struct coord *bbmax, RoomNum *rooms, s32 maxlen, bool arg4)

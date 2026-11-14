@@ -429,31 +429,94 @@ static uint64_t gfxRdpTmemHashBlockSourceUncached(const uint8_t *source,
 /*
  * Memo for gfxRdpTmemHashBlockSource. The same static textures are loaded and
  * fingerprinted many times per frame; the serial hash chain costs far more
- * than an exact 64-bit compare against a retained copy of the bytes. A hit
- * requires byte-identical source content, so results are exactly those of
- * the uncached hash regardless of what the game does to that memory.
+ * than an exact compare against a retained copy of the bytes. A hit requires
+ * byte-identical source content (or a compare already made in the current
+ * source epoch), so results are exactly those of the uncached hash.
+ *
+ * Entries live in a small hash table (two probes) and keep their byte copy in
+ * a ring arena sized to the texture, so the per-frame working set (a few
+ * hundred block sub-ranges) fits without a linear search.
  */
 enum {
-    GFX_RDP_TMEM_SOURCE_MEMO_SLOTS = 32,
-    GFX_RDP_TMEM_SOURCE_MEMO_WORDS = GFX_RDP_TMEM_WORDS,
+    GFX_RDP_TMEM_SOURCE_MEMO_SLOTS = 512,
+    GFX_RDP_TMEM_SOURCE_MEMO_ARENA_WORDS = 32768, /* 256 KiB */
 };
 
 static struct {
     const uint8_t *source;
     uint32_t word_count;
-    uint32_t last_use;
     uint16_t dxt;
     uint16_t t_phase;
     bool valid;
+    uint32_t verified_epoch; /* source bytes compared equal in this epoch */
+    uint32_t arena_word;     /* start of the byte copy in the arena ring */
+    uint64_t arena_written;  /* arena write counter when the copy was made */
     uint64_t hash;
 } s_source_memo[GFX_RDP_TMEM_SOURCE_MEMO_SLOTS];
-static uint64_t s_source_memo_bytes[GFX_RDP_TMEM_SOURCE_MEMO_SLOTS]
-    [GFX_RDP_TMEM_SOURCE_MEMO_WORDS];
-static uint32_t s_source_memo_clock;
+static uint64_t s_source_memo_arena[GFX_RDP_TMEM_SOURCE_MEMO_ARENA_WORDS]
+    __attribute__((aligned(16)));
+static uint64_t s_source_memo_arena_written; /* total words ever allocated */
+static uint32_t s_source_memo_flip;
+
+/*
+ * Source epochs: the owner of the display-list run (gfx_run on PS2) starts a
+ * new epoch whenever source memory may have changed. Within one epoch the
+ * game does not run, so a source verified once stays verified; this is the
+ * same assumption the lazy LoadBlock deferral already makes when it reads
+ * source memory at the end of the run instead of at LoadBlock time.
+ */
+static uint32_t s_source_epoch = 1u;
+
+extern "C" void gfxRdpTmemSourceMemoNewEpoch(void)
+{
+    if (++s_source_epoch == 0u) {
+        s_source_epoch = 1u;
+        for (uint32_t i = 0u; i < GFX_RDP_TMEM_SOURCE_MEMO_SLOTS; ++i) {
+            s_source_memo[i].verified_epoch = 0u;
+        }
+    }
+}
 
 static bool gfxRdpTmemSourceEqual(const uint8_t *a, const uint64_t *b,
     uint32_t words)
 {
+#if defined(_EE)
+    /* Both sides 16-byte aligned (the arena keeps copies quadword aligned):
+     * compare two TMEM words per quadword load. */
+    if ((((uintptr_t)a | (uintptr_t)b) & 15u) == 0u && words >= 2u) {
+        uint32_t n = words >> 1;
+        const uint8_t *pa = a;
+        const uint64_t *pb = b;
+        uint32_t differ;
+        __asm__ __volatile__(
+            ".set    push\n\t"
+            ".set    noreorder\n\t"
+            "por     $10, $0, $0\n\t"
+            "1:\n\t"
+            "lq      $8, 0(%1)\n\t"
+            "lq      $9, 0(%2)\n\t"
+            "addiu   %3, %3, -1\n\t"
+            "addiu   %1, %1, 16\n\t"
+            "pxor    $8, $8, $9\n\t"
+            "addiu   %2, %2, 16\n\t"
+            "bgtz    %3, 1b\n\t"
+            "por     $10, $10, $8\n\t"   /* delay slot */
+            "pcpyud  $8, $10, $0\n\t"
+            "or      $10, $10, $8\n\t"
+            "sltu    %0, $0, $10\n\t"
+            ".set    pop\n\t"
+            : "=r"(differ), "+r"(pa), "+r"(pb), "+r"(n)
+            :
+            : "$8", "$9", "$10", "memory");
+        if (differ) {
+            return false;
+        }
+        if ((words & 1u) == 0u) {
+            return true;
+        }
+        return gfxRdpTmemLoad64(pa) == *pb;
+    }
+#endif
     uint64_t diff = 0u;
     for (uint32_t i = 0u; i < words; ++i) {
         diff |= gfxRdpTmemLoad64(a + i * GFX_RDP_TMEM_WORD_BYTES) ^ b[i];
@@ -464,50 +527,93 @@ static bool gfxRdpTmemSourceEqual(const uint8_t *a, const uint64_t *b,
     return diff == 0u;
 }
 
+/* The arena copy of an entry is intact until the ring laps it. */
+static const uint64_t *gfxRdpTmemSourceMemoBytes(uint32_t slot)
+{
+    const uint64_t age = s_source_memo_arena_written -
+        s_source_memo[slot].arena_written;
+    if (age + s_source_memo[slot].word_count >
+            GFX_RDP_TMEM_SOURCE_MEMO_ARENA_WORDS) {
+        return NULL;
+    }
+    return &s_source_memo_arena[s_source_memo[slot].arena_word];
+}
+
+static void gfxRdpTmemSourceMemoStore(uint32_t slot, const uint8_t *start,
+    uint32_t word_count)
+{
+    /* Keep copies quadword aligned for the MMI compare. */
+    s_source_memo_arena_written = (s_source_memo_arena_written + 1u) & ~(uint64_t)1u;
+    uint32_t at = (uint32_t)(s_source_memo_arena_written %
+        GFX_RDP_TMEM_SOURCE_MEMO_ARENA_WORDS);
+    if (at + word_count > GFX_RDP_TMEM_SOURCE_MEMO_ARENA_WORDS) {
+        /* Never split a copy: skip to the start of the ring. */
+        s_source_memo_arena_written += GFX_RDP_TMEM_SOURCE_MEMO_ARENA_WORDS - at;
+        at = 0u;
+    }
+    memcpy(&s_source_memo_arena[at], start,
+        word_count * GFX_RDP_TMEM_WORD_BYTES);
+    s_source_memo[slot].arena_word = at;
+    s_source_memo[slot].arena_written = s_source_memo_arena_written;
+    s_source_memo_arena_written += word_count;
+}
+
 extern "C" uint64_t gfxRdpTmemHashBlockSource(const uint8_t *source,
     uint32_t first_word, uint32_t word_count, uint16_t dxt)
 {
-    if (!source || word_count == 0u ||
-        word_count > GFX_RDP_TMEM_SOURCE_MEMO_WORDS || first_word > 0xffffu) {
+    if (!source || word_count == 0u || word_count > GFX_RDP_TMEM_WORDS ||
+        first_word > 0xffffu) {
         return gfxRdpTmemHashBlockSourceUncached(
             source, first_word, word_count, dxt);
     }
     /* Only the odd-line phase of t at the first word matters per word. */
     const uint8_t *start = source + first_word * GFX_RDP_TMEM_WORD_BYTES;
     const uint16_t t_phase = (uint16_t)((first_word * (uint32_t)dxt) & 0xfffu);
-    uint32_t victim = 0u;
-    for (uint32_t i = 0u; i < GFX_RDP_TMEM_SOURCE_MEMO_SLOTS; ++i) {
+    uint32_t key = (uint32_t)(uintptr_t)start * 0x9e3779b1u;
+    key ^= (word_count * 0x85ebca6bu) ^ ((uint32_t)dxt << 16) ^ t_phase;
+    key ^= key >> 15;
+    const uint32_t base = (key * 0xc2b2ae35u) >> 23; /* 0..511 */
+    uint32_t victim = base;
+    for (uint32_t probe = 0u; probe < 2u; ++probe) {
+        const uint32_t i = (base + probe) & (GFX_RDP_TMEM_SOURCE_MEMO_SLOTS - 1u);
         if (s_source_memo[i].valid && s_source_memo[i].source == start &&
             s_source_memo[i].word_count == word_count &&
             s_source_memo[i].dxt == dxt &&
             s_source_memo[i].t_phase == t_phase) {
-            if (gfxRdpTmemSourceEqual(start, s_source_memo_bytes[i],
-                    word_count)) {
-                s_source_memo[i].last_use = ++s_source_memo_clock;
+            if (s_source_memo[i].verified_epoch == s_source_epoch) {
+                return s_source_memo[i].hash;
+            }
+            const uint64_t *copy = gfxRdpTmemSourceMemoBytes(i);
+            if (copy && gfxRdpTmemSourceEqual(start, copy, word_count)) {
+                s_source_memo[i].verified_epoch = s_source_epoch;
                 return s_source_memo[i].hash;
             }
             victim = i;
-            break;
+            goto refresh;
         }
-        if (!s_source_memo[i].valid ||
-            (s_source_memo[victim].valid &&
-             s_source_memo[i].last_use < s_source_memo[victim].last_use)) {
+        if (!s_source_memo[i].valid) {
             victim = i;
         }
     }
-
-    const uint64_t hash = gfxRdpTmemHashBlockSourceUncached(
-        source, first_word, word_count, dxt);
-    memcpy(s_source_memo_bytes[victim], start,
-        word_count * GFX_RDP_TMEM_WORD_BYTES);
-    s_source_memo[victim].source = start;
-    s_source_memo[victim].word_count = word_count;
-    s_source_memo[victim].dxt = dxt;
-    s_source_memo[victim].t_phase = t_phase;
-    s_source_memo[victim].hash = hash;
-    s_source_memo[victim].last_use = ++s_source_memo_clock;
-    s_source_memo[victim].valid = true;
-    return hash;
+    if (s_source_memo[victim].valid) {
+        /* Both probes taken: alternate which one is replaced. */
+        victim = (base + (s_source_memo_flip++ & 1u)) &
+            (GFX_RDP_TMEM_SOURCE_MEMO_SLOTS - 1u);
+    }
+refresh:
+    {
+        const uint64_t hash = gfxRdpTmemHashBlockSourceUncached(
+            source, first_word, word_count, dxt);
+        gfxRdpTmemSourceMemoStore(victim, start, word_count);
+        s_source_memo[victim].source = start;
+        s_source_memo[victim].word_count = word_count;
+        s_source_memo[victim].dxt = dxt;
+        s_source_memo[victim].t_phase = t_phase;
+        s_source_memo[victim].hash = hash;
+        s_source_memo[victim].valid = true;
+        s_source_memo[victim].verified_epoch = s_source_epoch;
+        return hash;
+    }
 }
 
 static uint64_t gfxRdpTmemHashBlockSourceUncached(const uint8_t *source,

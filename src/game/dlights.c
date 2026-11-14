@@ -1,3 +1,7 @@
+#include <string.h>
+#ifdef PLATFORM_PS2
+#include "system.h"
+#endif
 #include <ultra64.h>
 #include "constants.h"
 #include "game/cheats.h"
@@ -1556,6 +1560,57 @@ void roomFlashLocalLighting(s32 roomnum, s32 increment, s32 limit)
 	}
 }
 
+#ifdef PLATFORM_PS2
+/*
+ * Room vertex colours are recomputed for every visible room every frame
+ * (one float divide per colour), although their inputs only change when the
+ * room's lighting does. Keep the last result per room together with every
+ * input the computation reads, and reuse it while they are unchanged.
+ */
+struct roomhlcache {
+	Col *colours;
+	s32 capacity;
+	bool valid;
+	struct roomgfxdata *gfxdata;
+	s32 numcolours;
+	u8 br;
+	s16 extra;
+	u8 lightop;
+	bool nightvision;
+	bool frac_zero;
+	bool lightsoff;
+};
+
+static struct roomhlcache *g_RoomHlCache;
+static s32 g_RoomHlCacheCount;
+
+void roomHighlightResetCache(s32 roomcount)
+{
+	s32 i;
+
+	if (g_RoomHlCache) {
+		for (i = 0; i < g_RoomHlCacheCount; i++) {
+			if (g_RoomHlCache[i].colours) {
+				sysMemFree(g_RoomHlCache[i].colours);
+			}
+		}
+		sysMemFree(g_RoomHlCache);
+	}
+
+	g_RoomHlCacheCount = 0;
+	g_RoomHlCache = roomcount > 0 ? sysMemAlloc(roomcount * sizeof(struct roomhlcache)) : NULL;
+
+	if (g_RoomHlCache) {
+		g_RoomHlCacheCount = roomcount;
+		for (i = 0; i < roomcount; i++) {
+			g_RoomHlCache[i].colours = NULL;
+			g_RoomHlCache[i].capacity = 0;
+			g_RoomHlCache[i].valid = false;
+		}
+	}
+}
+#endif
+
 void roomHighlight(s32 roomnum)
 {
 	s32 i;
@@ -1595,6 +1650,32 @@ void roomHighlight(s32 roomnum)
 			g_Rooms[roomnum].colours = src;
 			return;
 		}
+
+#ifdef PLATFORM_PS2
+		struct roomhlcache *cache = NULL;
+		struct roomhlcache key;
+
+		if (g_RoomHlCache && roomnum >= 0 && roomnum < g_RoomHlCacheCount
+				&& g_Rooms[roomnum].lightop != LIGHTOP_HIGHLIGHT && dst != NULL) {
+			key.gfxdata = g_Rooms[roomnum].gfxdata;
+			key.numcolours = numcolours;
+			key.br = br_settled_regional;
+			key.extra = extra;
+			key.lightop = g_Rooms[roomnum].lightop;
+			key.nightvision = USINGDEVICE(DEVICE_NIGHTVISION) || USINGDEVICE(DEVICE_IRSCANNER);
+			key.frac_zero = g_Rooms[roomnum].lightop_cur_frac == 0.0f;
+			key.lightsoff = (g_Rooms[roomnum].flags & ROOMFLAG_LIGHTSOFF) != 0;
+			cache = &g_RoomHlCache[roomnum];
+
+			if (cache->valid && cache->gfxdata == key.gfxdata && cache->numcolours == key.numcolours
+					&& cache->br == key.br && cache->extra == key.extra && cache->lightop == key.lightop
+					&& cache->nightvision == key.nightvision && cache->frac_zero == key.frac_zero
+					&& cache->lightsoff == key.lightsoff) {
+				memcpy(dst, cache->colours, numcolours * sizeof(Col));
+				return;
+			}
+		}
+#endif
 
 		for (i = 0; i < numcolours; i++) {
 			// @bug? Why is this looking up vertices using a colour index?
@@ -1684,6 +1765,28 @@ void roomHighlight(s32 roomnum)
 				dst[i].a = alpha;
 			}
 		}
+
+#ifdef PLATFORM_PS2
+		if (cache) {
+			if (cache->capacity < numcolours) {
+				if (cache->colours) {
+					sysMemFree(cache->colours);
+				}
+				cache->colours = sysMemAlloc(numcolours * sizeof(Col));
+				cache->capacity = cache->colours ? numcolours : 0;
+			}
+
+			if (cache->colours) {
+				memcpy(cache->colours, dst, numcolours * sizeof(Col));
+				key.colours = cache->colours;
+				key.capacity = cache->capacity;
+				key.valid = true;
+				*cache = key;
+			} else {
+				cache->valid = false;
+			}
+		}
+#endif
 	}
 }
 

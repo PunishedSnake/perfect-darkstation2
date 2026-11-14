@@ -61,6 +61,9 @@ static void test_changed_texel_changes_fingerprint(void)
         FMT_RGBA, SIZ_16B, 0u, &before));
 
     source[11] ^= 0x5au;
+    /* Source memory changed: the caller starts a new source epoch (the PS2
+     * renderer does this before every display-list run). */
+    gfxRdpTmemSourceMemoNewEpoch();
     gfxRdpTmemLiveLoadBlock(0u, 0u, 0u, 15u, 0x400u);
 
     uint64_t after = 0u;
@@ -138,6 +141,7 @@ static void test_fingerprint_independent_of_load_record_eviction(void)
 
     /* And a rewrite with different bytes must still change the identity. */
     source[3] ^= 1u;
+    gfxRdpTmemSourceMemoNewEpoch(); /* source memory changed */
     gfxRdpTmemLiveSetTextureImage(FMT_RGBA, SIZ_16B, 15u, source);
     gfxRdpTmemLiveSetTile(FMT_RGBA, SIZ_16B, 2u, 0u, 0u);
     gfxRdpTmemLiveLoadBlock(0u, 0u, 0u, 15u, 0x400u);
@@ -209,6 +213,7 @@ static uint64_t run_lazy_stream(bool eager, uint8_t *final_bytes,
             /* Occasionally mutate source RAM between "frames". */
             gfxRdpTmemLiveFlush();
             sources[lazy_rand() % 6u][lazy_rand() % 512u] ^= 0x41u;
+            gfxRdpTmemSourceMemoNewEpoch();
         } else {
             /* Render through some tile: fingerprint, sometimes texels. */
             const uint32_t siz = lazy_rand() % 3u;
