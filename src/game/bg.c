@@ -51,6 +51,11 @@
 #include "system.h"
 #include "video.h"
 #include "platform.h"
+
+#ifdef PLATFORM_PS2
+// Emotion3D: a room's display lists were (re)written or freed.
+void gfxPs2E3dRoomChanged(s32 room);
+#endif
 #endif
 
 #define BGCMD_END                               0x00
@@ -3072,6 +3077,9 @@ void bgLoadRoom(s32 roomnum)
 
 		g_Rooms[roomnum].flags |= ROOMFLAG_LIGHTS_DIRTY;
 		g_Rooms[roomnum].flags |= ROOMFLAG_BRIGHTNESS_DIRTY_PERM;
+#ifdef PLATFORM_PS2
+		gfxPs2E3dRoomChanged(roomnum);
+#endif
 
 		g_Rooms[roomnum].colours = NULL;
 
@@ -3132,6 +3140,9 @@ void bgUnloadRoom(s32 roomnum)
 	}
 
 	g_Rooms[roomnum].loaded240 = 0;
+#ifdef PLATFORM_PS2
+	gfxPs2E3dRoomChanged(roomnum);
+#endif
 }
 
 void bgUnloadAllRooms(void)
@@ -3279,7 +3290,18 @@ Gfx *bgRenderRoomPass(Gfx *gdl, s32 roomnum, struct roomblock *block, bool arg3)
 
 		gSPSegment(gdl++, SPSEGMENT_BG_COL, OS_PHYSICAL_TO_K0(v0));
 
-		gSPDisplayList(gdl++, OS_PHYSICAL_TO_K0(block->gdl));
+#ifdef PLATFORM_PS2
+		// Emotion3D compiles static room leaves once; rooms whose vertex
+		// texture coordinates animate keep the plain display list.
+		if ((g_Rooms[roomnum].flags & ROOMFLAG_HASDYNTEX) == 0) {
+			gdl->words.w0 = ((uintptr_t)G_E3D_ROOMLEAF_EXT << 24) | ((uintptr_t)roomnum & 0xffff);
+			gdl->words.w1 = (uintptr_t)OS_PHYSICAL_TO_K0(block->gdl);
+			gdl++;
+		} else
+#endif
+		{
+			gSPDisplayList(gdl++, OS_PHYSICAL_TO_K0(block->gdl));
+		}
 
 		if (arg3) {
 			gdl = bgRenderRoomPass(gdl, roomnum, block->next, true);

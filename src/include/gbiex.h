@@ -197,6 +197,9 @@
 #define G_RDPFLUSH_EXT               0x43
 #define G_CLEAR_DEPTH_EXT            0x44
 #define G_SETSUBPIXELOFFSET_EXT      0x45
+/* PS2 Emotion3D: w0 low 16 bits = room, w1 = the room leaf's display list
+ * (port/fast3d/e3d_room_ps2.inc). Other renderers treat it as G_DL. */
+#define G_E3D_ROOMLEAF_EXT           0x46
 
 /* G_EXTRAGEOMETRYMODE flags */
 

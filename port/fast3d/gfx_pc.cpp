@@ -3508,6 +3508,8 @@ static bool gfx_obj_tri(uint8_t a, uint8_t b, uint8_t c) {
     }
     return false;
 }
+
+#include "e3d_room_ps2.inc"
 #endif
 
 /*
@@ -4298,6 +4300,9 @@ static inline bool gfx_opcode_keeps_tri_setup(uint32_t opcode) {
         case (uint8_t)G_TRI1:
         case (uint8_t)G_TRI4:
         case (uint8_t)G_COL:
+#if defined(PLATFORM_PS2)
+        case (uint8_t)G_E3D_ROOMLEAF_EXT: /* its own state ops invalidate as they run */
+#endif
         case (uint8_t)G_MTX:
         case (uint8_t)G_POPMTX:
         case (uint8_t)G_NOOP:
@@ -4426,6 +4431,15 @@ static void gfx_run_dl(Gfx* cmd) {
             case (uint8_t)G_TRI4:
                 gfx_sp_tri4(cmd);
                 break;
+#if defined(PLATFORM_PS2)
+            case (uint8_t)G_E3D_ROOMLEAF_EXT:
+#if defined(GFX_PS2_DIRECT)
+                e3d_room_leaf(C0(0, 16), (Gfx*)cmd->words.w1, ps2_trace_depth);
+#else
+                gfx_run_dl((Gfx*)cmd->words.w1, ps2_trace_depth + 1u);
+#endif
+                break;
+#endif
             case (uint8_t)G_SETOTHERMODE_L:
                 gfx_sp_set_other_mode(C0(8, 8), C0(0, 8), cmd->words.w1);
                 break;
@@ -4823,6 +4837,7 @@ extern "C" void gfx_run(Gfx* commands) {
     {
         static uint32_t frames;
         if (++frames % 60 == 0) {
+            e3d_log_stats();
             sysLogPrintf(LOG_NOTE, "OBJGEOM blocks inside=%u outside=%u mixed=%u tris=%u replays=%u (per frame)",
                          gfx_obj.n_inside / 60, gfx_obj.n_outside / 60, gfx_obj.n_mixed / 60, gfx_obj.n_tris / 60,
                          gfx_obj.n_replays / 60);
