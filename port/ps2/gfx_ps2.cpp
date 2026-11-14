@@ -245,6 +245,7 @@ static int s_active_texture_tile;
 static struct Ps2Viewport s_viewport;
 static struct Ps2Viewport s_scissor;
 static float s_depth_near = 0.0f;
+static void ps2_direct_settle(void);
 static float s_depth_far = 1.0f;
 static bool s_depth_test = true;
 static bool s_depth_update = true;
@@ -3536,6 +3537,57 @@ static void ps2_set_alpha_trilerp_same_sample_state(void)
     ps2_apply_texture_clamp(0);
 }
 
+/*
+ * Lazy state brackets for the direct path's two common draw kinds.
+ *
+ * A trilerp or alpha-trilerp (same sample) direct draw used to set its GS
+ * state, draw, and put the frontend's state back: roughly 15 state calls
+ * around every draw, most of them re-establishing what the previous draw of
+ * the same kind had just torn down. Now the restore is left pending and
+ * only done (ps2_direct_settle) before anything else draws or changes the
+ * render target; the next draw of the same kind skips its set entirely when
+ * its inputs are unchanged and no GS state call happened in between
+ * (ps2GsCoreStateEpoch). Texture clamp is re-applied on every draw, as
+ * texture selection changes it without counting as a state change.
+ */
+enum {
+    PS2_DIRECT_BRACKET_NONE = 0,
+    PS2_DIRECT_BRACKET_TRILERP = 1,
+    PS2_DIRECT_BRACKET_AT_SAME = 2,
+};
+
+struct Ps2DirectBracketKey {
+    uint8_t depth_test;
+    uint8_t depth_update;
+    uint8_t depth_compare;
+    uint8_t depth_equal;
+    uint8_t alpha_blend;
+    uint8_t alpha_threshold;
+    uint8_t fog;
+    uint8_t fog_r;
+    uint8_t fog_g;
+    uint8_t fog_b;
+    uint8_t pad[2];
+};
+
+static uint8_t s_direct_bracket = PS2_DIRECT_BRACKET_NONE;
+static struct Ps2DirectBracketKey s_direct_bracket_key;
+static uint32_t s_direct_bracket_epoch;
+
+static void ps2_direct_settle(void)
+{
+    const uint8_t kind = s_direct_bracket;
+    if (kind == PS2_DIRECT_BRACKET_NONE) {
+        return;
+    }
+    s_direct_bracket = PS2_DIRECT_BRACKET_NONE;
+    if (kind == PS2_DIRECT_BRACKET_TRILERP) {
+        ps2_trilerp_restore_state();
+    } else {
+        ps2_restore_alpha_trilerp_state();
+    }
+}
+
 static void ps2_draw_alpha_trilerp_same_sample_triangle(
     const struct Ps2AlphaTrilerpVertex *triangle)
 {
@@ -5268,6 +5320,7 @@ static void ps2_trace_draw_payload(uint32_t draw_id, uint32_t chunk,
 static void ps2_draw_triangles(float buf_vbo[], size_t buf_vbo_len,
     size_t buf_vbo_num_tris)
 {
+    ps2_direct_settle();
     if (!ps2GsCoreIsReady() || !s_shader || !buf_vbo ||
         buf_vbo_num_tris == 0u) {
         return;
@@ -5685,6 +5738,51 @@ static const struct Ps2GsVu1TransformVertex *ps2_object_to_clip(
     return s_object_clip;
 }
 
+/*
+ * The viewport mapping only changes with the viewport, the GS drawing
+ * offsets or the depth range; keep the last one instead of rebuilding it
+ * for every draw.
+ */
+static struct {
+    int x, y, width, height;
+    int offset_x, offset_y;
+    float depth_near, depth_far;
+    bool valid;
+    bool ok;
+    float scale[4] __attribute__((aligned(16)));
+    float offset[4] __attribute__((aligned(16)));
+} s_direct_mapping;
+
+static bool ps2_direct_viewport_mapping(float scale[4], float offset[4])
+{
+    const int ox = ps2GsCoreGetOffsetX();
+    const int oy = ps2GsCoreGetOffsetY();
+    if (!s_direct_mapping.valid || s_direct_mapping.x != s_viewport.x ||
+        s_direct_mapping.y != s_viewport.y ||
+        s_direct_mapping.width != s_viewport.width ||
+        s_direct_mapping.height != s_viewport.height ||
+        s_direct_mapping.offset_x != ox || s_direct_mapping.offset_y != oy ||
+        s_direct_mapping.depth_near != s_depth_near ||
+        s_direct_mapping.depth_far != s_depth_far) {
+        s_direct_mapping.x = s_viewport.x;
+        s_direct_mapping.y = s_viewport.y;
+        s_direct_mapping.width = s_viewport.width;
+        s_direct_mapping.height = s_viewport.height;
+        s_direct_mapping.offset_x = ox;
+        s_direct_mapping.offset_y = oy;
+        s_direct_mapping.depth_near = s_depth_near;
+        s_direct_mapping.depth_far = s_depth_far;
+        s_direct_mapping.ok = ps2GsVu1BuildViewportMapping(
+            s_viewport.x, s_viewport.y, s_viewport.width, s_viewport.height,
+            ox, oy, s_depth_near, s_depth_far,
+            s_direct_mapping.scale, s_direct_mapping.offset);
+        s_direct_mapping.valid = true;
+    }
+    memcpy(scale, s_direct_mapping.scale, sizeof(s_direct_mapping.scale));
+    memcpy(offset, s_direct_mapping.offset, sizeof(s_direct_mapping.offset));
+    return s_direct_mapping.ok;
+}
+
 static void ps2_direct_draw_impl(const struct Ps2GsVu1TransformVertex *vertices,
     uint32_t vertex_count, bool trilerp, bool w_ok, const uint8_t fog_rgb[3],
     const struct Ps2GsVu1ObjectTransform *object, const uint32_t *color_pass)
@@ -5703,22 +5801,72 @@ static void ps2_direct_draw_impl(const struct Ps2GsVu1TransformVertex *vertices,
 
     const bool texture_edge = s_shader->features.opt_texture_edge;
     const bool invisible = s_shader->features.opt_invisible;
-    if (invisible) {
-        ps2GsCoreSetColorWrite(false);
-        ps2GsCoreSetAlphaWrite(false);
+    const bool at_same_sample = !color_only && !trilerp && !color_pass &&
+        ps2_direct_at_path() == 1;
+    const uint8_t bracket = color_only || texture_edge || invisible ||
+            color_pass ? PS2_DIRECT_BRACKET_NONE
+        : trilerp ? PS2_DIRECT_BRACKET_TRILERP
+        : at_same_sample ? PS2_DIRECT_BRACKET_AT_SAME
+        : PS2_DIRECT_BRACKET_NONE;
+    if (bracket != s_direct_bracket) {
+        ps2_direct_settle();
     }
-    if (texture_edge) {
-        ps2GsCoreSetAlphaTest(true, PS2_GFX_TEXTURE_EDGE_THRESHOLD);
-        ps2GsCoreSetFramebufferAlphaForce(true);
-        ps2GsCoreSetAlphaBlend(false);
-    }
+
     memset(s_draw_region_clamp, 0, sizeof(s_draw_region_clamp));
     s_draw_texture_edge_reference = PS2_GFX_TEXTURE_EDGE_THRESHOLD;
-    if (s_shader->features.opt_fog) {
+    const bool fog = s_shader->features.opt_fog;
+    if (fog) {
         s_draw_fog_r = s_direct_lut_u8[fog_rgb[0]];
         s_draw_fog_g = s_direct_lut_u8[fog_rgb[1]];
         s_draw_fog_b = s_direct_lut_u8[fog_rgb[2]];
-        ps2GsCoreSetFog(true, s_draw_fog_r, s_draw_fog_g, s_draw_fog_b);
+    }
+
+    if (bracket != PS2_DIRECT_BRACKET_NONE) {
+        struct Ps2DirectBracketKey key;
+        memset(&key, 0, sizeof(key));
+        key.depth_test = s_depth_test;
+        key.depth_update = s_depth_update;
+        key.depth_compare = s_depth_compare;
+        key.depth_equal = s_depth_compare_equal;
+        key.alpha_blend = s_alpha_blend;
+        key.alpha_threshold = s_shader->features.opt_alpha_threshold;
+        key.fog = fog;
+        if (fog) {
+            key.fog_r = s_draw_fog_r;
+            key.fog_g = s_draw_fog_g;
+            key.fog_b = s_draw_fog_b;
+        }
+        if (s_direct_bracket == bracket &&
+            s_direct_bracket_epoch == ps2GsCoreStateEpoch() &&
+            memcmp(&key, &s_direct_bracket_key, sizeof(key)) == 0) {
+            ps2_apply_texture_clamp(0);
+        } else {
+            if (bracket == PS2_DIRECT_BRACKET_TRILERP) {
+                if (fog) {
+                    ps2GsCoreSetFog(true, s_draw_fog_r, s_draw_fog_g,
+                        s_draw_fog_b);
+                }
+                ps2_trilerp_set_base_state();
+            } else {
+                ps2_set_alpha_trilerp_same_sample_state();
+            }
+            s_direct_bracket = bracket;
+            s_direct_bracket_key = key;
+            s_direct_bracket_epoch = ps2GsCoreStateEpoch();
+        }
+    } else {
+        if (invisible) {
+            ps2GsCoreSetColorWrite(false);
+            ps2GsCoreSetAlphaWrite(false);
+        }
+        if (texture_edge) {
+            ps2GsCoreSetAlphaTest(true, PS2_GFX_TEXTURE_EDGE_THRESHOLD);
+            ps2GsCoreSetFramebufferAlphaForce(true);
+            ps2GsCoreSetAlphaBlend(false);
+        }
+        if (fog) {
+            ps2GsCoreSetFog(true, s_draw_fog_r, s_draw_fog_g, s_draw_fog_b);
+        }
     }
 
     if (color_only) {
@@ -5727,17 +5875,13 @@ static void ps2_direct_draw_impl(const struct Ps2GsVu1TransformVertex *vertices,
         }
         ps2_direct_draw_color(vertices, vertex_count);
     } else {
-    float transform_scale[4];
-    float transform_offset[4];
-    const bool mapped = w_ok && ps2GsVu1BuildViewportMapping(
-        s_viewport.x, s_viewport.y, s_viewport.width, s_viewport.height,
-        ps2GsCoreGetOffsetX(), ps2GsCoreGetOffsetY(),
-        s_depth_near, s_depth_far, transform_scale, transform_offset);
+    float transform_scale[4] __attribute__((aligned(16)));
+    float transform_offset[4] __attribute__((aligned(16)));
+    const bool mapped = w_ok &&
+        ps2_direct_viewport_mapping(transform_scale, transform_offset);
 
-    const bool at_same_sample = !trilerp && !color_pass && ps2_direct_at_path() == 1;
     if (color_pass) {
         /* pass 1: the colour triangles, projected here from the records */
-        const bool fog = s_shader->features.opt_fog;
         for (uint32_t i = 0u; i < vertex_count; ++i) {
             const float inv_w = ps2_clip_inv_w(vertices[i].clip[3]);
             const uint32_t c = color_pass[i];
@@ -5751,12 +5895,14 @@ static void ps2_direct_draw_impl(const struct Ps2GsVu1TransformVertex *vertices,
         ps2_input1_tex0_lerp_set_base_state();
         ps2GsCoreDrawColorTriangles(s_color_vertices, vertex_count);
         ps2_input1_tex0_lerp_set_texture_state();
-    } else if (trilerp) {
-        ps2_trilerp_set_base_state();
-    } else if (at_same_sample) {
-        ps2_set_alpha_trilerp_same_sample_state();
-    } else {
-        ps2_apply_texture_clamp(0);
+    } else if (bracket == PS2_DIRECT_BRACKET_NONE) {
+        if (trilerp) {
+            ps2_trilerp_set_base_state();
+        } else if (at_same_sample) {
+            ps2_set_alpha_trilerp_same_sample_state();
+        } else {
+            ps2_apply_texture_clamp(0);
+        }
     }
     const bool submitted = mapped &&
         ps2GsCoreVu1TexturedTransformCandidate(vertex_count) &&
@@ -5773,14 +5919,16 @@ static void ps2_direct_draw_impl(const struct Ps2GsVu1TransformVertex *vertices,
             vertices = ps2_object_to_clip(vertices, vertex_count, object);
         }
         ps2_pack_textured_from_vu1_input(vertices, s_stq_vertices[0],
-            vertex_count, s_shader->features.opt_fog);
+            vertex_count, fog);
         ps2GsCoreDrawTexturedTriangles(s_selected_texture[0],
             s_stq_vertices[0], vertex_count);
     }
-    if (trilerp || color_pass) {
-        ps2_trilerp_restore_state();
-    } else if (at_same_sample) {
-        ps2_restore_alpha_trilerp_state();
+    if (bracket == PS2_DIRECT_BRACKET_NONE) {
+        if (trilerp || color_pass) {
+            ps2_trilerp_restore_state();
+        } else if (at_same_sample) {
+            ps2_restore_alpha_trilerp_state();
+        }
     }
     }
 
@@ -6361,6 +6509,7 @@ extern "C" uint32_t gfxPs2DirectATCount(void)
 /* Submit the batch with the translator's per-draw state handling. */
 extern "C" void gfxPs2DirectDrawAT(const uint8_t fog_rgb[3])
 {
+    ps2_direct_settle();
     const uint32_t count = s_at_count;
     s_at_count = 0u;
     if (count == 0u || !ps2GsCoreIsReady() || !s_shader ||
@@ -6548,6 +6697,7 @@ static void ps2_init(void)
 
 static void ps2_on_resize(void)
 {
+    ps2_direct_settle();
     ps2_reset_viewport();
 }
 
@@ -6596,6 +6746,7 @@ static void ps2_trace_build_config(void)
 
 static void ps2_start_frame(void)
 {
+    ps2_direct_settle();
     ps2_refresh_gs_offsets();
     ps2RendererTraceBeginFrame();
     if (ps2RendererTraceIsCapturing()) {
@@ -6696,6 +6847,7 @@ static void ps2_log_renderer_stats(
 
 static void ps2_end_frame(void)
 {
+    ps2_direct_settle();
 #if defined(PD_PS2_DIRECT_VERIFY) && defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
     {
         static uint32_t frames;
@@ -6787,6 +6939,7 @@ extern "C" void gfxPs2RequestRendererCapture(
 
 static void ps2_finish_render(void)
 {
+    ps2_direct_settle();
     /*
      * Intentionally no unconditional GS FINISH here. Whole-system scheduling
      * treats FINISH as a dependency/profiling tool, not a per-frame ritual.
@@ -6844,6 +6997,7 @@ static struct Ps2GfxFramebuffer *ps2_fb_resolve(int id)
 
 static int ps2_create_framebuffer(void)
 {
+    ps2_direct_settle();
     for (int id = 1; id <= PS2_GFX_FRAMEBUFFERS; ++id) {
         if (!s_fb[id].used) {
             s_fb[id] = {};
@@ -6864,12 +7018,14 @@ static void ps2_update_framebuffer_parameters(int fb_id, uint32_t width, uint32_
                                                bool render_target, bool has_depth_buffer,
                                                bool can_extract_depth)
 {
+    ps2_direct_settle();
     (void)fb_id; (void)width; (void)height; (void)msaa_level;
     (void)opengl_invert_y; (void)render_target; (void)has_depth_buffer; (void)can_extract_depth;
 }
 
 static bool ps2_start_draw_to_framebuffer(int fb_id, float noise_scale)
 {
+    ps2_direct_settle();
     (void)noise_scale;
     s_fb_draw_target = ps2_fb(fb_id) ? fb_id : 0;
     return true;
@@ -6877,6 +7033,7 @@ static bool ps2_start_draw_to_framebuffer(int fb_id, float noise_scale)
 
 static void ps2_copy_framebuffer(int fb_dst, int fb_src, int left, int top, bool flip_y, bool use_back)
 {
+    ps2_direct_settle();
     (void)left; (void)top; (void)flip_y; (void)use_back;
     struct Ps2GfxFramebuffer *dst = ps2_fb(fb_dst);
     if (!dst) {
@@ -7058,6 +7215,7 @@ static bool ps2_draw_framebuffer_batch(const float buf_vbo[],
 
 static void ps2_clear_framebuffer(bool clear_color, bool clear_depth)
 {
+    ps2_direct_settle();
     if (s_fb_draw_target != 0) {
         return; /* offscreen passes are not rendered */
     }
@@ -7066,6 +7224,7 @@ static void ps2_clear_framebuffer(bool clear_color, bool clear_depth)
 
 static void ps2_resolve_msaa_color_buffer(int fb_id_target, int fb_id_source)
 {
+    ps2_direct_settle();
     (void)fb_id_target; (void)fb_id_source;
 }
 

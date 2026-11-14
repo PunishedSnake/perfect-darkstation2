@@ -94,3 +94,38 @@ tests:
 * `gfx_ps2_object_test.cpp` checks the object-space cull sign against the
   transformed test. It also checks that box classification is conservative,
   and the EE conversion.
+
+## Per-draw fixed cost (round 16)
+
+The direct path's draws are small: in the intro the average batch is 17-30
+vertices, and a third of them hold one or two triangles. COP0 counters around
+`gfxPs2DirectDraw` showed about 3.5-4.4 K EE cycles for a one- or
+two-triangle draw. Most of that was not geometry:
+* 950-1450 cycles setting the GS state for the two common draw kinds
+  (trilerp, and alpha-trilerp with one sample), plus about as much again
+  putting the frontend's state back afterwards. That is around 15
+  `ps2GsCore*` state calls per draw, nearly all of them redundant because
+  the next draw is of the same kind.
+* 190 cycles rebuilding the viewport mapping, which changes a few times per
+  frame.
+
+Two changes:
+* **Lazy state brackets** (`ps2_direct_settle` and `PS2_DIRECT_BRACKET_*` in
+  `gfx_ps2.cpp`). A trilerp or same-sample alpha-trilerp draw leaves its
+  state in place and records its kind, its inputs (depth mode, blend,
+  alpha threshold, fog and its colour) and `ps2GsCoreStateEpoch()`.
+  * The next draw of the same kind with equal inputs and an unchanged epoch
+    skips the set entirely and only re-applies the texture clamp.
+  * The restore runs only when something else needs the frontend's state:
+    another draw kind, the VBO path, the alpha-trilerp path, a framebuffer
+    operation, or the frame end.
+  * The epoch counts every GS core call that can change drawing state,
+    except the texture clamp and filter, which texture selection changes
+    between draws and every path re-applies itself.
+  * In the intro, two thirds of all direct draws now skip their set.
+* **Viewport mapping** is cached and rebuilt only when the viewport, GS
+  offsets or depth range change.
+
+Result, intro, same windows: one- or two-triangle draws dropped from 3.5-4.4 K
+to 2.4-2.8 K cycles. The average direct draw dropped from 3.9-5.3 K to
+2.9-3.8 K cycles, about 30 % less.

@@ -134,10 +134,10 @@ jobs:
             -lm -o /tmp/spu2_adpcm_test
           /tmp/spu2_adpcm_test
           gcc -std=c11 -O2 -Wall -Wextra -Werror \
-            -Iport/ps2 \
+            -Iport/ps2 -Iport/include \
             tools/ps2/pd_spu2bank.c \
             port/ps2/spu2_adpcm.c \
-            -lm -o /tmp/pd_spu2bank
+            -lz -lm -o /tmp/pd_spu2bank
 
       - name: Test GS command budget and VRAM allocator
         run: |

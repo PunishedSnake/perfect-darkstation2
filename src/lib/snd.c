@@ -2273,8 +2273,17 @@ void sndStartMp3(s16 soundnum, s32 volume, s32 pan, s32 responseflags)
 
 			volume = volume * snd0000e9dc() / AL_VOL_FULL;
 
-			g_SndCurMp3.romaddr = fileGetRomAddress(sp20.id);
-			g_SndCurMp3.romsize = fileGetRomSize(sp20.id);
+#ifdef PLATFORM_PS2
+			if (mp3Ps2SelectFile(sp20.id)) {
+				/* played from the SPU2 bank: the file is never loaded */
+				g_SndCurMp3.romaddr = 0;
+				g_SndCurMp3.romsize = 0;
+			} else
+#endif
+			{
+				g_SndCurMp3.romaddr = fileGetRomAddress(sp20.id);
+				g_SndCurMp3.romsize = fileGetRomSize(sp20.id);
+			}
 
 			func00037f08(volume, true);
 			func00037f5c(pan, true);

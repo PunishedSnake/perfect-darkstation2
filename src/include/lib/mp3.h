@@ -16,5 +16,10 @@ s32 func00037fc0(s32 arg0, Acmd **cmd);
 void func00038924(struct mp3vars *vars);
 void func00038b90(void *fn);
 void mp3Dma(void);
+#ifdef PLATFORM_PS2
+/* Pick the hardware-voice clip for the next mp3PlayFile(); false when the
+ * SPU2 bank has no entry for the file (the software path then plays it). */
+bool mp3Ps2SelectFile(s32 filenum);
+#endif
 
 #endif

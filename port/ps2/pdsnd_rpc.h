@@ -101,7 +101,8 @@ typedef struct PdSndStatus {
     pdsnd_u32 load_us;       /* cumulative time spent streaming */
     pdsnd_u32 queue_drops;
     pdsnd_u32 fx_changes;
-    pdsnd_u32 pad[3];
+    pdsnd_u32 streams;       /* long one-shots keyed on before fully resident */
+    pdsnd_u32 pad[2];
 } PdSndStatus;
 
 #endif

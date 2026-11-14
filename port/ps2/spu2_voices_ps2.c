@@ -180,6 +180,37 @@ s32 ps2HwVoicesEntryFor(const u8 *base, s32 len)
     return (s32)(e - s_entries);
 }
 
+s32 ps2HwVoicesMp3Entry(s32 filenum, u32 *rate, u32 *samples)
+{
+    if (!g_Ps2HwVoices || filenum <= 0) {
+        return -1;
+    }
+    /* The key is the file number; the stored length (the file's size) is
+     * not known to the caller, so search with it taken from the match. */
+    u32 lo = 0, hi = s_entry_count;
+    while (lo < hi) {
+        const u32 mid = lo + (hi - lo) / 2u;
+        const Spu2BankEntry *e = &s_entries[mid];
+        if (e->source < SPU2_BANK_SOURCE_MP3 ||
+            (e->source == SPU2_BANK_SOURCE_MP3 && e->tbl_base < (u32)filenum)) {
+            lo = mid + 1u;
+        } else {
+            hi = mid;
+        }
+    }
+    if (lo >= s_entry_count) {
+        return -1;
+    }
+    const Spu2BankEntry *e = &s_entries[lo];
+    if (e->source != SPU2_BANK_SOURCE_MP3 || e->tbl_base != (u32)filenum ||
+        e->data_size == 0 || e->lead_samples == 0) {
+        return -1;
+    }
+    *rate = e->lead_samples;
+    *samples = e->source_samples;
+    return (s32)lo;
+}
+
 u16 ps2HwVoicesPitch(f32 ratio)
 {
     /* N64 ratio = source samples per output sample at the synth's output
@@ -281,11 +312,12 @@ void ps2HwVoicesFlush(void)
         }
         SifCallRpc(&s_client, PDSND_FUNC_STATUS, 0, NULL, 0, &s_status, sizeof(s_status), NULL, NULL);
         sysLogPrintf(LOG_NOTE,
-            "SPU2 voices: frames=%u loads=%u (%u KiB, %u ms) evict=%u fail=%u cache=%u KiB qdrop=%u overflow=%u miss=%u fx=%u",
+            "SPU2 voices: frames=%u loads=%u (%u KiB, %u ms) evict=%u fail=%u cache=%u KiB qdrop=%u overflow=%u miss=%u fx=%u streams=%u",
             (unsigned)s_status.frames, (unsigned)s_status.loads,
             (unsigned)(s_status.load_bytes >> 10), (unsigned)(s_status.load_us / 1000u),
             (unsigned)s_status.evictions, (unsigned)s_status.failures,
             (unsigned)(s_status.cache_used >> 10), (unsigned)s_status.queue_drops,
-            (unsigned)s_overflow, (unsigned)s_misses, (unsigned)s_status.fx_changes);
+            (unsigned)s_overflow, (unsigned)s_misses, (unsigned)s_status.fx_changes,
+            (unsigned)s_status.streams);
     }
 }

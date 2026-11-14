@@ -31,6 +31,9 @@ extern "C" {
 enum Spu2BankSource {
     SPU2_BANK_SOURCE_SFX = 0, /* sfx.ctl / sfx.tbl */
     SPU2_BANK_SOURCE_SEQ = 1, /* seq.ctl / seq.tbl (instruments) */
+    /* MP3 files of the ROM file table (speech): tbl_base = file number,
+     * tbl_len = file size, lead_samples = sample rate in Hz, one-shot. */
+    SPU2_BANK_SOURCE_MP3 = 2,
 };
 
 #define SPU2_BANK_NO_LOOP 0xffffffffu

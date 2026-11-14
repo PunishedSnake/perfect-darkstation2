@@ -11,7 +11,9 @@
  *    batches; it never blocks on IO, so the EE's non-blocking FRAME call
  *    returns at once.
  *  - Worker thread: applies queued batches in order, streaming a sample on
- *    a cache miss before its KEYON.
+ *    a cache miss before its KEYON. Long one-shot samples (the speech
+ *    clips) are keyed on after their first STREAM_HEAD bytes; the rest
+ *    follows one IO_CHUNK per applied batch, far ahead of the voice.
  *  - Ramp thread: runs the N64 envelope segments (linear volume ramps) in
  *    1 ms steps.
  *
@@ -34,6 +36,9 @@
 IRX_ID(MODNAME, 1, 1);
 
 #define IO_CHUNK (32 * 1024)
+/* One-shot samples longer than this start playing after this much is
+ * resident (about 2.5 s of 22 kHz PS-ADPCM). */
+#define STREAM_HEAD (32 * 1024)
 #define QUEUE_FRAMES 8
 #define MAX_SLOTS 384
 #define NO_ENTRY 0xffffu
@@ -68,8 +73,9 @@ struct Slot {
     u32 addr; /* SPU2 byte address */
     u32 size;
     u16 entry;
-    u16 refs; /* voices currently playing it */
+    u16 refs; /* voices currently playing it (+1 while still streaming) */
     u32 stamp;
+    u32 loaded; /* bytes resident; < size while the tail is streaming */
 };
 
 static struct Slot s_slots[MAX_SLOTS];
@@ -198,6 +204,7 @@ static int slot_alloc(u16 entry, u32 size)
                     s_slots[i].entry = entry;
                     s_slots[i].refs = 0;
                     s_slots[i].stamp = ++s_clock;
+                    s_slots[i].loaded = 0;
                     ++s_slot_count;
                     s_status.cache_used += size;
                     return (int)i;
@@ -231,6 +238,43 @@ static void spu_upload(u32 addr, const u8 *src, u32 size)
 }
 
 /*
+ * Read [from, from + size) of an entry's data into its slot. Called with the
+ * lock held; drops it around the file IO so the ramp thread keeps running.
+ * The caller pins the slot so it cannot be evicted meanwhile.
+ */
+static int load_range(u16 entry, u32 from, u32 size)
+{
+    const Spu2BankEntry *e = &s_entries[entry];
+    const int i = slot_find(entry);
+    if (i < 0) {
+        return 0;
+    }
+    const u32 addr = s_slots[i].addr + from;
+    unlock();
+    const u32 t0 = now_us();
+    int ok = iomanX_lseek(s_fd, (int)(s_header.data_offset + e->data_offset + from), FIO_SEEK_SET) >= 0;
+    u32 done = 0;
+    while (ok && done < size) {
+        u32 n = size - done;
+        if (n > IO_CHUNK) {
+            n = IO_CHUNK;
+        }
+        ok = iomanX_read(s_fd, s_io_buf, (int)n) == (int)n;
+        if (ok) {
+            spu_upload(addr + done, s_io_buf, n);
+            done += n;
+        }
+    }
+    const u32 dt = now_us() - t0;
+    lock();
+    s_status.load_us += dt;
+    if (ok) {
+        s_status.load_bytes += size;
+    }
+    return ok;
+}
+
+/*
  * Make an entry resident. Called by the worker with the lock dropped around
  * the file IO, so the ramp thread keeps running; the slot is allocated (and
  * pinned with a reference) before IO so it cannot be evicted meanwhile.
@@ -250,40 +294,65 @@ static int ensure_resident(u16 entry)
     if (i < 0) {
         return -1;
     }
-    const u32 addr = s_slots[i].addr;
+    /* Long one-shots: only the head now, the tail from stream_step(). */
+    const u32 want = e->loop_block == SPU2_BANK_NO_LOOP && e->data_size > 2u * STREAM_HEAD
+        ? STREAM_HEAD : e->data_size;
     s_slots[i].refs++; /* pin during IO */
-    unlock();
-
-    const u32 t0 = now_us();
-    int ok = iomanX_lseek(s_fd, (int)(s_header.data_offset + e->data_offset), FIO_SEEK_SET) >= 0;
-    u32 done = 0;
-    while (ok && done < e->data_size) {
-        u32 n = e->data_size - done;
-        if (n > IO_CHUNK) {
-            n = IO_CHUNK;
-        }
-        ok = iomanX_read(s_fd, s_io_buf, (int)n) == (int)n;
-        if (ok) {
-            spu_upload(addr + done, s_io_buf, n);
-            done += n;
-        }
-    }
-    const u32 dt = now_us() - t0;
-
-    lock();
+    const int ok = load_range(entry, 0, want);
     i = slot_find(entry);
     if (i < 0) {
         return -1;
     }
     s_slots[i].refs--;
-    s_status.load_us += dt;
     if (!ok) {
         slot_erase((u32)i);
         return -1;
     }
-    ++s_status.loads;
-    s_status.load_bytes += e->data_size;
+    s_slots[i].loaded = want;
+    if (want < e->data_size) {
+        s_slots[i].refs++; /* the stream's pin, dropped once complete */
+        ++s_status.streams;
+    } else {
+        ++s_status.loads;
+    }
     return i;
+}
+
+/*
+ * Continue one streaming slot by one chunk. A voice reads PS-ADPCM at
+ * 22050 * 16 / 28 = 12.6 KB/s; one 32 KiB chunk per audio frame keeps the
+ * resident part seconds ahead of it.
+ */
+static void stream_step(void)
+{
+    for (u32 i = 0; i < s_slot_count; ++i) {
+        if (s_slots[i].loaded >= s_slots[i].size) {
+            continue;
+        }
+        const u16 entry = s_slots[i].entry;
+        const u32 from = s_slots[i].loaded;
+        u32 n = s_slots[i].size - from;
+        if (n > IO_CHUNK) {
+            n = IO_CHUNK;
+        }
+        const int ok = load_range(entry, from, n);
+        const int k = slot_find(entry);
+        if (k < 0) {
+            return;
+        }
+        if (!ok) {
+            /* Give up on the tail: the voice ends at the stale data's first
+             * END flag at worst. Mark it complete so the slot can go. */
+            ++s_status.failures;
+            n = s_slots[k].size - from;
+        }
+        s_slots[k].loaded = from + n;
+        if (s_slots[k].loaded >= s_slots[k].size) {
+            s_slots[k].refs--;
+            ++s_status.loads;
+        }
+        return;
+    }
 }
 
 static void voice_unpin(struct Voice *vs)
@@ -536,6 +605,9 @@ static void worker_thread(void *arg)
         const u32 tail = s_q_tail;
         apply_frame(&s_queue[tail % QUEUE_FRAMES]);
         s_q_tail = tail + 1;
+        lock();
+        stream_step();
+        unlock();
     }
 }
 
