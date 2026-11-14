@@ -2376,7 +2376,10 @@ static inline uint32_t gfx_ps2_direct_vertex(const struct GfxTriSetup* S, uint8_
 
     /* DIV on VU treats subnormal W as zero; such batches stay on the EE. */
     gfx_ps2_direct.w_ok[idx] = w >= FLT_MIN && w <= FLT_MAX;
-    const uint32_t codes = ps2GsClipVertexCodes(R->clip);
+    /* ps2GsClipVertexCodes under this context's guard band (clamped to
+     * the exact frustum like ps2GsClipSetGuardBand) */
+    const uint32_t codes = ps2GsClipVertexCodesInline(R->clip,
+        C->guard_x >= 1.0f ? C->guard_x : 1.0f, C->guard_y >= 1.0f ? C->guard_y : 1.0f);
     gfx_ps2_direct.codes[idx] = codes;
     gfx_ps2_direct.tag[idx] = gfx_ps2_direct.serial;
     return codes;
