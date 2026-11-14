@@ -66,13 +66,16 @@ Voice commands are batched per audio frame into one SIF RPC to the IRX.
 
 1. Build the bank once per ROM on a PC:
 
-       cc -O2 -Iport/ps2 tools/ps2/pd_spu2bank.c port/ps2/spu2_adpcm.c -lm -o pd_spu2bank
+       cc -O2 -Iport/ps2 -Iport/include tools/ps2/pd_spu2bank.c \
+           port/ps2/spu2_adpcm.c -lz -lm -o pd_spu2bank
        ./pd_spu2bank pd.ntsc-final.z64 pd.pssb --verify
 
-   NTSC final gives 961 samples, 7.7 MiB of PS-ADPCM (138 looped), in
-   about two seconds.
+   NTSC final gives 961 samples (7.7 MiB of PS-ADPCM, 138 looped) plus
+   548 speech clips (21.6 MiB, 30 minutes), 29 MiB in all, in about six
+   seconds. A bank built before the speech clips were added still works;
+   speech then stays on the software decoder.
 2. Copy `pd.pssb` next to the ROM (for example `mass:PDPS2/`).
-3. Start the game. The log shows `SPU2 voices: on, 961 samples ...`.
+3. Start the game. The log shows `SPU2 voices: on, 1509 samples ...`.
    `Audio.HardwareVoices=0` in the config turns it off; without the file
    the software mixer is used as before.
 
@@ -99,6 +102,30 @@ Voice commands are batched per audio frame into one SIF RPC to the IRX.
   * Uses voices 0-23 on core 0 (routed through core 1's external input)
     and 24-47 on core 1. audsrv keeps core 1's sound-data input for the PCM
     stream.
+* **Speech** (`src/lib/mp3.c`, `snd.c`): PD's dialogue is 548 MPEG-2
+  layer III files (22.05 kHz mono) in the ROM file table. The software path
+  loaded each file into EE RAM and decoded it every audio frame (with PD's
+  own decoder and minimp3 both running). Now:
+  * The bank tool inflates the ROM's data segment, walks the file table
+    like `romdataInitFiles`, finds the MP3 files by their frame header and
+    stores each as a one-shot entry of source 2, keyed by file number
+    (sample rate in `lead_samples`).
+  * `sndStartMp3` asks `mp3Ps2SelectFile` for the clip's entry. With one,
+    the file is never loaded; `mp3PlayFile` keys the clip on game voice 47
+    (above the synth's 30) at pitch rate × 4096 / 48000.
+  * The player's state machine is unchanged for its callers. Pause sets the
+    pitch to 0 and resume restores it, a stop is a KEYOFF, and volume and
+    pan changes are ramps with the same pan rules (headphone, mono) and the
+    same -6 dB unity as the other voices. The clip's running time, counted
+    in output samples, ends it, so the game's dialogue chaining and
+    responses run as before.
+  * Clips longer than 64 KiB of PS-ADPCM are keyed on once their first
+    32 KiB are in SPU2 RAM. The IOP worker streams the rest one 32 KiB
+    chunk per audio frame, while the voice reads 12.6 KB/s. The longest
+    clip (29 s, 365 KiB) therefore never stalls the voice queue for a
+    whole-file read.
+  * A clip with no bank entry (older bank, or the hardware path off) plays
+    through the software decoders as before.
 * **EE** (`port/ps2/spu2_voices_ps2.c`, hooks in `n_env.c` and
   `n_synthesizer.c`):
   * The envelope mixer translates its parameter events into voice commands
@@ -112,6 +139,11 @@ Measured in PCSX2 (intro, heaviest 5 s windows): audio work drops from about
 the audio cost is MP3 speech decoding and the bus mixing that is still done
 on the EE. Per-second loudness of a 40 s capture matches the software mixer
 to within about 15 %.
+
+With speech on the SPU2 as well (r16), the audio share of a game frame in the
+intro drops from 1.5-2.2 ms to 0.55-1.0 ms in the calmer windows, and from
+3.3 to 1.6-2.6 ms in the heaviest one. Neither MPEG decoder shows up in an
+EE profile any more; before, they took about 4.5 % of samples.
 
 Known differences from the software mixer:
 
@@ -142,4 +174,5 @@ Known differences from the software mixer:
 3. Done: IRX with SPU2 RAM cache, streaming, voice commands and ramps.
 4. Done: EE voice backend, enabled by the presence of `pd.pssb`.
 5. Done: SPU2 reverb; the software aux buses skip their reverb and mixes.
-6. Next: listening tests on hardware.
+6. Done: speech clips (MP3) on a hardware voice, streamed from the bank.
+7. Next: listening tests on hardware.

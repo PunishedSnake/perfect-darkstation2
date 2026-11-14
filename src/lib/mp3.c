@@ -40,6 +40,139 @@
 struct mp3vars g_Mp3Vars;
 struct asistream *g_AsiStream;
 
+#ifdef PLATFORM_PS2
+#include "spu2_voices_ps2.h"
+/* the voices header pulls in <stdbool.h>; keep the game's 32-bit bool */
+#undef bool
+#define bool s32
+
+/*
+ * PS2: speech clips that the SPU2 bank carries (pd.pssb, transcoded from
+ * the ROM's MP3 files) play on a hardware voice. The EE then neither loads
+ * the MP3 file nor runs either MPEG decoder; it only keeps the player's
+ * state machine (playing/paused/stopped, volume, pan) and the clip's
+ * running time, so everything above this file sees the same behaviour.
+ * Clips without a bank entry keep the software path.
+ */
+#define MP3_HW_VOICE 47 /* above the synth's 30 physical voices */
+
+static struct {
+	s32 next_entry; /* chosen by mp3Ps2SelectFile() for the next play */
+	u32 next_rate;
+	u32 next_samples;
+	s32 entry;      /* clip on the hardware voice, -1 = software path */
+	u32 rate;
+	u32 samples;
+	u32 played;     /* output samples since KEYON */
+	bool keyed;
+	bool paused;
+	s16 vol_l;
+	s16 vol_r;
+} g_Mp3Hw = { -1, 0, 0, -1, 0, 0, 0, false, false, 0, 0 };
+
+bool mp3Ps2SelectFile(s32 filenum)
+{
+	g_Mp3Hw.next_entry = ps2HwVoicesMp3Entry(filenum, &g_Mp3Hw.next_rate, &g_Mp3Hw.next_samples);
+	return g_Mp3Hw.next_entry >= 0;
+}
+
+static u16 mp3Ps2Pitch(void)
+{
+	return (u16)((g_Mp3Hw.rate * 4096u + 24000u) / 48000u);
+}
+
+/* Same pan handling as func00038924; same -6 dB unity as hwVoiceVol. */
+static void mp3Ps2Volume(s16 *l, s16 *r)
+{
+	s32 pan = g_Mp3Vars.var8009c3ec & 0x7f;
+	const s32 vol = (s32)g_Mp3Vars.var8009c3e4;
+
+	if (var8009c340.headphone) {
+		pan = (pan >> 1) + 32;
+	} else if (var8009c340.mono) {
+		pan = 64;
+	}
+
+	*l = (s16)(((n_eqpower[pan] * vol) >> 15) >> 2);
+	*r = (s16)(((n_eqpower[127 - pan] * vol) >> 15) >> 2);
+}
+
+static void mp3Ps2Cmd(u8 op, u16 pitch, s16 l, s16 r, u32 ramp_us)
+{
+	PdSndVoiceCmd cmd = {0};
+	cmd.op = op;
+	cmd.voice = MP3_HW_VOICE;
+	cmd.entry = (u16)g_Mp3Hw.entry;
+	cmd.pitch = pitch;
+	cmd.cur_l = cmd.tgt_l = l;
+	cmd.cur_r = cmd.tgt_r = r;
+	cmd.ramp_us = ramp_us;
+	ps2HwVoicesPush(&cmd);
+}
+
+static s32 mp3Ps2Frame(s32 numsamples)
+{
+	s16 l, r;
+
+	switch (g_Mp3Vars.var8009c3e0) {
+	case 4: /* starting */
+		mp3Ps2Volume(&l, &r);
+		mp3Ps2Cmd(PDSND_OP_KEYON, mp3Ps2Pitch(), l, r, 0);
+		g_Mp3Hw.vol_l = l;
+		g_Mp3Hw.vol_r = r;
+		g_Mp3Hw.keyed = true;
+		g_Mp3Hw.paused = false;
+		g_Mp3Hw.played = 0;
+		g_Mp3Vars.var8009c3e0 = 1;
+		break;
+	case 5: /* resuming */
+		if (g_Mp3Hw.paused) {
+			mp3Ps2Cmd(PDSND_OP_PITCH, mp3Ps2Pitch(), 0, 0, 0);
+			g_Mp3Hw.paused = false;
+		}
+		g_Mp3Vars.var8009c3e0 = 1;
+		break;
+	case 2: /* paused: hold the voice where it is */
+		if (g_Mp3Hw.keyed && !g_Mp3Hw.paused) {
+			mp3Ps2Cmd(PDSND_OP_PITCH, 0, 0, 0, 0);
+			g_Mp3Hw.paused = true;
+		}
+		return 0;
+	case 1:
+		break;
+	default: /* stopped or finished */
+		if (g_Mp3Hw.keyed) {
+			mp3Ps2Cmd(PDSND_OP_KEYOFF, 0, 0, 0, 0);
+			g_Mp3Hw.keyed = false;
+		}
+		g_Mp3Hw.entry = -1;
+		return 0;
+	}
+
+	mp3Ps2Volume(&l, &r);
+
+	if (l != g_Mp3Hw.vol_l || r != g_Mp3Hw.vol_r) {
+		const u32 ramp = (u32)SAMPLE184(g_Mp3Vars.var8009c3e8);
+		mp3Ps2Cmd(PDSND_OP_RAMP, 0, l, r,
+				n_syn->outputRate > 0 ? (u32)((u64)ramp * 1000000u / (u32)n_syn->outputRate) : 0);
+		g_Mp3Hw.vol_l = l;
+		g_Mp3Hw.vol_r = r;
+	}
+
+	/* The clip's running time decides when the player reports it done. */
+	g_Mp3Hw.played += (u32)numsamples;
+
+	if ((u64)g_Mp3Hw.played * g_Mp3Hw.rate >= (u64)g_Mp3Hw.samples * (u32)n_syn->outputRate) {
+		mp3Ps2Cmd(PDSND_OP_KEYOFF, 0, 0, 0, 0);
+		g_Mp3Hw.keyed = false;
+		g_Mp3Hw.entry = -1;
+		g_Mp3Vars.var8009c3e0 = 3;
+	}
+
+	return 0;
+}
+#endif
+
 s32 func00038ba8(s32 arg0, u8 *arg1, s32 arg2, s32 arg3);
 
 extern f32 *var8009c6d8;
@@ -98,6 +231,28 @@ void mp3PlayFile(uintptr_t romaddr, s32 filesize)
 	if (g_Mp3Vars.var8009c3dc == NULL) {
 		return;
 	}
+
+#ifdef PLATFORM_PS2
+	if (g_Mp3Hw.keyed && g_Mp3Hw.entry >= 0) {
+		/* a new clip cuts the current one, as the software player does */
+		mp3Ps2Cmd(PDSND_OP_KEYOFF, 0, 0, 0, 0);
+		g_Mp3Hw.keyed = false;
+	}
+
+	g_Mp3Hw.entry = g_Mp3Hw.next_entry;
+
+	if (g_Mp3Hw.entry >= 0) {
+		g_Mp3Hw.rate = g_Mp3Hw.next_rate;
+		g_Mp3Hw.samples = g_Mp3Hw.next_samples;
+		g_Mp3Vars.romaddr = 0;
+		g_Mp3Vars.filesize = 0;
+		g_Mp3Vars.var8009c3c4 = 0;
+		g_Mp3Vars.var8009c3e8 = 0;
+		g_Mp3Vars.var8009c3e4 = 0x7fff;
+		g_Mp3Vars.var8009c3e0 = 4;
+		return;
+	}
+#endif
 
 	g_Mp3Vars.romaddr = romaddr;
 	g_Mp3Vars.filesize = filesize;
@@ -203,6 +358,12 @@ s32 func00037fc0(s32 arg0, Acmd **cmd)
 			g_Mp3Vars.var8009c3ec -= 2;
 		}
 	}
+
+#ifdef PLATFORM_PS2
+	if (g_Mp3Hw.entry >= 0) {
+		return mp3Ps2Frame(arg0);
+	}
+#endif
 
 	if (g_Mp3Vars.var8009c3e0 == 4) {
 		mp3Dma();

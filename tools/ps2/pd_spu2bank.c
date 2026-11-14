@@ -12,7 +12,13 @@
  *   - finite loop counts are unrolled into a one-shot sample.
  * The SPU2 then loops with END|REPEAT at exactly the N64's loop points.
  *
- * Build: cc -O2 -Iport/ps2 tools/ps2/pd_spu2bank.c port/ps2/spu2_adpcm.c -lm
+ * It also transcodes every MP3 file in the ROM's file table (the speech and
+ * dialogue clips) into one-shot PS-ADPCM entries of source MP3, keyed by
+ * file number, so the IOP can play them on a hardware voice instead of the
+ * EE decoding MPEG audio every frame.
+ *
+ * Build: cc -O2 -Iport/ps2 -Iport/include tools/ps2/pd_spu2bank.c
+ *        port/ps2/spu2_adpcm.c -lz -lm
  */
 
 #include <math.h>
@@ -22,24 +28,44 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <zlib.h>
+
+#define MINIMP3_IMPLEMENTATION
+#define MINIMP3_ONLY_MP3
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wsign-compare"
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+#pragma GCC diagnostic ignored "-Wimplicit-fallthrough"
+#endif
+#include "external/minimp3.h"
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+
 #include "spu2_adpcm.h"
 #include "spu2_bank.h"
 
 struct RomLayout {
     const char *name;
+    uint32_t files_ofs; /* file offset table in the inflated data segment */
     uint32_t sfxctl, sfxctl_size, sfxtbl, sfxtbl_size;
     uint32_t seqctl, seqctl_size, seqtbl, seqtbl_size;
 };
 
 /* Offsets from port/src/romdata.c (NTSC final, PAL final, JPN final). */
 static const struct RomLayout s_layouts[] = {
-    { "ntsc-final", 0x80a250u, 0x2fb80u, 0x839dd0u, 0x4c2160u,
+    { "ntsc-final", 0x28080u, 0x80a250u, 0x2fb80u, 0x839dd0u, 0x4c2160u,
       0xcfbf30u, 0xa060u, 0xd05f90u, 0x17c070u },
-    { "pal-final", 0x7f87e0u, 0x2fb80u, 0x828360u, 0x4c2160u,
+    { "pal-final", 0x28910u, 0x7f87e0u, 0x2fb80u, 0x828360u, 0x4c2160u,
       0xcea4c0u, 0xa060u, 0xcf4520u, 0x17c070u },
-    { "jpn-final", 0x7fc670u, 0x2fb80u, 0x82c1f0u, 0x4c2160u,
+    { "jpn-final", 0x28800u, 0x7fc670u, 0x2fb80u, 0x82c1f0u, 0x4c2160u,
       0xcee350u, 0xa060u, 0xcf83b0u, 0x17c070u },
 };
+
+/* The data segment (ROM 0x39850) is "1173" compressed: 0x11 0x73, a 24-bit
+ * big-endian output size, then a raw deflate stream. */
+#define ROM_DATA_SEG_OFS 0x39850u
 
 static uint8_t *s_rom;
 static size_t s_rom_size;
@@ -199,6 +225,133 @@ static uint32_t decode_wave(const struct Wave *w, int16_t **out_pcm)
     return spu2VadpcmDecode(src, frames, book, order, npred, hist, pcm);
 }
 
+/* ---- MP3 clips from the file table ------------------------------- */
+
+struct Mp3Clip {
+    uint32_t filenum;
+    uint32_t rom_offset;
+    uint32_t size;
+};
+
+static struct Mp3Clip *s_clips;
+static size_t s_clip_count;
+
+static uint8_t *inflate_data_segment(uint32_t *out_len)
+{
+    const uint32_t ofs = ROM_DATA_SEG_OFS;
+    if (ofs + 5u > s_rom_size || s_rom[ofs] != 0x11 || s_rom[ofs + 1] != 0x73) {
+        return NULL;
+    }
+    const uint32_t len = ((uint32_t)s_rom[ofs + 2] << 16) |
+        ((uint32_t)s_rom[ofs + 3] << 8) | s_rom[ofs + 4];
+    uint8_t *out = malloc(len);
+    z_stream z;
+    memset(&z, 0, sizeof(z));
+    if (!out || inflateInit2(&z, -15) != Z_OK) {
+        free(out);
+        return NULL;
+    }
+    z.next_in = s_rom + ofs + 5u;
+    z.avail_in = (uInt)(s_rom_size - ofs - 5u);
+    z.next_out = out;
+    z.avail_out = len;
+    const int r = inflate(&z, Z_FINISH);
+    inflateEnd(&z);
+    if ((r != Z_STREAM_END && r != Z_OK) || z.total_out != len) {
+        free(out);
+        return NULL;
+    }
+    *out_len = len;
+    return out;
+}
+
+/* MPEG audio frame sync with a valid layer III header. */
+static bool looks_like_mp3(const uint8_t *p, uint32_t size)
+{
+    return size >= 4u && p[0] == 0xffu && (p[1] & 0xe0u) == 0xe0u &&
+        ((p[1] >> 1) & 3u) == 1u /* layer III */ &&
+        (p[2] >> 4) != 0u && (p[2] >> 4) != 15u && ((p[2] >> 2) & 3u) != 3u;
+}
+
+/* Same walk as romdataInitFiles: big-endian offsets, file i spans
+ * [off[i], off[i+1]), and the entry whose successor is 0 is the name table. */
+static void collect_mp3_clips(const struct RomLayout *l)
+{
+    uint32_t seg_len = 0;
+    uint8_t *seg = inflate_data_segment(&seg_len);
+    if (!seg) {
+        fprintf(stderr, "warning: could not inflate the data segment; no MP3 clips\n");
+        return;
+    }
+    size_t cap = 0;
+    for (uint32_t i = 1; l->files_ofs + 4u * (i + 2u) <= seg_len; ++i) {
+        const uint8_t *p = seg + l->files_ofs + 4u * i;
+        const uint32_t off = ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
+            ((uint32_t)p[2] << 8) | p[3];
+        const uint32_t next = ((uint32_t)p[4] << 24) | ((uint32_t)p[5] << 16) |
+            ((uint32_t)p[6] << 8) | p[7];
+        if (off == 0 || next == 0) {
+            break;
+        }
+        if (next < off || next > s_rom_size) {
+            fprintf(stderr, "warning: file %u has a bad extent\n", i);
+            break;
+        }
+        if (!looks_like_mp3(s_rom + off, next - off)) {
+            continue;
+        }
+        if (s_clip_count == cap) {
+            cap = cap ? cap * 2 : 256;
+            s_clips = realloc(s_clips, cap * sizeof(*s_clips));
+        }
+        s_clips[s_clip_count].filenum = i;
+        s_clips[s_clip_count].rom_offset = off;
+        s_clips[s_clip_count].size = next - off;
+        ++s_clip_count;
+    }
+    free(seg);
+}
+
+/* Decode a whole clip to mono PCM16; returns the sample count. */
+static uint32_t decode_mp3(const struct Mp3Clip *c, int16_t **out_pcm, uint32_t *out_rate)
+{
+    static mp3dec_t dec;
+    mp3dec_init(&dec);
+    const uint8_t *src = s_rom + c->rom_offset;
+    uint32_t left = c->size, count = 0, cap = 0;
+    int16_t *pcm = NULL;
+    *out_rate = 0;
+    while (left > 0) {
+        mp3d_sample_t frame[MINIMP3_MAX_SAMPLES_PER_FRAME];
+        mp3dec_frame_info_t info;
+        const int n = mp3dec_decode_frame(&dec, src, (int)left, frame, &info);
+        if (info.frame_bytes == 0) {
+            break;
+        }
+        src += info.frame_bytes;
+        left -= (uint32_t)info.frame_bytes;
+        if (n <= 0) {
+            continue;
+        }
+        if (*out_rate == 0) {
+            *out_rate = (uint32_t)info.hz;
+        }
+        if (count + (uint32_t)n > cap) {
+            cap = (count + (uint32_t)n) * 2u;
+            pcm = realloc(pcm, cap * sizeof(int16_t));
+        }
+        for (int s = 0; s < n; ++s) {
+            /* mono mixdown if a clip is ever stereo */
+            pcm[count + (uint32_t)s] = info.channels == 2
+                ? (int16_t)(((int32_t)frame[2 * s] + frame[2 * s + 1]) / 2)
+                : frame[s];
+        }
+        count += (uint32_t)n;
+    }
+    *out_pcm = pcm;
+    return count;
+}
+
 static uint32_t gcd32(uint32_t a, uint32_t b)
 {
     while (b) {
@@ -348,6 +501,8 @@ int main(int argc, char **argv)
     walk_bankfile(SPU2_BANK_SOURCE_SFX, l->sfxctl, l->sfxctl_size, l->sfxtbl, l->sfxtbl_size);
     walk_bankfile(SPU2_BANK_SOURCE_SEQ, l->seqctl, l->seqctl_size, l->seqtbl, l->seqtbl_size);
     qsort(s_waves, s_wave_count, sizeof(*s_waves), wave_cmp);
+    collect_mp3_clips(l); /* ascending file number: already sorted */
+    const size_t total = s_wave_count + s_clip_count;
 
     uint32_t crc = 0;
     crc = crc32_update(crc, s_rom + l->sfxctl, l->sfxctl_size);
@@ -357,9 +512,9 @@ int main(int argc, char **argv)
 
     const size_t header_size = 32u;
     const size_t entry_size = 32u;
-    size_t data_off = header_size + entry_size * s_wave_count;
+    size_t data_off = header_size + entry_size * total;
     data_off = (data_off + 15u) & ~(size_t)15u;
-    uint8_t *entries = calloc(s_wave_count, entry_size);
+    uint8_t *entries = calloc(total, entry_size);
     size_t data_cap = 1u << 20, data_len = 0;
     uint8_t *data = malloc(data_cap);
     uint32_t looped = 0, unrolled = 0, reshaped = 0, raw = 0, skipped = 0;
@@ -424,11 +579,49 @@ int main(int argc, char **argv)
         free(pcm);
     }
 
+    /* MP3 clips: one-shot entries, tbl_base = file number, tbl_len = the
+     * file's size, lead_samples = the clip's sample rate (no lead-in is
+     * ever prepended to a one-shot). */
+    uint64_t mp3_samples = 0;
+    uint32_t mp3_bytes = 0, mp3_skipped = 0;
+    for (size_t c = 0; c < s_clip_count; ++c) {
+        const struct Mp3Clip *clip = &s_clips[c];
+        uint8_t *e = entries + (s_wave_count + c) * entry_size;
+        int16_t *pcm = NULL;
+        uint32_t rate = 0;
+        const uint32_t n = decode_mp3(clip, &pcm, &rate);
+        put16(e + 0, SPU2_BANK_SOURCE_MP3);
+        put32(e + 4, clip->filenum);
+        put32(e + 8, clip->size);
+        put32(e + 20, SPU2_BANK_NO_LOOP);
+        put32(e + 24, rate);
+        put32(e + 28, n);
+        if (n == 0 || rate == 0) {
+            ++mp3_skipped;
+            free(pcm);
+            continue;
+        }
+        const uint32_t bytes = spu2PsAdpcmEncodedSize(n);
+        while (data_len + bytes > data_cap) {
+            data_cap *= 2;
+            data = realloc(data, data_cap);
+        }
+        const uint32_t written = spu2PsAdpcmEncode(pcm, n, false, 0, data + data_len);
+        put16(e + 2, 0);
+        put32(e + 12, (uint32_t)data_len);
+        put32(e + 16, written);
+        data_len += written;
+        mp3_bytes += written;
+        mp3_samples += n;
+        crc = crc32_update(crc, s_rom + clip->rom_offset, clip->size);
+        free(pcm);
+    }
+
     uint8_t header[32] = { 0 };
     put32(header + 0, SPU2_BANK_MAGIC);
     put16(header + 4, SPU2_BANK_VERSION);
     put16(header + 6, (uint16_t)ver);
-    put32(header + 8, (uint32_t)s_wave_count);
+    put32(header + 8, (uint32_t)total);
     put32(header + 12, (uint32_t)data_off);
     put32(header + 16, (uint32_t)data_len);
     put32(header + 20, crc);
@@ -440,8 +633,8 @@ int main(int argc, char **argv)
     }
     static const uint8_t pad[16];
     fwrite(header, 1, sizeof(header), o);
-    fwrite(entries, entry_size, s_wave_count, o);
-    fwrite(pad, 1, data_off - header_size - entry_size * s_wave_count, o);
+    fwrite(entries, entry_size, total, o);
+    fwrite(pad, 1, data_off - header_size - entry_size * total, o);
     fwrite(data, 1, data_len, o);
     fclose(o);
 
@@ -449,6 +642,8 @@ int main(int argc, char **argv)
         l->name, s_wave_count, looped, reshaped, unrolled, raw, skipped);
     printf("PS-ADPCM data %.2f MiB, %.1f s of audio at 22.05 kHz, crc %08x\n",
         data_len / 1048576.0, pcm_samples / 22050.0, crc);
+    printf("MP3 clips: %zu (%u skipped), %.2f MiB PS-ADPCM, %.1f s of speech\n",
+        s_clip_count, mp3_skipped, mp3_bytes / 1048576.0, mp3_samples / 22050.0);
     if (verify) {
         printf("worst round-trip SNR %.1f dB\n", worst_snr);
     }
@@ -456,5 +651,6 @@ int main(int argc, char **argv)
     free(data);
     free(s_rom);
     free(s_waves);
+    free(s_clips);
     return 0;
 }

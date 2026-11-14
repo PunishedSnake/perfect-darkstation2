@@ -17,6 +17,9 @@ void ps2HwVoicesInit(s32 output_rate);
 /* Bank entry for a wavetable (ALWaveTable base pointer and length). */
 s32 ps2HwVoicesEntryFor(const u8 *base, s32 len);
 u16 ps2HwVoicesPitch(f32 ratio);
+/* Bank entry for an MP3 file of the file table (speech), or -1. Fills the
+ * clip's sample rate and length in samples. */
+s32 ps2HwVoicesMp3Entry(s32 filenum, u32 *rate, u32 *samples);
 void ps2HwVoicesPush(const PdSndVoiceCmd *cmd);
 /* FX bus summary (longest tap in ms, summed output gain, max feedback,
  * both 0..0x7fff scale) -> SPU2 effect on that bus's core. */

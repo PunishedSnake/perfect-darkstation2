@@ -746,8 +746,22 @@ static bool ps2GsCorePrimeDisplayBuffers(GSGLOBAL *gs)
     return dmaKit_wait(DMA_CHANNEL_GIF, 0) >= 0;
 }
 
+/*
+ * Bumped by every exported call that can change GS drawing state other than
+ * the texture clamp/filter (which every draw path re-applies itself). The
+ * frontend's direct path compares it to skip re-establishing an unchanged
+ * state bracket (gfx_ps2.cpp, ps2_direct_bracket_*).
+ */
+static uint32_t s_state_epoch;
+
+extern "C" uint32_t ps2GsCoreStateEpoch(void)
+{
+    return s_state_epoch;
+}
+
 extern "C" bool ps2GsCoreInit(const struct Ps2GsCreateInfo *info)
 {
+    ++s_state_epoch;
     if (s_gs) {
         return true;
     }
@@ -1460,6 +1474,7 @@ extern "C" void ps2GsCoreRecordTraceSnapshot(void)
 
 extern "C" void ps2GsCoreBeginFrame(void)
 {
+    ++s_state_epoch;
     if (!s_gs) {
         return;
     }
@@ -1500,6 +1515,7 @@ extern "C" void ps2GsCoreSubmit(void)
 
 extern "C" void ps2GsCorePresent(void)
 {
+    ++s_state_epoch;
     if (!s_gs) {
         return;
     }
@@ -1548,6 +1564,7 @@ extern "C" void ps2GsCorePresent(void)
 
 extern "C" void ps2GsCoreClear(bool clear_color, bool clear_depth)
 {
+    ++s_state_epoch;
     if (!s_gs || !s_frame_building || (!clear_color && !clear_depth)) {
         return;
     }
@@ -1660,6 +1677,7 @@ extern "C" void ps2GsCoreClear(bool clear_color, bool clear_depth)
 
 extern "C" void ps2GsCoreSetScissor(int x, int y, int width, int height)
 {
+    ++s_state_epoch;
     if (!s_gs || width <= 0 || height <= 0) {
         return;
     }
@@ -1690,6 +1708,7 @@ extern "C" void ps2GsCoreSetScissor(int x, int y, int width, int height)
 extern "C" void ps2GsCoreSetDepthMode(bool depth_test, bool depth_update,
     bool depth_compare, bool compare_equal)
 {
+    ++s_state_epoch;
     if (!s_gs) {
         return;
     }
@@ -1711,6 +1730,7 @@ extern "C" void ps2GsCoreSetDepthMode(bool depth_test, bool depth_update,
 
 extern "C" void ps2GsCoreSetAlphaBlend(bool enable)
 {
+    ++s_state_epoch;
     if (!s_gs) {
         return;
     }
@@ -1726,6 +1746,7 @@ extern "C" void ps2GsCoreSetAlphaBlend(bool enable)
 extern "C" void ps2GsCoreSetAlphaBlendEquation(
     enum Ps2GsAlphaBlendEquation equation)
 {
+    ++s_state_epoch;
     if (!s_gs) {
         return;
     }
@@ -1744,6 +1765,7 @@ extern "C" void ps2GsCoreSetAlphaBlendEquation(
 
 extern "C" void ps2GsCoreSetAlphaBlendDestinationScale(uint8_t fix)
 {
+    ++s_state_epoch;
     if (!s_gs) {
         return;
     }
@@ -1759,6 +1781,7 @@ extern "C" void ps2GsCoreSetAlphaBlendDestinationScale(uint8_t fix)
 
 extern "C" void ps2GsCoreSetAlphaWrite(bool enable)
 {
+    ++s_state_epoch;
     if (!s_gs || s_alpha_write == enable) {
         return;
     }
@@ -1771,6 +1794,7 @@ extern "C" void ps2GsCoreSetAlphaWrite(bool enable)
 
 extern "C" void ps2GsCoreSetColorWrite(bool enable)
 {
+    ++s_state_epoch;
     const uint8_t channels = enable ? PS2_GS_COLOR_WRITE_RGB : 0u;
     if (!s_gs || s_color_write_channels == channels) {
         return;
@@ -1784,6 +1808,7 @@ extern "C" void ps2GsCoreSetColorWrite(bool enable)
 
 extern "C" void ps2GsCoreSetColorChannelWriteMask(uint8_t channels)
 {
+    ++s_state_epoch;
     channels &= PS2_GS_COLOR_WRITE_RGB;
     if (!s_gs || s_color_write_channels == channels) {
         return;
@@ -1805,6 +1830,7 @@ extern "C" void ps2GsCoreSetAlphaTestComparison(
     bool enable, uint8_t reference,
     enum Ps2GsAlphaTestComparison comparison)
 {
+    ++s_state_epoch;
     if (!s_gs) {
         return;
     }
@@ -1823,6 +1849,7 @@ extern "C" void ps2GsCoreSetAlphaTestComparison(
 
 extern "C" void ps2GsCoreSetFramebufferAlphaForce(bool enable)
 {
+    ++s_state_epoch;
     if (!s_gs || s_framebuffer_alpha_force == enable) {
         return;
     }
@@ -1835,6 +1862,7 @@ extern "C" void ps2GsCoreSetFramebufferAlphaForce(bool enable)
 
 extern "C" void ps2GsCoreSetFog(bool enable, uint8_t r, uint8_t g, uint8_t b)
 {
+    ++s_state_epoch;
     if (!s_gs) {
         return;
     }
@@ -1851,6 +1879,7 @@ extern "C" void ps2GsCoreSetFog(bool enable, uint8_t r, uint8_t g, uint8_t b)
 
 extern "C" void ps2GsCoreSetTextureAlpha(bool enable)
 {
+    ++s_state_epoch;
     s_texture_alpha = enable;
 }
 
@@ -1885,6 +1914,7 @@ extern "C" void ps2GsCoreSetTextureRegionClamp(
 extern "C" Ps2GsRenderTargetHandle ps2GsCoreCreateRenderTarget(
     uint32_t width, uint32_t height)
 {
+    ++s_state_epoch;
     if (!s_gs) {
         return PS2_GS_RENDER_TARGET_DEFAULT;
     }
@@ -1948,6 +1978,7 @@ extern "C" Ps2GsRenderTargetHandle ps2GsCoreCreateRenderTarget(
 extern "C" bool ps2GsCoreBindRenderTarget(
     Ps2GsRenderTargetHandle handle)
 {
+    ++s_state_epoch;
     if (!s_gs || !ps2GsCoreRenderTargetSlot(handle)) {
         return false;
     }
@@ -1964,6 +1995,7 @@ extern "C" bool ps2GsCoreBindRenderTarget(
 
 extern "C" void ps2GsCoreBindDefaultRenderTarget(void)
 {
+    ++s_state_epoch;
     if (!s_gs) {
         return;
     }
@@ -3386,6 +3418,7 @@ extern "C" bool ps2GsCoreDrawPresentedScreenTriangles(
     const struct Ps2GsTexturedVertex *vertices, uint32_t vertex_count,
     bool linear_filter)
 {
+    ++s_state_epoch;
     if (!s_gs || !s_frame_building || !vertices || vertex_count == 0u ||
         s_active_render_target == PS2_GS_RENDER_TARGET_DEFAULT ||
         s_gs->DoubleBuffering != GS_SETTING_ON ||
@@ -3438,6 +3471,7 @@ extern "C" bool ps2GsCoreDrawRenderTargetTriangles(
     const struct Ps2GsTexturedVertex *vertices, uint32_t vertex_count,
     bool linear_filter)
 {
+    ++s_state_epoch;
     return ps2GsCoreDrawRenderTargetView(
         source, vertices, vertex_count, linear_filter, GS_PSM_CT32);
 }
@@ -3447,6 +3481,7 @@ extern "C" bool ps2GsCoreDrawRenderTargetAlphaTriangles(
     const struct Ps2GsTexturedVertex *vertices, uint32_t vertex_count,
     bool linear_filter)
 {
+    ++s_state_epoch;
     return ps2GsCoreDrawRenderTargetView(
         source, vertices, vertex_count, linear_filter, GS_PSM_T8H);
 }
@@ -3984,6 +4019,7 @@ extern "C" bool ps2GsCoreBlitRenderTargetChannelRectToActiveAlpha(
     Ps2GsRenderTargetHandle source, enum Ps2GsCt32Channel channel,
     uint32_t width, uint32_t height)
 {
+    ++s_state_epoch;
     return ps2GsCoreBlitRenderTargetChannelRectToActiveAlphaImpl(
         source, channel, width, height, NULL, NULL, 0u);
 }
@@ -3994,6 +4030,7 @@ extern "C" bool ps2GsCoreBlitRenderTargetChannelSpansToActiveAlpha(
     const uint16_t *span_x0, const uint16_t *span_x1,
     uint32_t span_count)
 {
+    ++s_state_epoch;
     return ps2GsCoreBlitRenderTargetChannelRectToActiveAlphaImpl(
         source, channel, width, height,
         span_x0, span_x1, span_count);

@@ -148,6 +148,9 @@ void ps2GsCoreSetFramebufferAlphaForce(bool enable);
 void ps2GsCoreSetFog(bool enable, uint8_t r, uint8_t g, uint8_t b);
 /* TEX0.TCC is texture-function state, independent of primitive alpha blending. */
 void ps2GsCoreSetTextureAlpha(bool enable);
+/* Changes on every call that can alter drawing state (not texture clamp or
+ * filter); equal values mean nothing else touched the GS state since. */
+uint32_t ps2GsCoreStateEpoch(void);
 void ps2GsCoreSetTextureClamp(uint32_t cms, uint32_t cmt);
 /* Override selected axes with exact GS texel-space REGION_CLAMP bounds. */
 void ps2GsCoreSetTextureRegionClamp(uint32_t cms, uint32_t cmt,
