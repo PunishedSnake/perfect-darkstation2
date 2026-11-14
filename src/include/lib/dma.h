@@ -11,5 +11,6 @@ void dmaWait(void);
 void dmaExec(void *memaddr, romptr_t romaddr, u32 len);
 void dmaExecHighPriority(void *memaddr, romptr_t romaddr, u32 len);
 void *dmaExecWithAutoAlign(void *memaddr, romptr_t romaddr, u32 len);
+void *dmaExecWithAutoAlignNoTex(void *memaddr, romptr_t romaddr, u32 len);
 
 #endif

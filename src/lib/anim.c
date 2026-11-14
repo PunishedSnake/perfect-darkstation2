@@ -151,7 +151,7 @@ u8 *animDma(u8 *dst, u32 segoffset, u32 len)
 		return dst;
 	}
 
-	return dmaExecWithAutoAlign(dst, (romptr_t) REF_SEG _animationsSegmentRomStart + segoffset, len);
+	return dmaExecWithAutoAlignNoTex(dst, (romptr_t) REF_SEG _animationsSegmentRomStart + segoffset, len);
 }
 
 /**

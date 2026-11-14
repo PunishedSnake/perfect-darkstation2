@@ -166,6 +166,15 @@ void dmaWait(void)
 #endif
 }
 
+static void dmaExecRaw(void *memaddr, romptr_t romaddr, u32 len)
+{
+	dmaStart(memaddr, romaddr, len, false);
+	dmaWait();
+#if VERSION >= VERSION_NTSC_1_0
+	dmaCheckPiracy(memaddr, len);
+#endif
+}
+
 void dmaExec(void *memaddr, romptr_t romaddr, u32 len)
 {
 #ifdef PLATFORM_PS2
@@ -217,6 +226,28 @@ void *dmaExecWithAutoAlign(void *memaddr, romptr_t romaddr, u32 len)
 	}
 
 	dmaExec((void *)alignedmem, alignedrom, alignedlen);
+
+	return (void *)(alignedmem + offset);
+}
+
+/**
+ * Same as dmaExecWithAutoAlign, for destinations that can never hold texture
+ * data (the animation frame and header slots). It skips the texture-memory
+ * epoch bump: animation streaming DMAs every frame, and bumping there forced
+ * the renderer to re-read every texture it had already identified.
+ */
+void *dmaExecWithAutoAlignNoTex(void *memaddr, romptr_t romaddr, u32 len)
+{
+	uintptr_t alignedrom = ALIGN2(romaddr);
+	uintptr_t alignedmem = ALIGN16((uintptr_t) memaddr);
+	u32 offset = romaddr - alignedrom;
+	u32 alignedlen = ALIGN16(offset + len);
+
+	if (len == 0) {
+		return (void *)(alignedmem + offset);
+	}
+
+	dmaExecRaw((void *)alignedmem, alignedrom, alignedlen);
 
 	return (void *)(alignedmem + offset);
 }

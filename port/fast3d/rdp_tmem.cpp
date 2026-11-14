@@ -3,8 +3,23 @@
 
 #include <string.h>
 
-static uint32_t gfxRdpTmemNextGeneration(struct GfxRdpTmem *tmem)
+/*
+ * Start a write of [first_word, first_word + word_count). Records whose range
+ * the write may touch are marked dirty; the others stay provably intact.
+ * Callers that cannot name their range pass the whole of TMEM.
+ */
+static uint32_t gfxRdpTmemNextGenerationFor(struct GfxRdpTmem *tmem,
+    uint32_t first_word, uint32_t word_count)
 {
+    const uint32_t end_word = first_word + word_count;
+    for (uint32_t i = 0; i < GFX_RDP_TMEM_LOAD_RECORDS; ++i) {
+        struct GfxRdpTmemLoadRecord *record = &tmem->load_records[i];
+        if (first_word < record->first_word + record->word_count &&
+            record->first_word < end_word) {
+            record->dirty = 1u;
+        }
+    }
+
     uint32_t next = tmem->generation + 1u;
 
     /* Keep zero reserved as the reset/unwritten generation after wraparound. */
@@ -18,6 +33,11 @@ static uint32_t gfxRdpTmemNextGeneration(struct GfxRdpTmem *tmem)
 
     tmem->generation = next;
     return next;
+}
+
+static uint32_t gfxRdpTmemNextGeneration(struct GfxRdpTmem *tmem)
+{
+    return gfxRdpTmemNextGenerationFor(tmem, 0u, GFX_RDP_TMEM_WORDS);
 }
 
 static bool gfxRdpTmemRangeValid(uint32_t byte_offset, uint32_t size_bytes)
@@ -59,6 +79,7 @@ static void gfxRdpTmemRecordLoad(struct GfxRdpTmem *tmem,
     record->first_word = first_word;
     record->word_count = word_count;
     record->generation = generation;
+    record->dirty = 0u;
     record->hash = hash;
 }
 
@@ -74,6 +95,9 @@ extern "C" const struct GfxRdpTmemLoadRecord *gfxRdpTmemFindIntactLoad(
         if (record->generation == 0u || first_word < record->first_word ||
             first_word + word_count > record->first_word + record->word_count) {
             continue;
+        }
+        if (!record->dirty) {
+            return record;
         }
         const uint32_t *gen = &tmem->word_generation[first_word];
         uint32_t w = 0;
@@ -134,10 +158,11 @@ static void gfxRdpTmemMarkRange(struct GfxRdpTmem *tmem,
         return;
     }
 
-    const uint32_t generation = gfxRdpTmemNextGeneration(tmem);
     const uint32_t first_word = byte_offset / GFX_RDP_TMEM_WORD_BYTES;
     const uint32_t last_word =
         (byte_offset + size_bytes - 1u) / GFX_RDP_TMEM_WORD_BYTES;
+    const uint32_t generation = gfxRdpTmemNextGenerationFor(tmem,
+        first_word, last_word - first_word + 1u);
 
     for (uint32_t word = first_word; word <= last_word; ++word) {
         tmem->word_generation[word] = generation;
@@ -280,7 +305,8 @@ extern "C" bool gfxRdpTmemWriteTlut(struct GfxRdpTmem *tmem,
 
     /* One pass: each word is four copies of hi,lo (built in a register,
      * stored straight into TMEM) with full validity and a fresh generation. */
-    const uint32_t generation = gfxRdpTmemNextGeneration(tmem);
+    const uint32_t generation =
+        gfxRdpTmemNextGenerationFor(tmem, first_tmem_word, entry_count);
     uint64_t load_hash = GFX_RDP_TMEM_HASH_SEED;
     for (uint32_t i = 0; i < entry_count; ++i) {
         const uint32_t word = first_tmem_word + i;
@@ -741,7 +767,8 @@ static bool gfxRdpTmemLoadBlockLinearImpl(struct GfxRdpTmem *tmem,
         }
     }
 
-    const uint32_t generation = gfxRdpTmemNextGeneration(tmem);
+    const uint32_t generation =
+        gfxRdpTmemNextGenerationFor(tmem, first_tmem_word, word_count);
     uint32_t t_accum = t_start;
     uint64_t load_hash = GFX_RDP_TMEM_HASH_SEED;
 

@@ -37,6 +37,9 @@ struct GfxRdpTmemLoadRecord {
     uint32_t first_word;
     uint32_t word_count;
     uint32_t generation;
+    /* Set once any later write touches the range; until then every word in
+     * it still carries `generation` and the per-word check can be skipped. */
+    uint32_t dirty;
     uint64_t hash;
 };
 
