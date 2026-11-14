@@ -13,7 +13,8 @@ For active development, read these in order:
 3. [Native renderer architecture](PS2_NATIVE_RENDERER_ARCHITECTURE.md) - current Fast3D/RDP -> GS/VU1 design.
 4. [Renderer trace](PS2_RENDERER_TRACE.md) - capture and decode a real-hardware renderer frame.
 5. [Renderer correctness audit](PS2_RENDERER_CORRECTNESS_AUDIT.md) - confirmed contracts and currently open correctness gaps.
-6. [Optimization roadmap](PS2_OPTIMIZATION_ROADMAP.md) - performance work after correctness is preserved.
+6. [Emotion3D notes](ps2-emotion3d.md) - the current renderer work, with measurements per round.
+7. [Optimization roadmap](PS2_OPTIMIZATION_ROADMAP.md) - performance work after correctness is preserved.
 
 The repository-level [CONTRIBUTING.md](../CONTRIBUTING.md) describes the expected development and pull-request workflow.
 
@@ -30,6 +31,11 @@ These should describe the current implementation and should be updated when the 
 | [PS2_OPTIMIZATION_ROADMAP.md](PS2_OPTIMIZATION_ROADMAP.md) | Ranked optimization work and measurement rules. |
 | [PS2_WHOLE_RUNTIME_OPTIMIZATION_AUDIT.md](PS2_WHOLE_RUNTIME_OPTIMIZATION_AUDIT.md) | Non-render runtime performance work. |
 | [N64_RDP_TMEM_SEMANTICS.md](N64_RDP_TMEM_SEMANTICS.md) | Texture/TMEM semantics used by the PS2 backend. |
+| [ps2-emotion3d.md](ps2-emotion3d.md) | Emotion3D renderer stages, GS layer work and their measurements, round by round. |
+| [ps2-vu1-pipeline.md](ps2-vu1-pipeline.md) | VU0/VU1 geometry pipeline: what runs where and the target design. |
+| [ps2-spu2-audio.md](ps2-spu2-audio.md) | SPU2 hardware voices, reverb, speech, and the `pd.pssb` bank tool. |
+| [ps2-ee-runtime.md](ps2-ee-runtime.md) | EE-specific replacements for soft-double, memcpy/memset and similar library code. |
+| [PS2_PCSX2_DEBUGGING.md](PS2_PCSX2_DEBUGGING.md) | Running, logging and timing the port in PCSX2. |
 
 ## Reference and historical audits
 

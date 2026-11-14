@@ -2,6 +2,12 @@
 
 Date: 2026-09-17
 
+> **Status, 2026-11-14:** much of this roadmap has since been done (native GS
+> queue, VU1 object and skin paths, SPU2 hardware voices, EE runtime
+> replacements). The current state and next steps are in
+> [PS2_DEVELOPMENT.md](PS2_DEVELOPMENT.md) and [ps2-emotion3d.md](ps2-emotion3d.md);
+> keep this file for the ground rules and the ideas not yet taken up.
+
 This document collects the practical optimization opportunities for the whole
 Perfect Dark PS2 port, from instruction-level substitutions to replacement of
 major runtime components. It is a roadmap, not permission to weaken rendering

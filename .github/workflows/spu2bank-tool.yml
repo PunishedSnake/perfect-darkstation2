@@ -1,0 +1,75 @@
+name: SPU2 bank tool
+
+# Builds pd_spu2bank (the ROM -> pd.pssb sound bank converter) for Linux,
+# Windows and macOS. Every run publishes the binaries as an artifact; a push
+# of a tag named tools-spu2bank-* also attaches them to a GitHub release.
+
+on:
+  push:
+    branches: [ "ps2" ]
+    tags: [ "tools-spu2bank-*" ]
+    paths:
+      - "tools/ps2/pd_spu2bank.c"
+      - "tools/ps2/build_spu2bank.sh"
+      - "port/ps2/spu2_adpcm.c"
+      - "port/ps2/spu2_adpcm.h"
+      - "port/ps2/spu2_bank.h"
+      - ".github/workflows/spu2bank-tool.yml"
+  pull_request:
+    branches: [ "ps2" ]
+    paths:
+      - "tools/ps2/pd_spu2bank.c"
+      - "tools/ps2/build_spu2bank.sh"
+      - "port/ps2/spu2_adpcm.c"
+      - "port/ps2/spu2_adpcm.h"
+      - "port/ps2/spu2_bank.h"
+      - ".github/workflows/spu2bank-tool.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch zlib
+        uses: actions/checkout@v4
+        with:
+          repository: madler/zlib
+          ref: v1.3.1
+          path: zlib
+
+      - name: Install zig
+        run: pip install ziglang==0.17.1
+
+      - name: Build
+        run: |
+          ZLIB_DIR="$GITHUB_WORKSPACE/zlib" tools/ps2/build_spu2bank.sh \
+            x86_64-linux-musl x86_64-windows-gnu x86_64-macos aarch64-macos
+          ls -la build-tools
+
+      - name: Smoke test
+        run: |
+          set +e
+          build-tools/pd_spu2bank-x86_64-linux-musl
+          test $? -eq 2
+
+      - uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: pd_spu2bank
+          path: build-tools/pd_spu2bank-*
+          retention-days: 30
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/tools-spu2bank-')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
+            gh release create "$GITHUB_REF_NAME" --title "SPU2 sound bank tool ($GITHUB_REF_NAME)" \
+              --notes "pd_spu2bank: converts a Perfect Dark ROM's sounds into pd.pssb for the PS2 SPU2 hardware voices. See docs/ps2-spu2-audio.md."
+          gh release upload "$GITHUB_REF_NAME" build-tools/pd_spu2bank-* --clobber
