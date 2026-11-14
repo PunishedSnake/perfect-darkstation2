@@ -100,6 +100,13 @@ bool gfxRdpTmemWriteTlut(struct GfxRdpTmem *tmem,
     uint32_t first_tmem_word, const uint16_t *entries, uint32_t entry_count);
 
 /*
+ * Same as gfxRdpTmemWriteTlut, reading the entries straight from big-endian
+ * RDRAM bytes (two per entry) instead of a decoded entry array.
+ */
+bool gfxRdpTmemWriteTlutBytes(struct GfxRdpTmem *tmem,
+    uint32_t first_tmem_word, const uint8_t *source_be, uint32_t entry_count);
+
+/*
  * Byte-exact LoadTile row writer for the non-planar 4/8/16-bit TMEM layouts.
  * Rows are placed `line_words` 64-bit words apart. Odd T rows swap the two
  * 32-bit halves inside each complete 64-bit word, matching the documented RDP

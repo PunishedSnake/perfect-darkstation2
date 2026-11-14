@@ -27,6 +27,51 @@ static void test_tlut(void)
     assert(decoded[1] == entries[1]);
 }
 
+static void test_tlut_bytes_matches_entries(void)
+{
+    uint16_t entries[256];
+    uint8_t be[512];
+    for (uint32_t i = 0; i < 256u; ++i) {
+        entries[i] = (uint16_t)(i * 0x9e37u + 0x51u);
+        be[i * 2u] = (uint8_t)(entries[i] >> 8);
+        be[i * 2u + 1u] = (uint8_t)entries[i];
+    }
+    GfxRdpTmem a{};
+    GfxRdpTmem b{};
+    assert(gfxRdpTmemWriteTlut(&a, 256u, entries, 256u));
+    assert(gfxRdpTmemWriteTlutBytes(&b, 256u, be, 256u));
+    assert(memcmp(gfxRdpTmemBytes(&a), gfxRdpTmemBytes(&b), GFX_RDP_TMEM_BYTES) == 0);
+    const GfxRdpTmemLoadRecord *ra = gfxRdpTmemFindIntactLoad(&a, 256u, 256u);
+    const GfxRdpTmemLoadRecord *rb = gfxRdpTmemFindIntactLoad(&b, 256u, 256u);
+    assert(ra && rb && ra->hash == rb->hash);
+}
+
+static void test_load_record_dirty_tracking(void)
+{
+    GfxRdpTmem tmem{};
+    uint8_t be[512];
+    for (uint32_t i = 0; i < 512u; ++i) {
+        be[i] = (uint8_t)(i * 7u + 3u);
+    }
+    /* Two records: [256,272) and [272,288). */
+    assert(gfxRdpTmemWriteTlutBytes(&tmem, 256u, be, 16u));
+    assert(gfxRdpTmemWriteTlutBytes(&tmem, 272u, be + 32, 16u));
+    assert(gfxRdpTmemFindIntactLoad(&tmem, 256u, 16u) != NULL);
+    assert(gfxRdpTmemFindIntactLoad(&tmem, 272u, 16u) != NULL);
+    /* Overwrite part of the first range with different bytes: that record
+     * must stop validating the overwritten words but keep the rest, and the
+     * untouched second record stays intact. */
+    uint8_t other[8];
+    for (uint32_t i = 0; i < 8u; ++i) {
+        other[i] = (uint8_t)~be[i];
+    }
+    assert(gfxRdpTmemWriteTlutBytes(&tmem, 256u, other, 4u));
+    const GfxRdpTmemLoadRecord *r = gfxRdpTmemFindIntactLoad(&tmem, 256u, 16u);
+    assert(r == NULL || (r->first_word == 256u && r->word_count == 4u));
+    assert(gfxRdpTmemFindIntactLoad(&tmem, 260u, 12u) != NULL);
+    assert(gfxRdpTmemFindIntactLoad(&tmem, 272u, 16u) != NULL);
+}
+
 static void test_linear_tile_roundtrip_and_padding(void)
 {
     GfxRdpTmem tmem{};
@@ -281,6 +326,8 @@ static void test_partial_final_row_readback(void)
 int main(void)
 {
     test_tlut();
+    test_tlut_bytes_matches_entries();
+    test_load_record_dirty_tracking();
     test_linear_tile_roundtrip_and_padding();
     test_loadblock_dxt();
     test_rgba32_figure_14_15_layout();

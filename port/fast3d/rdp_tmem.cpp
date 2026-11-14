@@ -265,10 +265,17 @@ extern "C" bool gfxRdpTmemInvalidatePhysical(struct GfxRdpTmem *tmem,
     return true;
 }
 
-extern "C" bool gfxRdpTmemWriteTlut(struct GfxRdpTmem *tmem,
-    uint32_t first_tmem_word, const uint16_t *entries, uint32_t entry_count)
+/*
+ * Each TLUT entry fills its word as four copies of its two bytes in RDRAM
+ * order (hi, lo). `Half` returns those two bytes as a little-endian 16-bit
+ * value for entry i.
+ */
+template <typename Half>
+static inline bool gfxRdpTmemWriteTlutImpl(struct GfxRdpTmem *tmem,
+    uint32_t first_tmem_word, bool have_source, uint32_t entry_count,
+    Half entry_half)
 {
-    if (!tmem || (!entries && entry_count != 0u) ||
+    if (!tmem || (!have_source && entry_count != 0u) ||
         first_tmem_word > GFX_RDP_TMEM_WORDS ||
         entry_count > GFX_RDP_TMEM_WORDS - first_tmem_word) {
         return false;
@@ -290,8 +297,7 @@ extern "C" bool gfxRdpTmemWriteTlut(struct GfxRdpTmem *tmem,
         const uint32_t word = first_tmem_word + same;
         /* shifts, not a 64-bit multiply: the R5900 has no DMULT and the
          * multiply became a libgcc call per entry */
-        const uint32_t half = ((uint32_t)(entries[same] >> 8) & 0xffu) |
-            (((uint32_t)entries[same] & 0xffu) << 8);
+        const uint32_t half = entry_half(same);
         const uint32_t pair = half | (half << 16);
         const uint64_t pattern = (uint64_t)pair | ((uint64_t)pair << 32);
         if (tmem->word_valid[word] == 0u || tmem->word_linear[word] != 0u ||
@@ -310,8 +316,7 @@ extern "C" bool gfxRdpTmemWriteTlut(struct GfxRdpTmem *tmem,
     uint64_t load_hash = GFX_RDP_TMEM_HASH_SEED;
     for (uint32_t i = 0; i < entry_count; ++i) {
         const uint32_t word = first_tmem_word + i;
-        const uint32_t half = ((uint32_t)(entries[i] >> 8) & 0xffu) |
-            (((uint32_t)entries[i] & 0xffu) << 8);
+        const uint32_t half = entry_half(i);
         const uint32_t pair = half | (half << 16);
         const uint64_t pattern = (uint64_t)pair | ((uint64_t)pair << 32);
         memcpy(&tmem->bytes[word * GFX_RDP_TMEM_WORD_BYTES], &pattern, 8);
@@ -326,6 +331,26 @@ extern "C" bool gfxRdpTmemWriteTlut(struct GfxRdpTmem *tmem,
     gfxRdpTmemRecordLoad(tmem, first_tmem_word, entry_count,
         generation, load_hash);
     return true;
+}
+
+extern "C" bool gfxRdpTmemWriteTlut(struct GfxRdpTmem *tmem,
+    uint32_t first_tmem_word, const uint16_t *entries, uint32_t entry_count)
+{
+    return gfxRdpTmemWriteTlutImpl(tmem, first_tmem_word, entries != NULL,
+        entry_count, [entries](uint32_t i) -> uint32_t {
+            return ((uint32_t)(entries[i] >> 8) & 0xffu) |
+                (((uint32_t)entries[i] & 0xffu) << 8);
+        });
+}
+
+extern "C" bool gfxRdpTmemWriteTlutBytes(struct GfxRdpTmem *tmem,
+    uint32_t first_tmem_word, const uint8_t *source_be, uint32_t entry_count)
+{
+    return gfxRdpTmemWriteTlutImpl(tmem, first_tmem_word, source_be != NULL,
+        entry_count, [source_be](uint32_t i) -> uint32_t {
+            return (uint32_t)source_be[i * 2u] |
+                ((uint32_t)source_be[i * 2u + 1u] << 8);
+        });
 }
 
 extern "C" bool gfxRdpTmemLoadTileLinear(struct GfxRdpTmem *tmem,

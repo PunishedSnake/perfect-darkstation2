@@ -115,16 +115,10 @@ extern "C" enum GfxRdpTmemLoadResult gfxRdpTmemRuntimeLoadTlut(
     const uint32_t pitch = (uint32_t)runtime->image.width_minus_one + 1u;
     const uint64_t first_index = (uint64_t)pitch * ult + uls;
     const uint8_t *src = runtime->image.addr + first_index * 2u;
-    uint16_t entries[256];
     const uint32_t count = (uint32_t)count64;
 
-    for (uint32_t i = 0; i < count; ++i) {
-        entries[i] = (uint16_t)((uint16_t)src[i * 2u] << 8) |
-                     (uint16_t)src[i * 2u + 1u];
-    }
-
-    if (!gfxRdpTmemWriteTlut(&runtime->tmem,
-            tile->tmem_word, entries, count)) {
+    if (!gfxRdpTmemWriteTlutBytes(&runtime->tmem,
+            tile->tmem_word, src, count)) {
         return gfxRdpTmemRuntimeMalformed(runtime);
     }
 
