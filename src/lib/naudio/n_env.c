@@ -25,6 +25,263 @@ s16 n_eqpower[] = {
 
 Acmd *_pullSubFrame(N_PVoice *filter, s16 *inp, s16 *outp, s32 outCount, Acmd *p);
 
+#ifdef PLATFORM_PS2
+#include "spu2_voices_ps2.h"
+
+/*
+ * SPU2 hardware-voice mode (port/ps2/spu2_voices_ps2.c): the same parameter
+ * events as n_alEnvmixerPull below, translated into pdsnd voice commands
+ * instead of DSP commands. Sample-accurate timing within the 184-sample
+ * subframe is not kept; events apply at the frame they fall in.
+ */
+N_PVoice *g_N64PVoiceBase;
+
+static s16 hwVoiceVol(N_PVoice *e, s32 right)
+{
+	s32 v = (e->em_volume * n_eqpower[right ? N_EQPOWER_LENGTH - e->em_pan - 1 : e->em_pan]) >> 15;
+	/* No per-voice reverb send yet: fold the wet share in at half level so
+	 * effects routed mostly to the FX bus do not vanish. */
+	s32 g = (e->em_dryamt & 0xfffe) + ((e->em_wetamt & 0xfffe) >> 1);
+
+	if (g > 0x7fff) {
+		g = 0x7fff;
+	}
+
+	v = (v * g) >> 15;
+
+	/* 0x3fff is unity for an SPU2 voice; the software mix reaches the
+	 * speakers through audsrv's core 1 input at BVOL 0x3fff, i.e. -6 dB.
+	 * Match that so music, effects and the streamed speech keep the N64
+	 * balance. */
+	return (s16)(v >> 2);
+}
+
+static u32 hwSamplesToUs(s32 samples)
+{
+	if (samples <= 0 || n_syn->outputRate <= 0) {
+		return 0;
+	}
+
+	return (u32)(((u64)samples * 1000000u) / (u32)n_syn->outputRate);
+}
+
+static void hwRamp(N_PVoice *e, s32 remaining)
+{
+	PdSndVoiceCmd cmd = {0};
+	cmd.op = PDSND_OP_RAMP;
+	cmd.voice = (u8)(e - g_N64PVoiceBase);
+	cmd.tgt_l = hwVoiceVol(e, 0);
+	cmd.tgt_r = hwVoiceVol(e, 1);
+	cmd.ramp_us = hwSamplesToUs(remaining);
+	ps2HwVoicesPush(&cmd);
+}
+
+static void hwPitch(N_PVoice *e)
+{
+	PdSndVoiceCmd cmd = {0};
+	cmd.op = PDSND_OP_PITCH;
+	cmd.voice = (u8)(e - g_N64PVoiceBase);
+	cmd.pitch = ps2HwVoicesPitch(e->rs_upitch ? 1.0f : e->rs_ratio);
+	ps2HwVoicesPush(&cmd);
+}
+
+static void hwKeyOn(N_PVoice *e, ALWaveTable *w, s32 attack)
+{
+	PdSndVoiceCmd cmd = {0};
+	const s32 entry = w ? ps2HwVoicesEntryFor(w->base, w->len) : -1;
+
+	if (entry < 0) {
+		return;
+	}
+
+	cmd.op = PDSND_OP_KEYON;
+	cmd.voice = (u8)(e - g_N64PVoiceBase);
+	cmd.entry = (u16)entry;
+	cmd.pitch = ps2HwVoicesPitch(e->rs_upitch ? 1.0f : e->rs_ratio);
+	cmd.tgt_l = hwVoiceVol(e, 0);
+	cmd.tgt_r = hwVoiceVol(e, 1);
+	cmd.cur_l = attack ? 0 : cmd.tgt_l;
+	cmd.cur_r = attack ? 0 : cmd.tgt_r;
+	cmd.ramp_us = attack ? hwSamplesToUs(e->em_segEnd) : 0;
+	ps2HwVoicesPush(&cmd);
+}
+
+static void hwKeyOff(N_PVoice *e)
+{
+	PdSndVoiceCmd cmd = {0};
+	cmd.op = PDSND_OP_KEYOFF;
+	cmd.voice = (u8)(e - g_N64PVoiceBase);
+	ps2HwVoicesPush(&cmd);
+}
+
+static Acmd *n_alEnvmixerPullHw(N_PVoice *e, s32 sampleOffset, Acmd *p)
+{
+	s32 lastOffset;
+	s32 thisOffset = sampleOffset;
+	s32 samples;
+	ALParam *thisParam;
+	s32 outCount = FIXED_SAMPLE;
+
+	while (e->em_ctrlList != 0) {
+		lastOffset = thisOffset;
+		thisOffset = e->em_ctrlList->delta;
+
+		samples = SAMPLE184(thisOffset - lastOffset);
+
+		if (!samples) {
+			thisOffset = lastOffset;
+		}
+
+		if (samples > outCount) {
+			break;
+		}
+
+		if (e->em_motion == AL_PLAYING) {
+			e->em_delta += samples;
+		}
+
+		switch (e->em_ctrlList->type) {
+		case AL_FILTER_START_VOICE_ALT:
+			{
+				ALStartParamAlt *param = (ALStartParamAlt *)e->em_ctrlList;
+
+				if (param->unity) {
+					e->rs_upitch = 1;
+				}
+
+				n_alLoadParam(e, AL_FILTER_SET_WAVETABLE, param->wave);
+
+				e->em_motion = AL_PLAYING;
+				e->em_first  = 1;
+				e->em_delta  = 0;
+				e->em_segEnd = SAMPLE184(param->samples);
+				e->em_volume = (param->volume + param->volume) / 2;
+				e->em_pan    = param->pan;
+				e->em_dryamt = (n_eqpower[param->fxMix & 0x7f] & 0xfffe) | (param->fxMix >> 7);
+
+				if (!var8009c340.surround) {
+					e->em_dryamt &= 0xfffe;
+				}
+
+				e->em_wetamt = n_eqpower[N_EQPOWER_LENGTH - (param->fxMix & 0x7f) - 1] & 0xfffe;
+
+				if (var8009c340.headphone) {
+					e->em_pan = (e->em_pan >> 1) + 32;
+				} else if (var8009c340.mono) {
+					e->em_pan = 64;
+				}
+
+				e->rs_ratio = param->pitch;
+				e->fx.unk02 = param->unk15;
+				e->fx.unk00 = param->unk18;
+				e->unkb8 = 1;
+				e->unk8c = param->unk14;
+
+				hwKeyOn(e, param->wave, param->samples != 0);
+			}
+			break;
+		case AL_FILTER_SET_FXAMT:
+		case AL_FILTER_SET_PAN:
+		case AL_FILTER_SET_VOLUME:
+			if (e->em_ctrlList->type == AL_FILTER_SET_PAN) {
+				if (var8009c340.headphone) {
+					e->em_pan = ((s16)e->em_ctrlList->data.i >> 1) + 32;
+				} else if (var8009c340.mono) {
+					e->em_pan = 64;
+				} else {
+					e->em_pan = (s16) e->em_ctrlList->data.i;
+				}
+			}
+
+			if (e->em_ctrlList->type == AL_FILTER_SET_VOLUME) {
+				s32 fVol = e->em_ctrlList->data.i;
+				e->em_delta = 0;
+				e->em_volume = (s16)((fVol + fVol) / 2);
+				e->em_segEnd = SAMPLE184(e->em_ctrlList->moredata.i);
+			}
+
+			if (e->em_ctrlList->type == AL_FILTER_SET_FXAMT) {
+				e->em_dryamt = (n_eqpower[e->em_ctrlList->data.i & 0x7f] & 0xfffe) | (e->em_dryamt & 1);
+				e->em_wetamt = (n_eqpower[N_EQPOWER_LENGTH - (e->em_ctrlList->data.i & 0x7f) - 1] & 0xfffe) | (e->em_wetamt & 1);
+			}
+
+			if (e->em_motion == AL_PLAYING) {
+				hwRamp(e, e->em_segEnd > e->em_delta ? e->em_segEnd - e->em_delta : 0);
+			}
+			break;
+		case AL_FILTER_START_VOICE:
+			{
+				ALStartParam *sp = (ALStartParam *)e->em_ctrlList;
+
+				if (sp->unity) {
+					e->rs_upitch = 1;
+				}
+
+				n_alLoadParam(e, AL_FILTER_SET_WAVETABLE, sp->wave);
+				e->em_motion = AL_PLAYING;
+				hwKeyOn(e, sp->wave, 0);
+			}
+			break;
+		case AL_FILTER_STOP_VOICE:
+			if (e->em_motion == AL_PLAYING) {
+				hwKeyOff(e);
+			}
+			n_alEnvmixerParam(e, AL_FILTER_RESET, 0);
+			break;
+		case AL_FILTER_FREE_VOICE:
+			{
+				N_ALFreeParam *param = (N_ALFreeParam *)e->em_ctrlList;
+				param->pvoice->offset = 0;
+				_n_freePVoice((N_PVoice *)param->pvoice);
+			}
+			break;
+		case AL_FILTER_SET_PITCH:
+			e->rs_ratio = e->em_ctrlList->data.f;
+			if (e->em_motion == AL_PLAYING) {
+				hwPitch(e);
+			}
+			break;
+		case AL_FILTER_SET_UNITY_PITCH:
+			e->rs_upitch = 1;
+			if (e->em_motion == AL_PLAYING) {
+				hwPitch(e);
+			}
+			break;
+		case AL_FILTER_SET_WAVETABLE:
+			n_alLoadParam(e, AL_FILTER_SET_WAVETABLE, (void *)e->em_ctrlList->data.i);
+			if (e->em_motion == AL_PLAYING) {
+				hwKeyOn(e, (ALWaveTable *)e->em_ctrlList->data.i, 0);
+			}
+			break;
+		default:
+			n_alEnvmixerParam(e, e->em_ctrlList->type, (void *) e->em_ctrlList->data.i);
+			break;
+		}
+
+		outCount -= samples;
+
+		thisParam = e->em_ctrlList;
+		e->em_ctrlList = e->em_ctrlList->next;
+
+		if (e->em_ctrlList == 0) {
+			e->em_ctrlTail = 0;
+		}
+
+		_n_freeParam(thisParam);
+	}
+
+	if (e->em_motion == AL_PLAYING) {
+		e->em_delta += outCount;
+
+		if (e->em_delta > e->em_segEnd) {
+			e->em_delta = e->em_segEnd;
+		}
+	}
+
+	return p;
+}
+#endif
+
 Acmd *n_alEnvmixerPull(N_PVoice *filter, s32 sampleOffset, Acmd *p)
 {
 	Acmd     *ptr = p;
@@ -37,6 +294,12 @@ Acmd *n_alEnvmixerPull(N_PVoice *filter, s32 sampleOffset, Acmd *p)
 	s32      fVol;
 	ALParam  *thisParam;
 	s32      outCount = FIXED_SAMPLE;
+
+#ifdef PLATFORM_PS2
+	if (g_Ps2HwVoices) {
+		return n_alEnvmixerPullHw(filter, sampleOffset, p);
+	}
+#endif
 
 	/*
 	 * Force the input to be the resampler output

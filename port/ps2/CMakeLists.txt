@@ -146,6 +146,41 @@ set(PD_PS2_AUDSRV_IRX_C
   "${CMAKE_CURRENT_BINARY_DIR}/generated/audsrv_irx.c"
 )
 
+# Project-owned SPU2 hardware-voice module (port/ps2/iop/pdsnd), built with
+# the PS2SDK IOP toolchain and embedded like the SDK modules.
+find_program(PD_PS2_MAKE NAMES make gmake REQUIRED)
+set(PD_PS2_PDSND_DIR "${CMAKE_CURRENT_BINARY_DIR}/pdsnd")
+set(PD_PS2_PDSND_IRX "${PD_PS2_PDSND_DIR}/pdsnd.irx")
+set(PD_PS2_PDSND_IRX_C "${CMAKE_CURRENT_BINARY_DIR}/generated/pdsnd_irx.c")
+add_custom_command(
+  OUTPUT "${PD_PS2_PDSND_IRX}"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory "${PD_PS2_PDSND_DIR}"
+  COMMAND "${PD_PS2_MAKE}" -s -C "${CMAKE_CURRENT_LIST_DIR}/iop/pdsnd"
+    "IOP_OBJS_DIR=${PD_PS2_PDSND_DIR}/obj/"
+    "IOP_BIN=${PD_PS2_PDSND_IRX}"
+    "${PD_PS2_PDSND_IRX}"
+  DEPENDS
+    "${CMAKE_CURRENT_LIST_DIR}/iop/pdsnd/pdsnd.c"
+    "${CMAKE_CURRENT_LIST_DIR}/iop/pdsnd/imports.lst"
+    "${CMAKE_CURRENT_LIST_DIR}/iop/pdsnd/irx_imports.h"
+    "${CMAKE_CURRENT_LIST_DIR}/iop/pdsnd/Makefile"
+    "${CMAKE_CURRENT_LIST_DIR}/pdsnd_rpc.h"
+    "${CMAKE_CURRENT_LIST_DIR}/spu2_bank.h"
+  COMMENT "Building pdsnd.irx (SPU2 hardware voices)"
+  VERBATIM
+)
+add_custom_command(
+  OUTPUT "${PD_PS2_PDSND_IRX_C}"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  COMMAND "${PD_PS2_BIN2C}"
+    "${PD_PS2_PDSND_IRX}" "${PD_PS2_PDSND_IRX_C}" pdsnd_irx
+  DEPENDS "${PD_PS2_PDSND_IRX}"
+  COMMENT "Embedding pdsnd.irx"
+  VERBATIM
+)
+set_source_files_properties("${PD_PS2_PDSND_IRX_C}" PROPERTIES GENERATED TRUE)
+
 set(PD_PS2_USBD_IRX "$ENV{PS2SDK}/iop/irx/usbd.irx")
 set(PD_PS2_USBHDFSD_IRX "$ENV{PS2SDK}/iop/irx/usbhdfsd.irx")
 set(PD_PS2_SIO2MAN_IRX "$ENV{PS2SDK}/iop/irx/sio2man.irx")
@@ -785,6 +820,8 @@ set(PD_PS2_GAME_RUNTIME_SOURCES
   fast_math_ps2.c
   audio_ps2.c
   audio_ps2_queue.c
+  spu2_voices_ps2.c
+  "${PD_PS2_PDSND_IRX_C}"
   "${PD_PS2_AUDSRV_IRX_C}"
   "${PD_PS2_USBD_IRX_C}"
   "${PD_PS2_USBHDFSD_IRX_C}"

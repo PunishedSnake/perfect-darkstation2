@@ -62,16 +62,71 @@ the EE entirely.
 
 Voice commands are batched per audio frame into one SIF RPC to the IRX.
 
+## Using it
+
+1. Build the bank once per ROM on a PC:
+
+       cc -O2 -Iport/ps2 tools/ps2/pd_spu2bank.c port/ps2/spu2_adpcm.c -lm -o pd_spu2bank
+       ./pd_spu2bank pd.ntsc-final.z64 pd.pssb --verify
+
+   NTSC final gives 961 samples, 7.7 MiB of PS-ADPCM (138 looped), in
+   about two seconds.
+2. Copy `pd.pssb` next to the ROM (for example `mass:PDPS2/`).
+3. Start the game. The log shows `SPU2 voices: on, 961 samples ...`.
+   `Audio.HardwareVoices=0` in the config turns it off; without the file
+   the software mixer is used as before.
+
+## How it works
+
+* **Bank** (`tools/ps2/pd_spu2bank.c`, `port/ps2/spu2_bank.h`): every
+  wavetable reachable from sfx.ctl and seq.ctl is decoded and re-encoded as
+  PS-ADPCM. Entries are keyed by (source, offset in the .tbl), which is what
+  the runtime `ALWaveTable.base` points at.
+  * Infinite loops are made block-exact: silence is prepended so the loop
+    start lands on a 28-sample block, and the loop body is repeated until
+    its length is a whole number of blocks (58 samples need this).
+  * Finite loop counts are unrolled.
+  * Round-trip SNR against the VADPCM decode is 25 dB median and 17 dB
+    worst (noisy effects).
+* **IOP module** (`port/ps2/iop/pdsnd`, built with the PS2SDK IOP toolchain
+  and embedded in the ELF):
+  * Streams samples from the bank file on the storage device into an LRU
+    cache in SPU2 RAM (0x10000-0x1e0000). Slots are pinned while a voice
+    plays them.
+  * Applies voice commands: KEYON/KEYOFF, pitch, and linear volume ramps.
+    The ramps are the N64 envelope segments, run in 1 ms steps by a
+    high-priority IOP thread.
+  * Uses voices 0-23 on core 0 (routed through core 1's external input)
+    and 24-47 on core 1. audsrv keeps core 1's sound-data input for the PCM
+    stream.
+* **EE** (`port/ps2/spu2_voices_ps2.c`, hooks in `n_env.c` and
+  `n_synthesizer.c`):
+  * The envelope mixer translates its parameter events into voice commands
+    instead of RSP-style DSP commands.
+  * Commands are sent once per audio frame with a non-blocking SIF RPC.
+  * Volumes are scaled to match the software mix's level (audsrv feeds
+    core 1 at -6 dB).
+
+Measured in PCSX2 (intro, heaviest 5 s windows): audio work drops from about
+9.0 to 4.8 ms per game frame, and frames from 42.5 to 37.9 ms. The rest of
+the audio cost is MP3 speech decoding and the bus mixing that is still done
+on the EE. Per-second loudness of a 40 s capture matches the software mixer
+to within about 15 %.
+
+Known differences from the software mixer:
+
+* No per-voice reverb yet. Wet sends are folded into the dry level at half
+  gain.
+* PD's per-voice low-pass filter (`fx`, used for muffled sounds) is not
+  applied.
+* Parameter changes take effect at audio-frame granularity (184 samples,
+  8 ms) rather than sample-exact.
+
 ## Stages
 
-1. **Done (this round):** sample codecs `port/ps2/spu2_adpcm.[ch]`. This is a
-   VADPCM decoder matching the mixer's scalar decoder, plus a PS-ADPCM
-   encoder/decoder with loop flags. Host tests run in CI; PS-ADPCM
-   round-trip SNR is 31.5 dB on a noisy sweep.
-2. Bank transcoder: parse sfx.ctl/seq.ctl wavetables and write a PS-ADPCM
-   bank file with an index (wavetable → offset, length, loop block, rate).
-3. IRX: SPU2 RAM cache allocator, uploads from the bank file, voice command
-   RPC, reverb setup.
-4. EE side: a voice backend for the n_audio synth behind a runtime option,
-   with the software mixer kept as the fallback and reference.
-5. A/B listening tests on hardware, then make it the default.
+1. Done: sample codecs (`port/ps2/spu2_adpcm.[ch]`, host-tested in CI).
+2. Done: bank transcoder.
+3. Done: IRX with SPU2 RAM cache, streaming, voice commands and ramps.
+4. Done: EE voice backend, enabled by the presence of `pd.pssb`.
+5. Next: listening tests on hardware; SPU2 reverb for the FX bus; skip the
+   now-silent software voice buses entirely.
