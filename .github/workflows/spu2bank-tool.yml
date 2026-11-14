@@ -1,8 +1,9 @@
 name: SPU2 bank tool
 
 # Builds pd_spu2bank (the ROM -> pd.pssb sound bank converter) for Linux,
-# Windows and macOS. Every run publishes the binaries as an artifact; a push
-# of a tag named tools-spu2bank-* also attaches them to a GitHub release.
+# Windows and macOS. Every run publishes the binaries as an artifact. A push
+# of a tag named tools-spu2bank-*, or a manual run with a release tag, also
+# attaches them to a GitHub release (created on the run's commit if needed).
 
 on:
   push:
@@ -25,6 +26,12 @@ on:
       - "port/ps2/spu2_bank.h"
       - ".github/workflows/spu2bank-tool.yml"
   workflow_dispatch:
+    inputs:
+      release:
+        description: "Release tag to create/update (tools-spu2bank-...), empty for none"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: write
@@ -65,11 +72,24 @@ jobs:
           retention-days: 30
 
       - name: Release
-        if: startsWith(github.ref, 'refs/tags/tools-spu2bank-')
+        if: startsWith(github.ref, 'refs/tags/tools-spu2bank-') || startsWith(inputs.release, 'tools-spu2bank-')
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release || github.ref_name }}
         run: |
-          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
-            gh release create "$GITHUB_REF_NAME" --title "SPU2 sound bank tool ($GITHUB_REF_NAME)" \
-              --notes "pd_spu2bank: converts a Perfect Dark ROM's sounds into pd.pssb for the PS2 SPU2 hardware voices. See docs/ps2-spu2-audio.md."
-          gh release upload "$GITHUB_REF_NAME" build-tools/pd_spu2bank-* --clobber
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" --target "$GITHUB_SHA" --title "SPU2 sound bank tool ($TAG)" \
+              --notes-file - <<'NOTES'
+          `pd_spu2bank` converts your Perfect Dark ROM's sounds and speech into `pd.pssb`, the PS-ADPCM bank used by the PS2 port's SPU2 hardware voices.
+
+          | File | System |
+          | --- | --- |
+          | `pd_spu2bank-x86_64-windows-gnu.exe` | Windows x86_64 (drag the ROM onto it) |
+          | `pd_spu2bank-x86_64-linux-musl` | Linux x86_64 (static) |
+          | `pd_spu2bank-x86_64-macos` / `pd_spu2bank-aarch64-macos` | macOS Intel / Apple silicon |
+
+          Usage: `pd_spu2bank <rom.z64|.v64|.n64> [out.pssb] [--verify]`. Without an output path, `pd.pssb` is written next to the ROM. Copy it next to `pd-ps2-game.elf`. NTSC final (US v1.1) only; the bank CRC printed for it is `48d1e507`.
+
+          See docs/ps2-spu2-audio.md.
+          NOTES
+          gh release upload "$TAG" build-tools/pd_spu2bank-* --clobber
