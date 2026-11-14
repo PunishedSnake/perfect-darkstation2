@@ -2806,6 +2806,11 @@ __attribute__((noinline)) static void gfx_sp_tri1_emit(uint8_t vtx1_idx, uint8_t
                 gfxPs2DirectUpdateGuard(&gfx_ps2_at.gx, &gfx_ps2_at.gy);
                 ps2GsClipGetGuardBand(&gfx_ps2_at.gx, &gfx_ps2_at.gy);
                 gfx_ps2_at_build_map(&gfx_tri_setup_cache);
+                if (gfxPs2DirectATSameSampleLane()) {
+                    /* the lane reads only input 1 and tap 0 */
+                    gfx_ps2_at.need_lod = (gfx_ps2_at.map[4] == 4 || gfx_ps2_at.map[5] == 4 ||
+                                           gfx_ps2_at.map[6] == 4 || gfx_ps2_at.map[7] == 4);
+                }
             }
         }
 #endif

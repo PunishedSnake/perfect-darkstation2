@@ -254,6 +254,8 @@ bool gfxPs2DirectQuery(struct GfxPs2DirectContext *ctx);
 int gfxPs2DirectQueryAT(void);
 /* Frontend: both texture taps use identical coordinate transforms. */
 void gfxPs2DirectSetATSameCoords(bool same);
+/* After gfxPs2DirectQueryAT: fills only read input 1 (shade) and tap 0. */
+bool gfxPs2DirectATSameSampleLane(void);
 void gfxPs2DirectUpdateGuard(float *guard_x, float *guard_y);
 void gfxPs2DirectFillAT(uint32_t slot, const float *vbo_vertex);
 /* The same fill from the loaded vertex's raw values: clip-space position,

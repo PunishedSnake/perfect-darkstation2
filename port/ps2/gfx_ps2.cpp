@@ -5795,6 +5795,11 @@ static void ps2_at_plan_build(void)
     }
 }
 
+extern "C" bool gfxPs2DirectATSameSampleLane(void)
+{
+    return s_at_plan.ss_lane;
+}
+
 extern "C" void gfxPs2DirectSetATSameCoords(bool same)
 {
     s_at_same_coords = same;
@@ -6234,6 +6239,7 @@ extern "C" void gfxPs2DirectDraw(const struct Ps2GsVu1TransformVertex *vertices,
 
 extern "C" int gfxPs2DirectQueryAT(void) { return 0; }
 extern "C" void gfxPs2DirectSetATSameCoords(bool same) { (void)same; }
+extern "C" bool gfxPs2DirectATSameSampleLane(void) { return false; }
 extern "C" void gfxPs2DirectUpdateGuard(float *gx, float *gy) { *gx = 1.0f; *gy = 1.0f; }
 extern "C" void gfxPs2DirectFillAT(uint32_t slot, const float *v) { (void)slot; (void)v; }
 extern "C" void gfxPs2DirectFillATSource(uint32_t slot, const struct Ps2ATSource *s) { (void)slot; (void)s; }
