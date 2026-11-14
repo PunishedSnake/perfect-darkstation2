@@ -37,6 +37,9 @@ struct GfxRdpTmemLoadRecord {
     uint32_t first_word;
     uint32_t word_count;
     uint32_t generation;
+    /* Set once any later write touches the range; until then every word in
+     * it still carries `generation` and the per-word check can be skipped. */
+    uint32_t dirty;
     uint64_t hash;
 };
 
@@ -95,6 +98,13 @@ bool gfxRdpTmemInvalidatePhysical(struct GfxRdpTmem *tmem,
  */
 bool gfxRdpTmemWriteTlut(struct GfxRdpTmem *tmem,
     uint32_t first_tmem_word, const uint16_t *entries, uint32_t entry_count);
+
+/*
+ * Same as gfxRdpTmemWriteTlut, reading the entries straight from big-endian
+ * RDRAM bytes (two per entry) instead of a decoded entry array.
+ */
+bool gfxRdpTmemWriteTlutBytes(struct GfxRdpTmem *tmem,
+    uint32_t first_tmem_word, const uint8_t *source_be, uint32_t entry_count);
 
 /*
  * Byte-exact LoadTile row writer for the non-planar 4/8/16-bit TMEM layouts.

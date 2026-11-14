@@ -1578,6 +1578,14 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx* verti
 
     /* Lighting state is per call too; the 1/127 normal scale folds into it. */
     const bool lighting = (rsp.geometry_mode & G_LIGHTING) != 0;
+    /* More per-call state: the stores through `d` may alias rsp, so reading
+     * these inside the loop reloads them for every vertex. */
+    const uint32_t geom_mode = rsp.geometry_mode;
+    const int32_t tex_scale_s = rsp.texture_scaling_factor.s;
+    const int32_t tex_scale_t = rsp.texture_scaling_factor.t;
+    const float fog_mul = rsp.fog_mul;
+    const float fog_offset = rsp.fog_offset;
+    const uint8_t fog_alpha = rdp.fog_color.a;
     int num_dir_lights = 0;
     int ambient_r = 0, ambient_g = 0, ambient_b = 0;
     float light_coeffs[MAX_LIGHTS][3];
@@ -1714,8 +1722,8 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx* verti
         }
 #endif
 
-        short U = v->s * rsp.texture_scaling_factor.s >> 16;
-        short V = v->t * rsp.texture_scaling_factor.t >> 16;
+        short U = v->s * tex_scale_s >> 16;
+        short V = v->t * tex_scale_t >> 16;
 
         const struct NormalColor *vcn = &rsp.vertex_colors[v->colour >> 2];
 
@@ -1781,7 +1789,7 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx* verti
             d->color.g = g > 255 ? 255 : g;
             d->color.b = b > 255 ? 255 : b;
 
-            if (rsp.geometry_mode & G_TEXTURE_GEN) {
+            if (geom_mode & G_TEXTURE_GEN) {
                 float dotx = 0, doty = 0;
                 if (rsp.lookat_enabled) {
 #if defined(PLATFORM_PS2) && defined(_EE)
@@ -1807,7 +1815,7 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx* verti
                 dotx = clampf(dotx, -1.0f, 1.0f);
                 doty = clampf(doty, -1.0f, 1.0f);
 
-                if (rsp.geometry_mode & G_TEXTURE_GEN_LINEAR) {
+                if (geom_mode & G_TEXTURE_GEN_LINEAR) {
                     // Not sure exactly what formula we should use to get accurate values
                     /*dotx = (2.906921f * dotx * dotx + 1.36114f) * dotx;
                     doty = (2.906921f * doty * doty + 1.36114f) * doty;
@@ -1820,8 +1828,8 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx* verti
                     doty = (doty + 1.0f) / 4.0f;
                 }
 
-                U = (int32_t)(dotx * rsp.texture_scaling_factor.s);
-                V = (int32_t)(doty * rsp.texture_scaling_factor.t);
+                U = (int32_t)(dotx * tex_scale_s);
+                V = (int32_t)(doty * tex_scale_t);
             }
         } else {
             d->color.r = vcn->r;
@@ -1867,7 +1875,7 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx* verti
         d->z = z;
         d->w = w;
 
-        if (rsp.geometry_mode & G_FOG) {
+        if (geom_mode & G_FOG) {
             if (fabsf(w) < 0.001f) {
                 // To avoid division by zero
                 w = 0.001f;
@@ -1878,10 +1886,10 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx* verti
                 winv = std::numeric_limits<int16_t>::max();
             }
 
-            float fog_z = z * winv * rsp.fog_mul + rsp.fog_offset;
+            float fog_z = z * winv * fog_mul + fog_offset;
             d->fog = clampf(fog_z, 0.f, 255.f);
         } else {
-            d->fog = rdp.fog_color.a;
+            d->fog = fog_alpha;
         }
 
         d->color.a = vcn->a; // can be required for SHADE_ALPHA even if fog is enabled

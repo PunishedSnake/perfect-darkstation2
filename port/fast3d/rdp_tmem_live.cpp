@@ -646,17 +646,12 @@ extern "C" bool gfxRdpTmemLiveTextureFingerprint(uint8_t tile_index,
     }
 
     /* Fold compatibility layout metadata into the content identity itself. */
-    for (uint32_t shift = 0u; shift < 32u; shift += 8u) {
-        gfxRdpTmemLiveHashByte(&hash,
-            (uint8_t)(loaded_size_bytes >> shift));
-        gfxRdpTmemLiveHashByte(&hash,
-            (uint8_t)(loaded_line_size_bytes >> shift));
-        gfxRdpTmemLiveHashByte(&hash,
-            (uint8_t)(render_row_bytes >> shift));
-    }
-    gfxRdpTmemLiveHashByte(&hash, render_fmt);
-    gfxRdpTmemLiveHashByte(&hash, render_siz);
-    gfxRdpTmemLiveHashByte(&hash, palette_index);
+    /* Two word mixes instead of fifteen byte mixes: same inputs, same
+     * domain, a quarter of the multiplies on the EE. */
+    gfxRdpTmemLiveHashMix(&hash, loaded_size_bytes, loaded_line_size_bytes);
+    gfxRdpTmemLiveHashMix(&hash, render_row_bytes,
+        0x6b000000u | (uint32_t)render_fmt | ((uint32_t)render_siz << 8) |
+        ((uint32_t)palette_index << 16));
 
     *fingerprint = gfxRdpTmemLiveHashFinish(hash);
     ++s_live.stats.fingerprint_exact;
