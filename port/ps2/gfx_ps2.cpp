@@ -5690,7 +5690,8 @@ extern "C" void gfxPs2DirectDraw(const struct Ps2GsVu1TransformVertex *vertices,
  * The translation below is the translator's alpha-trilerp branch for one
  * vertex, fed with the frontend's VBO floats for that vertex.
  */
-enum { PS2_AT_CACHE_SLOTS = 128 };
+/* 128 loaded-vertex slots, then scratch slots for clipped polygons. */
+enum { PS2_AT_CACHE_SLOTS = 128 + 24 };
 static struct Ps2AlphaTrilerpVertex s_at_cache[PS2_AT_CACHE_SLOTS];
 static struct Ps2GsTexturedVertex s_at_cache_stq[2][PS2_AT_CACHE_SLOTS];
 static uint32_t s_at_count;

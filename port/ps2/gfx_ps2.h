@@ -271,6 +271,8 @@ void gfxPs2DirectSetUnitTable(const float *u8_unit);
 uint32_t gfxPs2DirectATCapacity(void);
 uint32_t gfxPs2DirectATCount(void);
 void gfxPs2DirectAppendAT(uint32_t a, uint32_t b, uint32_t c);
+/* First of 24 scratch cache slots for clipped-polygon vertices. */
+#define PS2_AT_SCRATCH_SLOT 128u
 void gfxPs2DirectDrawAT(const uint8_t fog_rgb[3]);
 void gfxPs2DirectDraw(const struct Ps2GsVu1TransformVertex *vertices,
     uint32_t vertex_count, bool trilerp, bool w_ok, const uint8_t fog_rgb[3]);

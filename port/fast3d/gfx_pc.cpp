@@ -2681,6 +2681,48 @@ static inline void gfx_ps2_at_source(const struct GfxTriSetup* S, const struct L
     }
 }
 
+/*
+ * A triangle crossing the guard band or near plane: clip it in clip space
+ * exactly as the VBO path would (same floats, same clipper), then fill the
+ * polygon's vertices into scratch cache slots and append its fan. The
+ * batch stays intact instead of flushing to the VBO path and back.
+ */
+static bool gfx_ps2_at_clipped_tri(const struct GfxTriSetup* S, uint8_t a, uint8_t b, uint8_t c) {
+    float tri[3 * PS2_GS_CLIP_MAX_VERTEX_FLOATS];
+    float* end = gfx_emit_vbo_vertex(S, &rsp.loaded_vertices[a], tri);
+    const size_t stride = (size_t)(end - tri);
+    gfx_emit_vbo_vertex(S, &rsp.loaded_vertices[b], tri + stride);
+    gfx_emit_vbo_vertex(S, &rsp.loaded_vertices[c], tri + 2 * stride);
+    float out[PS2_GS_CLIP_MAX_OUTPUT_VERTICES * PS2_GS_CLIP_MAX_VERTEX_FLOATS];
+    size_t n = 0;
+    if (!ps2GsClipTriangle(tri, stride, out, PS2_GS_CLIP_MAX_OUTPUT_VERTICES, &n)) {
+        gfx_ps2_at_flush();
+        return false;
+    }
+    if (n < 3) {
+        return true;
+    }
+    if (buf_vbo_len > 0) {
+        gfx_flush();
+    }
+    gfx_ps2_direct_flush_records();
+    if (gfxPs2DirectATCount() + n > gfxPs2DirectATCapacity()) {
+        gfx_ps2_at_flush();
+    }
+    if (gfxPs2DirectATCount() == 0) {
+        gfx_ps2_at.fog[0] = rdp.fog_color.r;
+        gfx_ps2_at.fog[1] = rdp.fog_color.g;
+        gfx_ps2_at.fog[2] = rdp.fog_color.b;
+    }
+    for (size_t t = 0; t + 2 < n + 0 && t < n; t += 3) {
+        for (int k = 0; k < 3; ++k) {
+            gfxPs2DirectFillAT(PS2_AT_SCRATCH_SLOT + (uint32_t)k, out + (t + (size_t)k) * stride);
+        }
+        gfxPs2DirectAppendAT(PS2_AT_SCRATCH_SLOT, PS2_AT_SCRATCH_SLOT + 1u, PS2_AT_SCRATCH_SLOT + 2u);
+    }
+    return true;
+}
+
 static bool gfx_ps2_at_tri(const struct GfxTriSetup* S, uint8_t a, uint8_t b, uint8_t c) {
     if (a >= MAX_VERTICES || b >= MAX_VERTICES || c >= MAX_VERTICES) {
         gfx_ps2_at_flush();
@@ -2701,8 +2743,7 @@ static bool gfx_ps2_at_tri(const struct GfxTriSetup* S, uint8_t a, uint8_t b, ui
         case PS2_GS_CLIP_REJECT:
             return true;
         case PS2_GS_CLIP_PARTIAL:
-            gfx_ps2_at_flush();
-            return false;
+            return gfx_ps2_at_clipped_tri(S, a, b, c);
         default:
             break;
     }
