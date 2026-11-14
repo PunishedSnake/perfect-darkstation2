@@ -126,6 +126,112 @@ bool ps2GsVu1BuildObjectTransformPayload(
     const struct Ps2GsPackedReg *suffix, uint32_t suffix_count,
     struct Ps2GsVu1TransformLayout *layout);
 
+/*
+ * Emotion3D skinned/lit object program (gs_vu1_skin.vsm).
+ *
+ * Like the object program, but each vertex names its own transform: a
+ * palette entry (one per matrix epoch of a model list: Perfect Dark skins
+ * by loading vertex blocks under different bone matrices and joining them
+ * with triangles), and the entry also carries that matrix's light and
+ * lookat directions, so N64 lighting and texture generation run on VU1.
+ *
+ * Input TOPS bank:
+ *   QW 0      control: vertex count, vertex data offset (QW), suffix count,
+ *             flags (FOG, LIGHT, TEXGEN, CULL, LOD)
+ *   QW 1..2   viewport scale/offset;  QW 3..5 prefix, vertex, suffix tags
+ *   QW 6..10  prefix A+D records
+ *   QW 11..26 struct Ps2GsVu1SkinConst
+ *   QW 27..   palette, PS2_GS_VU1_SKIN_ENTRY_QW each (struct Ps2GsVu1SkinEntry)
+ *   then per vertex (struct Ps2GsVu1ObjectVertex, V4-16):
+ *     (x, y, z, entry)   entry = the palette entry's QW offset from TOPS
+ *     (u, v, -, -)
+ *     (r, g, b, a)       or with LIGHT: (nx, ny, nz, a), normal bytes signed
+ *   then one suffix record.
+ *
+ * Per vertex: clip = palette matrix * position. With LIGHT, Fast3D's
+ * colour: ambient, plus each light's colour times max(0, n . dir), the sum
+ * truncated to an integer after every light, capped at 255. With TEXGEN
+ * (Fast3D's spherical G_TEXTURE_GEN with lookat), u/v = trunc((clamp(n .
+ * lookat, -1, 1) + 1) / 4 * scale). Then the object program's record
+ * program and pack. With CULL, each triangle whose screen cross product has
+ * the culled sign keeps its records but collapses to its first corner's
+ * position (zero area, nothing drawn).
+ */
+#define PS2_GS_VU1_SKIN_PROGRAM_ADDRESS 512u
+#define PS2_GS_VU1_SKIN_PROGRAM_MAX_INSTRUCTIONS 768u
+#define PS2_GS_VU1_TRANSFORM_FLAG_LIGHT (1u << 1)
+#define PS2_GS_VU1_TRANSFORM_FLAG_TEXGEN (1u << 2)
+#define PS2_GS_VU1_TRANSFORM_FLAG_CULL (1u << 3)
+#define PS2_GS_VU1_TRANSFORM_FLAG_LOD (1u << 4)
+#define PS2_GS_VU1_SKIN_CONST_QW 16u
+#define PS2_GS_VU1_SKIN_HEAD_QW \
+    (PS2_GS_VU1_TRANSFORM_HEADER_QW + PS2_GS_VU1_TRANSFORM_MAX_PREFIX_RECORDS + \
+     PS2_GS_VU1_SKIN_CONST_QW)
+#define PS2_GS_VU1_SKIN_ENTRY_QW 10u
+#define PS2_GS_VU1_SKIN_MAX_ENTRIES 8u
+#define PS2_GS_VU1_SKIN_MAX_LIGHTS 4u
+
+struct Ps2GsVu1SkinConst {
+    float fog[4];           /* as the object program */
+    float tex_mul[4];
+    float tex_add[4];
+    float tex_scale[4];
+    float color[4][4];      /* record program rows for r, g, b, a */
+    float color_add[4];
+    float light[4][4];      /* light i colour (r, g, b, 0); unused: 0 */
+    float ambient[4];       /* (r, g, b, 0) */
+    /* (G_TEXTURE scale s / 4, scale t / 4, cull sign, 2^64): the cull sign
+     * makes a kept triangle's screen cross product negative */
+    float misc[4];
+    /* LOD: alpha input = trunc(z + clamp(w * x, 0, 1) * y), Fast3D's LOD
+     * fraction byte (x = 1/1024, y = 0.3 * 255, z = 0.7 * 255) */
+    float lod[4];
+};
+
+struct Ps2GsVu1SkinEntry {
+    float m[4][4];          /* clip transform, as Ps2GsVu1ObjectTransform.m */
+    /* light directions in this matrix's object space / 127, as columns:
+     * lane i = light i */
+    float light_x[4], light_y[4], light_z[4];
+    /* lookat 0 and 1 in lanes x and y, / 127 */
+    float look_x[4], look_y[4], look_z[4];
+};
+
+/*
+ * A skinned batch travels beside the object path: while one is set
+ * (ps2GsVu1QueueSetSkin), object batches are drawn with the skin program
+ * and these constants instead of the object transform. misc[2] holds the
+ * cull sign before the viewport (+1 cull back, -1 cull front, times -1
+ * when the clip matrix inverts y); the queue applies the viewport's sign.
+ */
+struct Ps2GsVu1SkinBatch {
+    const struct Ps2GsVu1SkinConst *k;
+    const struct Ps2GsVu1SkinEntry *entries;
+    uint32_t entry_count;
+    uint32_t flags; /* LIGHT, TEXGEN, CULL (FOG comes from the GS state) */
+};
+
+/* The VU1 memory image ahead of the vertices; returns its size in QW. */
+uint32_t ps2GsVu1BuildSkinHead(uint32_t *head,
+    const float scale[4], const float offset[4], uint32_t flags,
+    const struct Ps2GsVu1SkinConst *k,
+    const struct Ps2GsVu1SkinEntry *entries, uint32_t entry_count,
+    const struct Ps2GsPackedReg *prefix, uint32_t prefix_count,
+    uint32_t vertex_count, uint32_t suffix_count);
+
+/* Largest vertex count (a multiple of 3) for a batch with this many entries. */
+uint32_t ps2GsVu1SkinMaxVertices(uint32_t entry_count);
+
+/*
+ * What the program computes for one vertex, before the divide: the EE
+ * fallback and the tests. entry is the vertex's palette entry; scale is the
+ * viewport scale (for nothing but the cull sign, applied by the caller).
+ */
+void ps2GsVu1SkinVertexToClip(const struct Ps2GsVu1SkinConst *k,
+    const struct Ps2GsVu1SkinEntry *entry, uint32_t flags, bool fog,
+    const struct Ps2GsVu1ObjectVertex *in,
+    struct Ps2GsVu1TransformVertex *out);
+
 bool ps2GsVu1PlanTexturedTransform(uint32_t vertex_count,
     uint32_t prefix_count, uint32_t suffix_count,
     struct Ps2GsVu1TransformLayout *layout);

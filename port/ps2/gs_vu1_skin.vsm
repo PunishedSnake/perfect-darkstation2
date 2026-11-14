@@ -1,0 +1,471 @@
+; Emotion3D VU1 skinned/lit object program: Perfect Dark's characters.
+; Contract: struct Ps2GsVu1SkinConst / Ps2GsVu1SkinEntry in gs_vu1_transform.h.
+;
+; Input TOPS bank:
+;   QW 0      control (vertex count X, vertex data offset Y, flags W)
+;   QW 1..2   viewport/depth scale and offset          -> VF01, VF02
+;   QW 3..5   prefix, vertex and suffix GIF tags
+;   QW 6..10  five A+D prefix records
+;   QW 11     fog constants (255, B, -1, A)            -> VF09
+;   QW 12..14 tex_mul, tex_add, tex_scale              -> VF15..VF17
+;   QW 15..19 record program rows and offset           -> VF18..VF22
+;   QW 20..23 light colours (r, g, b, 0)               -> VF23..VF26
+;   QW 24     ambient (r, g, b, 0)                     -> VF27
+;   QW 25     (texgen s/4, texgen t/4, cull sign, -2^64) -> VF28
+;   QW 26     LOD constants (1/1024, 0.3*255, 0.7*255, 0)
+;   QW 27..   palette entries, 10 QW each: matrix rows, light direction
+;             columns x/y/z, lookat columns x/y/z
+;   then per vertex int32 (x, y, z, entry offset), (u, v, -, -),
+;   (r, g, b, a) or (nx, ny, nz, a); then one A+D suffix record.
+;
+; Flags: 1 fog, 2 lighting, 4 texture generation, 8 backface cull,
+; 16 alpha input = Fast3D's LOD fraction byte from clip w.
+; The schedule is padded so that every register is read at least four
+; cycles after it is written (VU1 interlocks would also cover it).
+
+	.vu
+	.align 4
+	.global Ps2GsVu1SkinCodeStart
+	.global Ps2GsVu1SkinCodeEnd
+Ps2GsVu1SkinCodeStart:
+	NOP                             xtop          VI02
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             lq            VF01,1(VI02)
+	NOP                             lq            VF02,2(VI02)
+	NOP                             ilw.x         VI05,0(VI02)
+	NOP                             ilw.w         VI06,0(VI02)
+	NOP                             ilw.y         VI01,0(VI02)
+	NOP                             iaddiu        VI03,VI02,0x0006
+	NOP                             iaddiu        VI04,VI02,0x0200
+	NOP                             iaddiu        VI10,VI04,0x0000
+	NOP                             iaddiu        VI07,VI00,0x0001
+	NOP                             iand          VI11,VI06,VI07
+	NOP                             iaddiu        VI07,VI00,0x0002
+	NOP                             iand          VI12,VI06,VI07
+	NOP                             iaddiu        VI07,VI00,0x0004
+	NOP                             iand          VI13,VI06,VI07
+	NOP                             iaddiu        VI07,VI00,0x0008
+	NOP                             iand          VI14,VI06,VI07
+	NOP                             iaddiu        VI09,VI00,0x0003
+
+	; GIF prefix tag and the five prefix records, then the vertex tag
+	NOP                             lq            VF07,3(VI02)
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             sqi           VF07,(VI04++)
+	NOP                             lqi           VF07,(VI03++)
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             sqi           VF07,(VI04++)
+	NOP                             lqi           VF07,(VI03++)
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             sqi           VF07,(VI04++)
+	NOP                             lqi           VF07,(VI03++)
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             sqi           VF07,(VI04++)
+	NOP                             lqi           VF07,(VI03++)
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             sqi           VF07,(VI04++)
+	NOP                             lqi           VF07,(VI03++)
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             sqi           VF07,(VI04++)
+	NOP                             lq            VF07,4(VI02)
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             sqi           VF07,(VI04++)
+
+	; resident constants
+	NOP                             lq            VF09,11(VI02)
+	NOP                             lq            VF15,12(VI02)
+	NOP                             lq            VF16,13(VI02)
+	NOP                             lq            VF17,14(VI02)
+	NOP                             lq            VF18,15(VI02)
+	NOP                             lq            VF19,16(VI02)
+	NOP                             lq            VF20,17(VI02)
+	NOP                             lq            VF21,18(VI02)
+	NOP                             lq            VF22,19(VI02)
+	NOP                             lq            VF23,20(VI02)
+	NOP                             lq            VF24,21(VI02)
+	NOP                             lq            VF25,22(VI02)
+	NOP                             lq            VF26,23(VI02)
+	NOP                             lq            VF27,24(VI02)
+	NOP                             lq            VF28,25(VI02)
+	NOP                             iadd          VI03,VI02,VI01
+	NOP                             iaddiu        VI07,VI00,0x0010
+	NOP                             iand          VI01,VI06,VI07
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+
+vertexLoop:
+	NOP                             lqi           VF03,(VI03++)
+	NOP                             lqi           VF04,(VI03++)
+	NOP                             lqi           VF05,(VI03++)
+	NOP                             NOP
+	NOP                             mtir          VI15,VF03w
+	itof0.xyz     VF03,VF03         NOP
+	itof0.xy      VF04,VF04         NOP
+	itof0.xyzw    VF05,VF05         NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             iadd          VI15,VI15,VI02
+	NOP                             NOP
+	NOP                             lq            VF11,0(VI15)
+	NOP                             lq            VF12,1(VI15)
+	NOP                             lq            VF13,2(VI15)
+	NOP                             lq            VF14,3(VI15)
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	mulax.xyzw    ACC,VF11,VF03x    NOP
+	madday.xyzw   ACC,VF12,VF03y    NOP
+	maddaz.xyzw   ACC,VF13,VF03z    NOP
+	maddw.xyzw    VF03,VF14,VF00w   NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             div           Q,VF00w,VF03w
+
+	; texture generation: u, v from the normal and the lookat directions
+	NOP                             ibeq          VI13,VI00,noTexgen
+	NOP                             NOP
+	NOP                             lq            VF29,7(VI15)
+	NOP                             lq            VF30,8(VI15)
+	NOP                             lq            VF31,9(VI15)
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	mulax.xy      ACC,VF29,VF05x    NOP
+	madday.xy     ACC,VF30,VF05y    NOP
+	maddz.xy      VF07,VF31,VF05z   NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	maxz.xy       VF07,VF07,VF09z   NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	miniw.xy      VF07,VF07,VF00w   NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	addw.xy       VF07,VF07,VF00w   NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	mul.xy        VF07,VF07,VF28    NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	ftoi0.xy      VF07,VF07         NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	itof0.xy      VF04,VF07         NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+noTexgen:
+
+	; lighting: ambient + each light's colour * max(0, n . dir), truncated
+	; after every light as Fast3D does, capped at 255
+	NOP                             ibeq          VI12,VI00,noLight
+	NOP                             move.xyzw     VF10,VF05
+	NOP                             lq            VF29,4(VI15)
+	NOP                             lq            VF30,5(VI15)
+	NOP                             lq            VF31,6(VI15)
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	mulax.xyzw    ACC,VF29,VF05x    NOP
+	madday.xyzw   ACC,VF30,VF05y    NOP
+	maddz.xyzw    VF07,VF31,VF05z   NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	maxx.xyzw     VF07,VF07,VF00x   NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	addax.xyz     ACC,VF27,VF00x    NOP
+	maddx.xyz     VF29,VF23,VF07x   NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	ftoi0.xyz     VF29,VF29         NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	itof0.xyz     VF29,VF29         NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	addax.xyz     ACC,VF29,VF00x    NOP
+	maddy.xyz     VF29,VF24,VF07y   NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	ftoi0.xyz     VF29,VF29         NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	itof0.xyz     VF29,VF29         NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	addax.xyz     ACC,VF29,VF00x    NOP
+	maddz.xyz     VF29,VF25,VF07z   NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	ftoi0.xyz     VF29,VF29         NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	itof0.xyz     VF29,VF29         NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	addax.xyz     ACC,VF29,VF00x    NOP
+	maddw.xyz     VF29,VF26,VF07w   NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	ftoi0.xyz     VF29,VF29         NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	itof0.xyz     VF29,VF29         NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	minix.xyz     VF29,VF29,VF09x   NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             move.xyz      VF10,VF29
+noLight:
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+
+	; LOD fraction byte as the alpha input (two-texture trilerp)
+	NOP                             ibeq          VI01,VI00,noLod
+	NOP                             NOP
+	NOP                             lq            VF31,26(VI02)
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	mulx.w        VF07,VF03,VF31x   NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	maxx.w        VF07,VF07,VF00x   NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	miniw.w       VF07,VF07,VF00w   NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	muly.w        VF07,VF07,VF31y   NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	addz.w        VF07,VF07,VF31z   NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	ftoi0.w       VF07,VF07         NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	itof0.w       VF07,VF07         NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             move.w        VF10,VF07
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+noLod:
+
+	; record program: colour rows, texture coordinate scale/bias
+	mulax.xyzw    ACC,VF18,VF10x    NOP
+	madday.xyzw   ACC,VF19,VF10y    NOP
+	maddaz.xyzw   ACC,VF20,VF10z    NOP
+	maddaw.xyzw   ACC,VF21,VF10w    NOP
+	maddw.xyzw    VF05,VF22,VF00w   NOP
+	mul.xy        VF04,VF04,VF15    NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	ftoi0.xyzw    VF05,VF05         NOP
+	add.xy        VF04,VF04,VF16    NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	mul.xy        VF04,VF04,VF17    NOP
+	mulq.xyz      VF03,VF03,Q       NOP
+	NOP                             NOP
+	NOP                             NOP
+	addw.z        VF04,VF00,VF00w   NOP
+	; projection, depth and fog, as the object program
+	mulz.w        VF08,VF09,VF03z   NOP
+	maxz.z        VF03,VF03,VF00z   NOP
+	NOP                             NOP
+	NOP                             NOP
+	addy.w        VF08,VF08,VF09y   NOP
+	miniw.z       VF03,VF03,VF00w   NOP
+	NOP                             NOP
+	NOP                             NOP
+	maxx.w        VF08,VF08,VF00x   NOP
+	mulaw.xyz     ACC,VF02,VF00w    NOP
+	madd.xyz      VF06,VF03,VF01    NOP
+	NOP                             NOP
+	minix.w       VF08,VF08,VF09x   NOP
+	NOP                             NOP
+	maxw.xy       VF06,VF06,VF01w   NOP
+	NOP                             NOP
+	ftoi0.w       VF08,VF08         NOP
+	NOP                             NOP
+	miniw.xy      VF06,VF06,VF02w   NOP
+	NOP                             NOP
+	itof0.w       VF08,VF08         NOP
+	NOP                             NOP
+	NOP                             move.w        VF06,VF04
+	NOP                             NOP
+	subx.w        VF08,VF08,VF09x   NOP
+	ftoi4.xy      VF06,VF06         NOP
+	NOP                             NOP
+	NOP                             NOP
+	mulz.w        VF08,VF08,VF09z   NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	ftoi4.w       VF08,VF08         NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             ibeq          VI11,VI00,depthNoFog
+	NOP                             NOP
+	ftoi4.z       VF06,VF06         NOP
+	NOP                             move.w        VF06,VF08
+	NOP                             b             depthReady
+	NOP                             NOP
+depthNoFog:
+	ftoi0.z       VF06,VF06         NOP
+depthReady:
+	mulq.xyz      VF04,VF04,Q       isubiu        VI05,VI05,1
+	NOP                             isubiu        VI09,VI09,1
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             sqi           VF04,(VI04++)
+	NOP                             sqi           VF05,(VI04++)
+	NOP                             sqi           VF06,(VI04++)
+	NOP                             ibne          VI09,VI00,nextVertex
+	NOP                             NOP
+	NOP                             iaddiu        VI09,VI00,0x0003
+	NOP                             ibeq          VI14,VI00,nextVertex
+	NOP                             NOP
+
+	; backface cull: screen cross product of the triangle just written
+	; (corners c0, c1, c2: (c0 - c1) x (c2 - c1), Fast3D's v1/v2/v3 form)
+	NOP                             lq            VF29,-7(VI04)
+	NOP                             lq            VF30,-4(VI04)
+	NOP                             lq            VF31,-1(VI04)
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	itof4.xy      VF29,VF29         NOP
+	itof4.xy      VF30,VF30         NOP
+	itof4.xy      VF31,VF31         NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	sub.xy        VF29,VF29,VF30    NOP
+	sub.xy        VF31,VF31,VF30    NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	muly.x        VF07,VF29,VF31y   NOP
+	mulx.y        VF07,VF29,VF31x   NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	suby.x        VF07,VF07,VF07y   NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	mulz.x        VF07,VF07,VF28z   NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	mulw.x        VF07,VF07,VF28w   NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	maxx.x        VF07,VF07,VF00x   NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	miniw.x       VF07,VF07,VF00w   NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	ftoi0.x       VF07,VF07         NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             mtir          VI07,VF07x
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             ibne          VI07,VI00,nextVertex
+	NOP                             NOP
+	; culled: every corner at the first corner's position
+	NOP                             lq            VF29,-7(VI04)
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             sq            VF29,-4(VI04)
+	NOP                             sq            VF29,-1(VI04)
+nextVertex:
+	NOP                             NOP
+	NOP                             ibne          VI05,VI00,vertexLoop
+	NOP                             NOP
+
+	NOP                             lq            VF07,5(VI02)
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             sqi           VF07,(VI04++)
+	NOP                             lqi           VF07,(VI03++)
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             sqi           VF07,(VI04++)
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             xgkick        VI10
+	NOP[E]                          NOP
+	NOP                             NOP
+	.align 4
+Ps2GsVu1SkinCodeEnd:

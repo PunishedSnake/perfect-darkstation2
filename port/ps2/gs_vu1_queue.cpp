@@ -38,6 +38,8 @@ extern "C" uint32_t Ps2GsVu1TexturedTransformCodeStart;
 extern "C" uint32_t Ps2GsVu1TexturedTransformCodeEnd;
 extern "C" uint32_t Ps2GsVu1ObjectTransformCodeStart;
 extern "C" uint32_t Ps2GsVu1ObjectTransformCodeEnd;
+extern "C" uint32_t Ps2GsVu1SkinCodeStart;
+extern "C" uint32_t Ps2GsVu1SkinCodeEnd;
 
 static bool s_initialized;
 static bool s_enabled;
@@ -176,7 +178,7 @@ static bool ps2GsVu1QueueUploadProgram(uint32_t *program_start,
     const uint32_t instruction_count = (uint32_t)program_words / 2u;
     if (instruction_count == 0u || instruction_count > 256u ||
         instruction_count > program_capacity ||
-        program_address > 512u - instruction_count ||
+        program_address > 2048u - instruction_count ||
         (instruction_count & 1u) != 0u) {
         return false;
     }
@@ -220,6 +222,25 @@ static bool ps2GsVu1QueueUploadProgram(uint32_t *program_start,
         program_address, submitted ? 1 : 0);
     ps2LogCheckpoint();
     return submitted;
+}
+
+/* A program longer than one MPG (256 instructions): one upload per piece. */
+static bool ps2GsVu1QueueUploadLongProgram(uint32_t *program_start,
+    uint32_t *program_end, uint32_t program_address,
+    uint32_t program_capacity)
+{
+    const uint32_t total = (uint32_t)(program_end - program_start) / 2u;
+    if (total == 0u || total > program_capacity) {
+        return false;
+    }
+    for (uint32_t done = 0u; done < total; done += 256u) {
+        const uint32_t n = total - done < 256u ? total - done : 256u;
+        if (!ps2GsVu1QueueUploadProgram(program_start + done * 2u,
+                program_start + (done + n) * 2u, program_address + done, n)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 static bool ps2GsVu1QueueConfigureBuffers(void)
@@ -277,6 +298,11 @@ extern "C" bool ps2GsVu1QueueInit(void)
             &Ps2GsVu1ObjectTransformCodeStart,
             &Ps2GsVu1ObjectTransformCodeEnd,
             PS2_GS_VU1_OBJECT_PROGRAM_ADDRESS, 256u) ||
+        !ps2GsVu1QueueUploadLongProgram(
+            &Ps2GsVu1SkinCodeStart,
+            &Ps2GsVu1SkinCodeEnd,
+            PS2_GS_VU1_SKIN_PROGRAM_ADDRESS,
+            PS2_GS_VU1_SKIN_PROGRAM_MAX_INSTRUCTIONS) ||
         !ps2GsVu1QueueConfigureBuffers()) {
         ps2GsVu1QueueRelease();
         return false;
@@ -436,6 +462,80 @@ extern "C" bool ps2GsVu1QueueSubmitTexturedTransform(
 #endif
 }
 
+static const struct Ps2GsVu1SkinBatch *s_skin;
+
+extern "C" void ps2GsVu1QueueSetSkin(const struct Ps2GsVu1SkinBatch *skin)
+{
+    s_skin = skin;
+}
+
+extern "C" const struct Ps2GsVu1SkinBatch *ps2GsVu1QueueSkin(void)
+{
+    return s_skin;
+}
+
+/* 24-byte packed vertices into a packed-batch reservation. */
+static void ps2GsVu1QueueCopyPacked(void *packed,
+    const struct Ps2GsVu1ObjectVertex *vertices, uint32_t vertex_count)
+{
+    const size_t bytes = (size_t)vertex_count * sizeof(*vertices);
+    const size_t whole_qw = bytes / 16u;
+    if (((uintptr_t)vertices & 15u) != 0u) {
+        memcpy(packed, vertices, whole_qw * 16u);
+    } else {
+        typedef unsigned int ps2_qword __attribute__((mode(TI)));
+        ps2_qword *d = (ps2_qword *)packed;
+        const ps2_qword *src = (const ps2_qword *)vertices;
+        for (size_t i = 0u; i < whole_qw; ++i) {
+            d[i] = src[i];
+        }
+    }
+    if (bytes & 8u) {
+        memcpy((uint64_t *)packed + whole_qw * 2u,
+            (const uint8_t *)vertices + whole_qw * 16u, 8u);
+    }
+}
+
+static bool ps2GsVu1QueueSubmitSkin(const struct Ps2GsVu1SkinBatch *skin,
+    const float scale[4], const float offset[4], uint32_t flags,
+    const struct Ps2GsPackedReg *prefix, uint32_t prefix_count,
+    const struct Ps2GsVu1ObjectVertex *vertices, uint32_t vertex_count,
+    const struct Ps2GsPackedReg *suffix, uint32_t suffix_count)
+{
+    if (!skin->k || !skin->entries || skin->entry_count == 0u ||
+        skin->entry_count > PS2_GS_VU1_SKIN_MAX_ENTRIES ||
+        vertex_count == 0u || vertex_count % 3u != 0u ||
+        vertex_count > ps2GsVu1SkinMaxVertices(skin->entry_count)) {
+        return false;
+    }
+    const uint32_t head_qw = PS2_GS_VU1_SKIN_HEAD_QW +
+        skin->entry_count * PS2_GS_VU1_SKIN_ENTRY_QW;
+    void *packed = NULL;
+    uint32_t *suffix_slot = NULL;
+    uint32_t *head = ps2GsNativeQueueReserveVu1PackedBatch(head_qw,
+        vertex_count * 3u, PS2_GS_VU1_SKIN_PROGRAM_ADDRESS, &packed,
+        &suffix_slot);
+    if (!head) {
+        return false;
+    }
+    (void)ps2GsVu1BuildSkinHead(head, scale, offset,
+        (flags & PS2_GS_VU1_TRANSFORM_FLAG_FOG) | skin->flags, skin->k,
+        skin->entries, skin->entry_count, prefix, prefix_count,
+        vertex_count, suffix_count);
+    /* the cull sign in screen space: the viewport may flip either axis */
+    float *misc = (float *)head + (PS2_GS_VU1_SKIN_HEAD_QW - 1u) * 4u;
+    if ((scale[0] < 0.0f) != (scale[1] < 0.0f)) {
+        misc[2] = -misc[2];
+    }
+    struct Ps2GsPackedReg padded_suffix = { 0u, 0x0fu /* GS NOP */ };
+    if (suffix_count != 0u) {
+        padded_suffix = suffix[0];
+    }
+    memcpy(suffix_slot, &padded_suffix, sizeof(padded_suffix));
+    ps2GsVu1QueueCopyPacked(packed, vertices, vertex_count);
+    return true;
+}
+
 extern "C" bool ps2GsVu1QueueSubmitObjectTransform(
     const float scale[4], const float offset[4], uint32_t flags,
     const struct Ps2GsVu1ObjectTransform *xform,
@@ -443,6 +543,15 @@ extern "C" bool ps2GsVu1QueueSubmitObjectTransform(
     const struct Ps2GsVu1ObjectVertex *vertices, uint32_t vertex_count,
     const struct Ps2GsPackedReg *suffix, uint32_t suffix_count)
 {
+#if defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
+    if (s_skin) {
+        return ps2GsVu1QueueEnabled() && scale && offset && vertices &&
+            (prefix_count == 0u || prefix) && (suffix_count == 0u || suffix) &&
+            (flags & ~PS2_GS_VU1_TRANSFORM_FLAG_FOG) == 0u &&
+            ps2GsVu1QueueSubmitSkin(s_skin, scale, offset, flags, prefix,
+                prefix_count, vertices, vertex_count, suffix, suffix_count);
+    }
+#endif
 #if !defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
     (void)scale;
     (void)offset;

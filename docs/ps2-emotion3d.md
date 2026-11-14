@@ -325,6 +325,65 @@ A GS hardware-mipmap path (TEX1 MXL=1 with LCM=1, MIPTBP1) for true
 two-level alpha trilerp was written and then removed: no triangle in these
 scenes needed it.
 
+## Stage 5: VU1 skin (round 22)
+
+Character model ops now go to VU1 as one batch per op instead of per-`G_VTX`
+EE transforms. `Video.Ps2Emotion3DSkin` (default 1) controls it.
+
+### Microprogram (`gs_vu1_skin.vsm`, VU1 address 512)
+
+* A palette of up to 8 entries per batch, one per matrix epoch (modelview
+  x projection, light directions in model space, lookat). Each vertex's
+  `pos.w` holds its entry's offset, so joins between joints cost nothing.
+* Lighting follows Fast3D exactly: per-light clamp, total capped at 255.
+* Spherical texgen with lookat. Linear texgen falls back to the plain list.
+* Fast3D's LOD alpha for the two-texture trilerp material:
+  `(0.7 + clamp(w/1024) * 0.3) * 255`.
+* Back/front-face culling in screen space. A culled triangle collapses to
+  a degenerate, so the GS draws nothing and no index rebuild is needed.
+* The Python simulator covers it with 72 cases (lighting, texgen, LOD, fog,
+  both cull senses, palette offsets).
+
+### EE side (`e3d_geom_ps2.inc`)
+
+* Pass 1 runs the op's matrix commands for real, snaps a palette entry per
+  epoch, and box-tests each load against the frustum planes on VU0.
+* An op whose loads are all outside one plane is skipped before any state
+  work.
+* Pass 2 emits the triangle corners into the direct batch. Anything the
+  skin cannot do (clipping needed, unsupported state) restores the matrix
+  stack and replays the op through the plain path.
+* Programs whose triangles read vertices loaded by an earlier op stay on the
+  plain path.
+
+### Direct path additions
+
+* Texture clamps: the key carries clamp flags and bounds per tile, and each
+  draw decodes them into the GS region clamp. Character textures were the
+  main thing keeping models off the direct path.
+* Opaque two-texture trilerp is drawn in two skin passes: T0·shade, then
+  T1·shade blended by the per-vertex LOD fraction with equal-depth Z.
+
+### Results (PCSX2, Defection intro, two runs each)
+
+| Window | Skin on: gfx µs | Skin off: gfx µs |
+|---|---|---|
+| after 20 s | 12,055-12,089 | 12,323-12,324 |
+| after 40 s | 12,470 | 12,519-12,534 |
+| after 50 s | 13,150-13,182 | 13,183-13,278 |
+
+This is a small win (about 2% of gfx time), not a large one. Frame totals are
+unchanged within noise. Most of the remaining EE cost is pass 1: matrix
+multiplies (shared with the plain path), palette snaps, and per-load bounds.
+In PCSX2 the VU1 time is not modelled as running in parallel with the EE, so
+real hardware may gain more; that is not yet measured.
+
+Still on the plain path:
+
+* the alpha-add window material (graph 5);
+* the two-pass input-lerp graph (2);
+* independent-alpha trilerp (graph 4).
+
 ## Next: PS2-specific GS libraries
 
 * Measure on hardware where the GS time goes: alpha-trilerp passes, fill,
