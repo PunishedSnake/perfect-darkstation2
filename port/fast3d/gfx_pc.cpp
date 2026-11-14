@@ -2610,7 +2610,42 @@ static struct {
     uint32_t tag[MAX_VERTICES];
     uint32_t codes[MAX_VERTICES];
     uint8_t fog[3];
+    /* Per-setup gather: in[] byte i = bank[map[i]], where bank holds the
+     * vertex colour (0..3), the LOD byte (4), 0 (5), 255 (6) and the
+     * combiner constants (7..18). */
+    uint8_t map[12];
+    uint8_t bank[20];
+    bool need_lod;
+    float gx, gy;
 } gfx_ps2_at = { 0, 1 };
+
+static void gfx_ps2_at_build_map(const struct GfxTriSetup* S) {
+    memset(gfx_ps2_at.map, 6, sizeof(gfx_ps2_at.map));
+    gfx_ps2_at.bank[5] = 0;
+    gfx_ps2_at.bank[6] = 255;
+    gfx_ps2_at.need_lod = false;
+    const int n = S->num_inputs < 3 ? S->num_inputs : 3;
+    for (int j = 0; j < n; j++) {
+        for (int c = 0; c < 4; c++) {
+            gfx_ps2_at.bank[7 + j * 4 + c] = S->in_const_u8[j][c];
+        }
+        uint8_t* m = &gfx_ps2_at.map[j * 4];
+        switch (S->in_kind[0][j]) {
+            case GFX_TRI_IN_SHADE: m[0] = 0; m[1] = 1; m[2] = 2; break;
+            case GFX_TRI_IN_SHADE_ALPHA: m[0] = m[1] = m[2] = 3; break;
+            case GFX_TRI_IN_LOD: m[0] = m[1] = m[2] = 4; gfx_ps2_at.need_lod = true; break;
+            default: m[0] = 7 + j * 4; m[1] = 8 + j * 4; m[2] = 9 + j * 4; break;
+        }
+        if (S->use_alpha) {
+            switch (S->in_kind[1][j]) {
+                case GFX_TRI_IN_SHADE: m[3] = 3; break;
+                case GFX_TRI_IN_SHADE_ALPHA: m[3] = 5; break;
+                case GFX_TRI_IN_LOD: m[3] = 4; gfx_ps2_at.need_lod = true; break;
+                default: m[3] = 10 + j * 4; break;
+            }
+        }
+    }
+}
 
 static inline void gfx_ps2_at_invalidate_vertices(size_t first, size_t count) {
     /* range already clamped by gfx_ps2_direct_invalidate_vertices */
@@ -2623,6 +2658,74 @@ static void gfx_ps2_at_flush(void) {
     }
 }
 
+/* gfx_emit_vbo_vertex for the alpha-trilerp path, as bytes where the VBO
+ * has u8-derived floats (no clamps, grayscale or primitive depth here). */
+static inline void gfx_ps2_at_source(const struct GfxTriSetup* S, const struct LoadedVertex* V,
+                                     struct Ps2ATSource* out) {
+    const float w = V->w;
+    out->pos[0] = V->x;
+    out->pos[1] = S->invert_y ? -V->y : V->y;
+    out->pos[2] = S->z_is_from_0_to_1 ? (V->z + w) / 2.0f : V->z;
+    out->pos[3] = w;
+    for (int t = 0; t < 2; t++) {
+        if (S->used_textures[t]) {
+            out->u[t] = V->u * S->u_scale[t] + S->u_bias[t];
+            out->v[t] = V->v * S->v_scale[t] + S->v_bias[t];
+        }
+    }
+    out->fog = V->fog;
+    uint8_t* bank = gfx_ps2_at.bank;
+    bank[0] = V->color.r;
+    bank[1] = V->color.g;
+    bank[2] = V->color.b;
+    bank[3] = V->color.a;
+    if (gfx_ps2_at.need_lod) {
+        const float distance_frac = std::max(0.f, std::min(w / 1024.f, 1.f));
+        bank[4] = (uint8_t)((0.7f + distance_frac * 0.3f) * 255.f);
+    }
+    const uint8_t* map = gfx_ps2_at.map;
+    uint8_t* in = &out->in[0][0];
+    for (int i = 0; i < 12; i++) {
+        in[i] = bank[map[i]];
+    }
+}
+
+static bool gfx_ps2_at_clipped_tri(const struct GfxTriSetup* S, uint8_t a, uint8_t b, uint8_t c) {
+    float tri[3 * PS2_GS_CLIP_MAX_VERTEX_FLOATS];
+    float* end = gfx_emit_vbo_vertex(S, &rsp.loaded_vertices[a], tri);
+    const size_t stride = (size_t)(end - tri);
+    gfx_emit_vbo_vertex(S, &rsp.loaded_vertices[b], tri + stride);
+    gfx_emit_vbo_vertex(S, &rsp.loaded_vertices[c], tri + 2 * stride);
+    float out[PS2_GS_CLIP_MAX_OUTPUT_VERTICES * PS2_GS_CLIP_MAX_VERTEX_FLOATS];
+    size_t n = 0;
+    if (!ps2GsClipTriangle(tri, stride, out, PS2_GS_CLIP_MAX_OUTPUT_VERTICES, &n)) {
+        gfx_ps2_at_flush();
+        return false;
+    }
+    if (n < 3) {
+        return true;
+    }
+    if (buf_vbo_len > 0) {
+        gfx_flush();
+    }
+    gfx_ps2_direct_flush_records();
+    if (gfxPs2DirectATCount() + n > gfxPs2DirectATCapacity()) {
+        gfx_ps2_at_flush();
+    }
+    if (gfxPs2DirectATCount() == 0) {
+        gfx_ps2_at.fog[0] = rdp.fog_color.r;
+        gfx_ps2_at.fog[1] = rdp.fog_color.g;
+        gfx_ps2_at.fog[2] = rdp.fog_color.b;
+    }
+    for (size_t t = 0; t + 2 < n + 0 && t < n; t += 3) {
+        for (int k = 0; k < 3; ++k) {
+            gfxPs2DirectFillAT(PS2_AT_SCRATCH_SLOT + (uint32_t)k, out + (t + (size_t)k) * stride);
+        }
+        gfxPs2DirectAppendAT(PS2_AT_SCRATCH_SLOT, PS2_AT_SCRATCH_SLOT + 1u, PS2_AT_SCRATCH_SLOT + 2u);
+    }
+    return true;
+}
+
 static bool gfx_ps2_at_tri(const struct GfxTriSetup* S, uint8_t a, uint8_t b, uint8_t c) {
     if (a >= MAX_VERTICES || b >= MAX_VERTICES || c >= MAX_VERTICES) {
         gfx_ps2_at_flush();
@@ -2632,10 +2735,10 @@ static bool gfx_ps2_at_tri(const struct GfxTriSetup* S, uint8_t a, uint8_t b, ui
     for (int k = 0; k < 3; ++k) {
         const uint8_t i = idx[k];
         if (gfx_ps2_at.tag[i] != gfx_ps2_at.serial) {
-            float v[32];
-            gfx_emit_vbo_vertex(S, &rsp.loaded_vertices[i], v);
-            gfx_ps2_at.codes[i] = ps2GsClipVertexCodes(v);
-            gfxPs2DirectFillAT(i, v);
+            struct Ps2ATSource src __attribute__((aligned(16)));
+            gfx_ps2_at_source(S, &rsp.loaded_vertices[i], &src);
+            gfx_ps2_at.codes[i] = ps2GsClipVertexCodesInline(src.pos, gfx_ps2_at.gx, gfx_ps2_at.gy);
+            gfxPs2DirectFillATSource(i, &src);
             gfx_ps2_at.tag[i] = gfx_ps2_at.serial;
         }
     }
@@ -2643,8 +2746,7 @@ static bool gfx_ps2_at_tri(const struct GfxTriSetup* S, uint8_t a, uint8_t b, ui
         case PS2_GS_CLIP_REJECT:
             return true;
         case PS2_GS_CLIP_PARTIAL:
-            gfx_ps2_at_flush();
-            return false;
+            return gfx_ps2_at_clipped_tri(S, a, b, c);
         default:
             break;
     }
@@ -2665,11 +2767,96 @@ static bool gfx_ps2_at_tri(const struct GfxTriSetup* S, uint8_t a, uint8_t b, ui
 }
 #endif
 
-static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx, bool is_rect) {
+/*
+ * Everything after culling. Kept out of line so the culling front end
+ * (about half of all triangles end there) inlines into the G_TRI1/G_TRI4
+ * handlers without paying this body's large frame and register saves.
+ */
+__attribute__((noinline)) static void gfx_sp_tri1_emit(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx, bool is_rect) {
     struct LoadedVertex* v1 = &rsp.loaded_vertices[vtx1_idx];
     struct LoadedVertex* v2 = &rsp.loaded_vertices[vtx2_idx];
     struct LoadedVertex* v3 = &rsp.loaded_vertices[vtx3_idx];
     struct LoadedVertex* v_arr[3] = { v1, v2, v3 };
+    (void)v_arr;
+
+    struct GfxTriSetup rect_setup;
+    const struct GfxTriSetup* S = &gfx_tri_setup_cache;
+    if (is_rect) {
+        gfx_tri_setup(&rect_setup, true);
+        S = &rect_setup;
+    } else if (!gfx_tri_setup_cache.valid) {
+        gfx_tri_setup(&gfx_tri_setup_cache, false);
+        gfx_tri_setup_cache.valid = true;
+#if defined(GFX_PS2_DIRECT)
+        gfx_ps2_direct_refresh(&gfx_tri_setup_cache);
+        if (++gfx_ps2_at.serial == 0) {
+            gfx_ps2_at.serial = 1;
+        }
+        gfx_ps2_at.path = 0;
+        if (!gfx_ps2_direct.active && !gfx_tri_setup_cache.depth_source_prim &&
+            !gfx_tri_setup_cache.use_grayscale) {
+            {
+                const struct GfxTriSetup* T = &gfx_tri_setup_cache;
+                gfxPs2DirectSetATSameCoords(T->used_textures[0] && T->used_textures[1] &&
+                                            T->u_scale[0] == T->u_scale[1] && T->u_bias[0] == T->u_bias[1] &&
+                                            T->v_scale[0] == T->v_scale[1] && T->v_bias[0] == T->v_bias[1]);
+            }
+            gfx_ps2_at.path = gfxPs2DirectQueryAT();
+            if (gfx_ps2_at.path != 0) {
+                gfxPs2DirectUpdateGuard(&gfx_ps2_at.gx, &gfx_ps2_at.gy);
+                ps2GsClipGetGuardBand(&gfx_ps2_at.gx, &gfx_ps2_at.gy);
+                gfx_ps2_at_build_map(&gfx_tri_setup_cache);
+                if (gfxPs2DirectATSameSampleLane()) {
+                    /* the lane reads only input 1 and tap 0 */
+                    gfx_ps2_at.need_lod = (gfx_ps2_at.map[4] == 4 || gfx_ps2_at.map[5] == 4 ||
+                                           gfx_ps2_at.map[6] == 4 || gfx_ps2_at.map[7] == 4);
+                }
+            }
+        }
+#endif
+    }
+#if defined(GFX_PS2_DIRECT) && defined(PD_PS2_DIRECT_VERIFY)
+    /* Verification build: draw through the VBO, but record what the direct
+     * path would have produced for the backend to compare against. */
+    gfx_ps2_direct_verify_valid[buf_vbo_num_tris] = 0;
+    if (!is_rect && gfx_ps2_direct.active && vtx1_idx < MAX_VERTICES && vtx2_idx < MAX_VERTICES &&
+        vtx3_idx < MAX_VERTICES) {
+        const uint32_t ca = gfx_ps2_direct_vertex(&gfx_tri_setup_cache, vtx1_idx);
+        const uint32_t cb = gfx_ps2_direct_vertex(&gfx_tri_setup_cache, vtx2_idx);
+        const uint32_t cc = gfx_ps2_direct_vertex(&gfx_tri_setup_cache, vtx3_idx);
+        const enum Ps2GsClipClass cls = ps2GsClipClassifyCodes(ca, cb, cc);
+        gfx_ps2_direct_verify_valid[buf_vbo_num_tris] = (uint8_t)(cls == PS2_GS_CLIP_ACCEPT ? 1 : 2 + (int)cls);
+        gfx_ps2_direct_verify_records[buf_vbo_num_tris * 3 + 0] = gfx_ps2_direct.records[vtx1_idx];
+        gfx_ps2_direct_verify_records[buf_vbo_num_tris * 3 + 1] = gfx_ps2_direct.records[vtx2_idx];
+        gfx_ps2_direct_verify_records[buf_vbo_num_tris * 3 + 2] = gfx_ps2_direct.records[vtx3_idx];
+    }
+    gfx_ps2_direct_verify_vbo = buf_vbo;
+#elif defined(GFX_PS2_DIRECT)
+    if (!is_rect && gfx_ps2_direct.active &&
+        gfx_ps2_direct_tri(&gfx_tri_setup_cache, vtx1_idx, vtx2_idx, vtx3_idx)) {
+        return;
+    }
+    if (!is_rect && gfx_ps2_at.path != 0 &&
+        gfx_ps2_at_tri(&gfx_tri_setup_cache, vtx1_idx, vtx2_idx, vtx3_idx)) {
+        return;
+    }
+    gfx_ps2_direct_flush();
+#endif
+
+    for (int i = 0; i < 3; i++) {
+        float* out = gfx_emit_vbo_vertex(S, v_arr[i], &buf_vbo[buf_vbo_len]);
+        buf_vbo_len = (size_t)(out - buf_vbo);
+    }
+
+    if (++buf_vbo_num_tris == MAX_BUFFERED) {
+        gfx_flush();
+    }
+}
+
+static inline void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx, bool is_rect) {
+    struct LoadedVertex* v1 = &rsp.loaded_vertices[vtx1_idx];
+    struct LoadedVertex* v2 = &rsp.loaded_vertices[vtx2_idx];
+    struct LoadedVertex* v3 = &rsp.loaded_vertices[vtx3_idx];
 
     if ((rsp.extra_geometry_mode & G_NO_CLIPPING_EXT) == 0) {
         if (v1->clip_rej & v2->clip_rej & v3->clip_rej) {
@@ -2728,66 +2915,7 @@ static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx, bo
         }
     }
 
-    struct GfxTriSetup rect_setup;
-    const struct GfxTriSetup* S = &gfx_tri_setup_cache;
-    if (is_rect) {
-        gfx_tri_setup(&rect_setup, true);
-        S = &rect_setup;
-    } else if (!gfx_tri_setup_cache.valid) {
-        gfx_tri_setup(&gfx_tri_setup_cache, false);
-        gfx_tri_setup_cache.valid = true;
-#if defined(GFX_PS2_DIRECT)
-        gfx_ps2_direct_refresh(&gfx_tri_setup_cache);
-        if (++gfx_ps2_at.serial == 0) {
-            gfx_ps2_at.serial = 1;
-        }
-        gfx_ps2_at.path = 0;
-        if (!gfx_ps2_direct.active && !gfx_tri_setup_cache.depth_source_prim &&
-            !gfx_tri_setup_cache.use_grayscale) {
-            gfx_ps2_at.path = gfxPs2DirectQueryAT();
-            if (gfx_ps2_at.path != 0) {
-                float gx, gy;
-                gfxPs2DirectUpdateGuard(&gx, &gy);
-            }
-        }
-#endif
-    }
-#if defined(GFX_PS2_DIRECT) && defined(PD_PS2_DIRECT_VERIFY)
-    /* Verification build: draw through the VBO, but record what the direct
-     * path would have produced for the backend to compare against. */
-    gfx_ps2_direct_verify_valid[buf_vbo_num_tris] = 0;
-    if (!is_rect && gfx_ps2_direct.active && vtx1_idx < MAX_VERTICES && vtx2_idx < MAX_VERTICES &&
-        vtx3_idx < MAX_VERTICES) {
-        const uint32_t ca = gfx_ps2_direct_vertex(&gfx_tri_setup_cache, vtx1_idx);
-        const uint32_t cb = gfx_ps2_direct_vertex(&gfx_tri_setup_cache, vtx2_idx);
-        const uint32_t cc = gfx_ps2_direct_vertex(&gfx_tri_setup_cache, vtx3_idx);
-        const enum Ps2GsClipClass cls = ps2GsClipClassifyCodes(ca, cb, cc);
-        gfx_ps2_direct_verify_valid[buf_vbo_num_tris] = (uint8_t)(cls == PS2_GS_CLIP_ACCEPT ? 1 : 2 + (int)cls);
-        gfx_ps2_direct_verify_records[buf_vbo_num_tris * 3 + 0] = gfx_ps2_direct.records[vtx1_idx];
-        gfx_ps2_direct_verify_records[buf_vbo_num_tris * 3 + 1] = gfx_ps2_direct.records[vtx2_idx];
-        gfx_ps2_direct_verify_records[buf_vbo_num_tris * 3 + 2] = gfx_ps2_direct.records[vtx3_idx];
-    }
-    gfx_ps2_direct_verify_vbo = buf_vbo;
-#elif defined(GFX_PS2_DIRECT)
-    if (!is_rect && gfx_ps2_direct.active &&
-        gfx_ps2_direct_tri(&gfx_tri_setup_cache, vtx1_idx, vtx2_idx, vtx3_idx)) {
-        return;
-    }
-    if (!is_rect && gfx_ps2_at.path != 0 &&
-        gfx_ps2_at_tri(&gfx_tri_setup_cache, vtx1_idx, vtx2_idx, vtx3_idx)) {
-        return;
-    }
-    gfx_ps2_direct_flush();
-#endif
-
-    for (int i = 0; i < 3; i++) {
-        float* out = gfx_emit_vbo_vertex(S, v_arr[i], &buf_vbo[buf_vbo_len]);
-        buf_vbo_len = (size_t)(out - buf_vbo);
-    }
-
-    if (++buf_vbo_num_tris == MAX_BUFFERED) {
-        gfx_flush();
-    }
+    gfx_sp_tri1_emit(vtx1_idx, vtx2_idx, vtx3_idx, is_rect);
 }
 
 static inline void gfx_sp_tri4(Gfx *cmd) {
@@ -3789,6 +3917,9 @@ extern "C" void gfx_get_dimensions(uint32_t* width, uint32_t* height, int32_t* p
 extern "C" void gfx_init(const GfxInitSettings *settings) {
     gfx_wapi = settings->wapi;
     gfx_init_u8_unit_table();
+#if defined(GFX_PS2_DIRECT)
+    gfxPs2DirectSetUnitTable(gfx_u8_unit);
+#endif
     gfx_rapi = settings->rapi;
     gfx_wapi->init(&settings->window_settings);
     gfx_rapi->init();

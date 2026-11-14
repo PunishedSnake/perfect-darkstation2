@@ -62,6 +62,34 @@ enum Ps2GsClipClass ps2GsClipClassifyTriangle(
  */
 #define PS2_GS_CLIP_CODE_NONFINITE 0x10000u
 unsigned int ps2GsClipVertexCodes(const float *vertex);
+void ps2GsClipGetGuardBand(float *guard_x, float *guard_y);
+
+/*
+ * Inline ps2GsClipVertexCodes for hot loops, with the guard band passed in
+ * (from ps2GsClipGetGuardBand). Same tests and results.
+ */
+static inline unsigned int ps2GsClipVertexCodesInline(const float *v,
+    float guard_x, float guard_y)
+{
+    union { float f; unsigned int u; } c[4];
+    c[0].f = v[0]; c[1].f = v[1]; c[2].f = v[2]; c[3].f = v[3];
+    if (((c[0].u & 0x7f800000u) == 0x7f800000u) || ((c[1].u & 0x7f800000u) == 0x7f800000u) ||
+        ((c[2].u & 0x7f800000u) == 0x7f800000u) || ((c[3].u & 0x7f800000u) == 0x7f800000u)) {
+        return PS2_GS_CLIP_CODE_NONFINITE;
+    }
+    const float x = v[0], y = v[1], z = v[2], w = v[3];
+    const unsigned int zc = (z < 0.0f ? 16u : 0u) | (w - z < 0.0f ? 32u : 0u);
+    const unsigned int exact = (x + w < 0.0f ? 1u : 0u) | (w - x < 0.0f ? 2u : 0u) |
+        (y + w < 0.0f ? 4u : 0u) | (w - y < 0.0f ? 8u : 0u) | zc;
+    if (guard_x == 1.0f && guard_y == 1.0f) {
+        return exact | (exact << 8);
+    }
+    const float gx = guard_x * w;
+    const float gy = guard_y * w;
+    const unsigned int guard = (x + gx < 0.0f ? 1u : 0u) | (gx - x < 0.0f ? 2u : 0u) |
+        (y + gy < 0.0f ? 4u : 0u) | (gy - y < 0.0f ? 8u : 0u) | zc;
+    return exact | (guard << 8);
+}
 
 static inline enum Ps2GsClipClass ps2GsClipClassifyCodes(
     unsigned int a, unsigned int b, unsigned int c)

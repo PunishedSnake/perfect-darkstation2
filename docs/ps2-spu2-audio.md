@@ -115,8 +115,11 @@ to within about 15 %.
 
 Known differences from the software mixer:
 
-* No per-voice reverb yet. Wet sends are folded into the dry level at half
-  gain.
+* Reverb is the SPU2's own (core 1 hall preset, `Audio.HardwareReverb` /
+  `Audio.HardwareReverbDepth`), not PD's per-stage software reverb. A voice
+  sends to it when its FX amount is significant. An SPU2 voice has one level
+  for dry and send, so it plays at dry + 1/4 wet. Over the 40 s capture the
+  loudness is 0.97x the software mixer's.
 * PD's per-voice low-pass filter (`fx`, used for muffled sounds) is not
   applied.
 * Parameter changes take effect at audio-frame granularity (184 samples,
@@ -128,5 +131,5 @@ Known differences from the software mixer:
 2. Done: bank transcoder.
 3. Done: IRX with SPU2 RAM cache, streaming, voice commands and ramps.
 4. Done: EE voice backend, enabled by the presence of `pd.pssb`.
-5. Next: listening tests on hardware; SPU2 reverb for the FX bus; skip the
-   now-silent software voice buses entirely.
+5. Done: SPU2 reverb; the software aux buses skip their reverb and mixes.
+6. Next: listening tests on hardware.

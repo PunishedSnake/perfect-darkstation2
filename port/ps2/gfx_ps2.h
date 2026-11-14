@@ -252,11 +252,31 @@ bool gfxPs2DirectQuery(struct GfxPs2DirectContext *ctx);
  * gfxPs2DirectQueryAT returns 0 when the current state is not eligible.
  */
 int gfxPs2DirectQueryAT(void);
+/* Frontend: both texture taps use identical coordinate transforms. */
+void gfxPs2DirectSetATSameCoords(bool same);
+/* After gfxPs2DirectQueryAT: fills only read input 1 (shade) and tap 0. */
+bool gfxPs2DirectATSameSampleLane(void);
 void gfxPs2DirectUpdateGuard(float *guard_x, float *guard_y);
 void gfxPs2DirectFillAT(uint32_t slot, const float *vbo_vertex);
+/* The same fill from the loaded vertex's raw values: clip-space position,
+ * texture coordinates, the fog byte and the combiner inputs as bytes
+ * (missing inputs and alphas are 255). Bit-identical to the float path. */
+struct Ps2ATSource {
+    float pos[4];
+    float u[2];
+    float v[2];
+    uint8_t fog;
+    uint8_t in[3][4];
+};
+void gfxPs2DirectFillATSource(uint32_t slot, const struct Ps2ATSource *src);
+/* Unit table (i / 255) the frontend converts bytes with, so the backend's
+ * byte lookups reproduce the float path exactly. */
+void gfxPs2DirectSetUnitTable(const float *u8_unit);
 uint32_t gfxPs2DirectATCapacity(void);
 uint32_t gfxPs2DirectATCount(void);
 void gfxPs2DirectAppendAT(uint32_t a, uint32_t b, uint32_t c);
+/* First of 24 scratch cache slots for clipped-polygon vertices. */
+#define PS2_AT_SCRATCH_SLOT 128u
 void gfxPs2DirectDrawAT(const uint8_t fog_rgb[3]);
 void gfxPs2DirectDraw(const struct Ps2GsVu1TransformVertex *vertices,
     uint32_t vertex_count, bool trilerp, bool w_ok, const uint8_t fog_rgb[3]);

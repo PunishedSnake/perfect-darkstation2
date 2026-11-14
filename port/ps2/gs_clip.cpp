@@ -114,6 +114,12 @@ static enum Ps2GsClipClass classifyCodes(const unsigned int codes[3],
         ? PS2_GS_CLIP_ACCEPT : PS2_GS_CLIP_PARTIAL;
 }
 
+void ps2GsClipGetGuardBand(float *guard_x, float *guard_y)
+{
+    *guard_x = s_guard_x;
+    *guard_y = s_guard_y;
+}
+
 void ps2GsClipSetGuardBand(float guard_x, float guard_y)
 {
     s_guard_x = guard_x >= 1.0f ? guard_x : 1.0f;
