@@ -228,6 +228,12 @@ jobs:
             -o /tmp/gs_vu1_transform_test
           /tmp/gs_vu1_transform_test
 
+          g++ -std=c++20 -Wall -Wextra -Werror \
+            -Iport/ps2 \
+            port/ps2/gfx_ps2_object_test.cpp \
+            -o /tmp/gfx_ps2_object_test
+          /tmp/gfx_ps2_object_test
+
           g++ -std=c++20 -Wall -Wextra -Werror -shared -fPIC \
             -Iport/ps2 port/ps2/gs_vu1_transform.cpp \
             -o /tmp/gs_vu1_transform.so

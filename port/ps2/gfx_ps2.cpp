@@ -18,6 +18,8 @@
 #include "gs_core.h"
 #include "gs_vu1_batch.h"
 #include "gs_vu1_transform.h"
+#include "gfx_ps2_object.h"
+#include "gs_vu1_queue.h"
 #include "log_ps2.h"
 #include "ps2_renderer_stats.h"
 #include "renderer_trace.h"
@@ -5643,11 +5645,30 @@ static void ps2_direct_draw_color(const struct Ps2GsVu1TransformVertex *v,
     }
 }
 
-extern "C" void gfxPs2DirectDraw(const struct Ps2GsVu1TransformVertex *vertices,
-    uint32_t vertex_count, bool trilerp, bool w_ok, const uint8_t fog_rgb[3])
+/* EE fallback for object batches: the clip-space records VU1 would make. */
+static struct Ps2GsVu1TransformVertex s_object_clip[PS2_GS_VU1_OBJECT_MAX_VERTICES]
+    __attribute__((aligned(16)));
+
+static const struct Ps2GsVu1TransformVertex *ps2_object_to_clip(
+    const struct Ps2GsVu1TransformVertex *vertices, uint32_t vertex_count,
+    const struct Ps2GsVu1ObjectTransform *object)
+{
+    const bool fog = s_shader->features.opt_fog;
+    const struct Ps2GsVu1ObjectVertex *in =
+        (const struct Ps2GsVu1ObjectVertex *)vertices;
+    for (uint32_t i = 0u; i < vertex_count; ++i) {
+        gfxPs2ObjectVertexToClip(object, fog, &in[i], &s_object_clip[i]);
+    }
+    return s_object_clip;
+}
+
+static void ps2_direct_draw_impl(const struct Ps2GsVu1TransformVertex *vertices,
+    uint32_t vertex_count, bool trilerp, bool w_ok, const uint8_t fog_rgb[3],
+    const struct Ps2GsVu1ObjectTransform *object)
 {
     if (!ps2GsCoreIsReady() || !s_shader || !s_shader->plan.supported ||
-        vertex_count == 0u) {
+        vertex_count == 0u ||
+        (object && vertex_count > PS2_GS_VU1_OBJECT_MAX_VERTICES)) {
         return;
     }
     ps2_refresh_gs_offsets();
@@ -5678,6 +5699,9 @@ extern "C" void gfxPs2DirectDraw(const struct Ps2GsVu1TransformVertex *vertices,
     }
 
     if (color_only) {
+        if (object) {
+            vertices = ps2_object_to_clip(vertices, vertex_count, object);
+        }
         ps2_direct_draw_color(vertices, vertex_count);
     } else {
     float transform_scale[4];
@@ -5697,10 +5721,18 @@ extern "C" void gfxPs2DirectDraw(const struct Ps2GsVu1TransformVertex *vertices,
     }
     const bool submitted = mapped &&
         ps2GsCoreVu1TexturedTransformCandidate(vertex_count) &&
-        ps2GsCoreTryDrawTexturedTrianglesTransform(
-            s_selected_texture[0], vertices, vertex_count,
-            transform_scale, transform_offset);
+        (object
+            ? ps2GsCoreTryDrawTexturedTrianglesObject(
+                s_selected_texture[0],
+                (const struct Ps2GsVu1ObjectVertex *)vertices, vertex_count,
+                transform_scale, transform_offset, object)
+            : ps2GsCoreTryDrawTexturedTrianglesTransform(
+                s_selected_texture[0], vertices, vertex_count,
+                transform_scale, transform_offset));
     if (!submitted) {
+        if (object) {
+            vertices = ps2_object_to_clip(vertices, vertex_count, object);
+        }
         ps2_pack_textured_from_vu1_input(vertices, s_stq_vertices[0],
             vertex_count, s_shader->features.opt_fog);
         ps2GsCoreDrawTexturedTriangles(s_selected_texture[0],
@@ -5726,6 +5758,92 @@ extern "C" void gfxPs2DirectDraw(const struct Ps2GsVu1TransformVertex *vertices,
         ps2GsCoreSetAlphaWrite(true);
     }
 }
+extern "C" void gfxPs2DirectDraw(const struct Ps2GsVu1TransformVertex *vertices,
+    uint32_t vertex_count, bool trilerp, bool w_ok, const uint8_t fog_rgb[3])
+{
+    ps2_direct_draw_impl(vertices, vertex_count, trilerp, w_ok, fog_rgb, NULL);
+}
+
+extern "C" void gfxPs2DirectDrawObject(
+    const struct Ps2GsVu1ObjectVertex *vertices, uint32_t vertex_count,
+    bool trilerp, const uint8_t fog_rgb[3],
+    const struct Ps2GsVu1ObjectTransform *object)
+{
+    if (!object) {
+        return;
+    }
+    /* Object blocks are accepted only with every w >= 1e-3 (finite, normal).
+     * The impl passes object vertices through untouched or converts them. */
+    ps2_direct_draw_impl((const struct Ps2GsVu1TransformVertex *)vertices,
+        vertex_count, trilerp, true, fog_rgb, object);
+}
+
+/* Direct colour tables are round(i / 255 * K); report K / 255. */
+extern "C" bool gfxPs2DirectLutScale(const uint8_t *lut, float *scale)
+{
+    if (lut == s_direct_lut_u8) {
+        *scale = 255.0f / 255.0f;
+    } else if (lut == s_direct_lut_modulate) {
+        *scale = 128.0f / 255.0f;
+    } else if (lut == s_direct_lut_texture_alpha) {
+        *scale = 64.0f / 255.0f;
+    } else {
+        return false;
+    }
+    return true;
+}
+
+/* Guard band gfxPs2DirectUpdateGuard would set, without setting it. */
+extern "C" void gfxPs2DirectPeekGuard(float *out_gx, float *out_gy)
+{
+    const float half_w = (float)s_viewport.width * 0.5f;
+    const float half_h = (float)s_viewport.height * 0.5f;
+    const float cx = (float)s_viewport.x + half_w +
+        (float)ps2GsCoreGetOffsetX() * (1.0f / 16.0f);
+    const float cy = (float)s_viewport.y + half_h +
+        (float)ps2GsCoreGetOffsetY() * (1.0f / 16.0f);
+    const float margin = 64.0f;
+    float gx = half_w > 0.0f
+        ? ((cx < 4095.0f - cx ? cx : 4095.0f - cx) - margin) / half_w : 1.0f;
+    float gy = half_h > 0.0f
+        ? ((cy < 4095.0f - cy ? cy : 4095.0f - cy) - margin) / half_h : 1.0f;
+    *out_gx = gx > 8.0f ? 8.0f : gx;
+    *out_gy = gy > 8.0f ? 8.0f : gy;
+}
+
+/*
+ * Video.Ps2ObjectGeometry (default 1): G_VTX blocks inside the guard band stay
+ * in object space and VU1 builds their records (gs_vu1_object_transform.vsm).
+ * 0 keeps every vertex on the EE transform path, for A/B checks on hardware.
+ */
+extern "C" void configRegisterInt(const char *key, int32_t *var, int32_t min, int32_t max);
+static int32_t s_object_geometry = 1;
+
+__attribute__((constructor)) static void ps2_object_geometry_config_init(void)
+{
+    configRegisterInt("Video.Ps2ObjectGeometry", &s_object_geometry, 0, 1);
+}
+
+extern "C" bool gfxPs2ObjectGeometryEnabled(void)
+{
+    return s_object_geometry != 0 && ps2GsVu1QueueEnabled();
+}
+
+/* The object program computes fog as (255 - byte) << 4; true when that is
+ * exactly the direct path's fog table. */
+extern "C" bool gfxPs2DirectFogLinear(void)
+{
+    if (!s_direct_luts_ready) {
+        ps2_direct_init_luts();
+    }
+    for (uint32_t i = 0u; i < 256u; ++i) {
+        if (s_direct_lut_fog[i] != (255u - i) << 4) {
+            return false;
+        }
+    }
+    return true;
+}
+
 /*
  * Alpha-trilerp shared-vertex path. These shaders (two-texture blends with
  * per-vertex alpha) dominate the heaviest scenes, the intro especially; the
@@ -6281,6 +6399,18 @@ extern "C" void gfxPs2DirectDraw(const struct Ps2GsVu1TransformVertex *vertices,
 {
     (void)vertices; (void)vertex_count; (void)trilerp; (void)w_ok; (void)fog_rgb;
 }
+
+extern "C" void gfxPs2DirectDrawObject(
+    const struct Ps2GsVu1ObjectVertex *vertices, uint32_t vertex_count,
+    bool trilerp, const uint8_t fog_rgb[3],
+    const struct Ps2GsVu1ObjectTransform *object)
+{
+    (void)vertices; (void)vertex_count; (void)trilerp; (void)fog_rgb; (void)object;
+}
+extern "C" bool gfxPs2DirectLutScale(const uint8_t *lut, float *scale) { (void)lut; (void)scale; return false; }
+extern "C" bool gfxPs2ObjectGeometryEnabled(void) { return false; }
+extern "C" void gfxPs2DirectPeekGuard(float *gx, float *gy) { *gx = 1.0f; *gy = 1.0f; }
+extern "C" bool gfxPs2DirectFogLinear(void) { return false; }
 
 extern "C" int gfxPs2DirectQueryAT(void) { return 0; }
 extern "C" void gfxPs2DirectSetATSameCoords(bool same) { (void)same; }

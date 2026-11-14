@@ -281,6 +281,27 @@ void gfxPs2DirectDrawAT(const uint8_t fog_rgb[3]);
 void gfxPs2DirectDraw(const struct Ps2GsVu1TransformVertex *vertices,
     uint32_t vertex_count, bool trilerp, bool w_ok, const uint8_t fog_rgb[3]);
 
+/*
+ * Object-space batch: raw integer vertices (struct Ps2GsVu1ObjectVertex) and
+ * the constants that turn them into records (clip matrix with aspect, Y and
+ * depth remaps folded in, fog, texture and colour programs). VU1 does all of
+ * it; without VU1 the EE converts them to clip-space records and takes the
+ * gfxPs2DirectDraw path.
+ */
+struct Ps2GsVu1ObjectTransform;
+struct Ps2GsVu1ObjectVertex;
+void gfxPs2DirectDrawObject(const struct Ps2GsVu1ObjectVertex *vertices,
+    uint32_t vertex_count, bool trilerp, const uint8_t fog_rgb[3],
+    const struct Ps2GsVu1ObjectTransform *object);
+/* Current guard band, without updating the clipper's copy. */
+void gfxPs2DirectPeekGuard(float *gx, float *gy);
+/* True when the direct fog table is (255 - byte) << 4 (VU1 object fog). */
+bool gfxPs2DirectFogLinear(void);
+/* Video.Ps2ObjectGeometry is on and the VU1 queue is running. */
+bool gfxPs2ObjectGeometryEnabled(void);
+/* K / 255 for a direct colour table round(i / 255 * K); false if not one. */
+bool gfxPs2DirectLutScale(const uint8_t *lut, float *scale);
+
 void gfxPs2TraceGfxCommandsImpl(
     const void *commands, uint32_t depth, uint32_t entry_count);
 extern int g_ps2RendererTraceCapturing;

@@ -36,6 +36,8 @@ extern "C" uint32_t Ps2GsVu1ColorPathCodeStart;
 extern "C" uint32_t Ps2GsVu1ColorPathCodeEnd;
 extern "C" uint32_t Ps2GsVu1TexturedTransformCodeStart;
 extern "C" uint32_t Ps2GsVu1TexturedTransformCodeEnd;
+extern "C" uint32_t Ps2GsVu1ObjectTransformCodeStart;
+extern "C" uint32_t Ps2GsVu1ObjectTransformCodeEnd;
 
 static bool s_initialized;
 static bool s_enabled;
@@ -268,7 +270,13 @@ extern "C" bool ps2GsVu1QueueInit(void)
         !ps2GsVu1QueueUploadProgram(
             &Ps2GsVu1TexturedTransformCodeStart,
             &Ps2GsVu1TexturedTransformCodeEnd,
-            PS2_GS_VU1_TRANSFORM_PROGRAM_ADDRESS, 256u) ||
+            PS2_GS_VU1_TRANSFORM_PROGRAM_ADDRESS,
+            PS2_GS_VU1_OBJECT_PROGRAM_ADDRESS -
+                PS2_GS_VU1_TRANSFORM_PROGRAM_ADDRESS) ||
+        !ps2GsVu1QueueUploadProgram(
+            &Ps2GsVu1ObjectTransformCodeStart,
+            &Ps2GsVu1ObjectTransformCodeEnd,
+            PS2_GS_VU1_OBJECT_PROGRAM_ADDRESS, 256u) ||
         !ps2GsVu1QueueConfigureBuffers()) {
         ps2GsVu1QueueRelease();
         return false;
@@ -419,6 +427,54 @@ extern "C" bool ps2GsVu1QueueSubmitTexturedTransform(
     /* Inputs were validated by the planner; the builder cannot fail now. */
     (void)ps2GsVu1BuildTexturedTransformPayload(
         payload, planned.input_qw, scale, offset, flags,
+        prefix, prefix_count, vertices, vertex_count,
+        suffix, suffix_count, NULL);
+    ps2RendererTraceRecordPath1Qwords(payload, planned.input_qw,
+        prefix_count + suffix_count + vertex_count * 3u,
+        vertex_count, true);
+    return true;
+#endif
+}
+
+extern "C" bool ps2GsVu1QueueSubmitObjectTransform(
+    const float scale[4], const float offset[4], uint32_t flags,
+    const struct Ps2GsVu1ObjectTransform *xform,
+    const struct Ps2GsPackedReg *prefix, uint32_t prefix_count,
+    const struct Ps2GsVu1ObjectVertex *vertices, uint32_t vertex_count,
+    const struct Ps2GsPackedReg *suffix, uint32_t suffix_count)
+{
+#if !defined(PERFECT_DARK_PS2_VU1_COLOR_BATCH)
+    (void)scale;
+    (void)offset;
+    (void)flags;
+    (void)xform;
+    (void)prefix;
+    (void)prefix_count;
+    (void)vertices;
+    (void)vertex_count;
+    (void)suffix;
+    (void)suffix_count;
+    return false;
+#else
+    if (!ps2GsVu1QueueEnabled() || !scale || !offset || !xform ||
+        !vertices || (prefix_count != 0u && !prefix) ||
+        (suffix_count != 0u && !suffix)) {
+        return false;
+    }
+
+    struct Ps2GsVu1TransformLayout planned;
+    if (!ps2GsVu1PlanObjectTransform(
+            vertex_count, prefix_count, suffix_count, &planned) ||
+        (flags & ~PS2_GS_VU1_TRANSFORM_FLAG_FOG) != 0u) {
+        return false;
+    }
+    uint32_t *payload = ps2GsNativeQueueReserveVu1Batch(planned.input_qw,
+        PS2_GS_VU1_OBJECT_PROGRAM_ADDRESS);
+    if (!payload) {
+        return false;
+    }
+    (void)ps2GsVu1BuildObjectTransformPayload(
+        payload, planned.input_qw, scale, offset, flags, xform,
         prefix, prefix_count, vertices, vertex_count,
         suffix, suffix_count, NULL);
     ps2RendererTraceRecordPath1Qwords(payload, planned.input_qw,

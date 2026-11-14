@@ -156,9 +156,24 @@ static inline void gfxPs2CopyQwords(void *dst, const void *src, size_t qwords)
     memcpy(dst, src, qwords * 16u);
 }
 
-extern "C" bool ps2GsVu1BuildTexturedTransformPayload(
+extern "C" bool ps2GsVu1PlanObjectTransform(uint32_t vertex_count,
+    uint32_t prefix_count, uint32_t suffix_count,
+    struct Ps2GsVu1TransformLayout *layout)
+{
+    if (!layout || vertex_count > PS2_GS_VU1_OBJECT_MAX_VERTICES ||
+        !ps2GsVu1PlanTexturedTransform(
+            vertex_count, prefix_count, suffix_count, layout)) {
+        return false;
+    }
+    layout->input_qw += PS2_GS_VU1_OBJECT_XFORM_QW;
+    layout->dma_chain_qw += PS2_GS_VU1_OBJECT_XFORM_QW;
+    return layout->input_qw <= PS2_GS_VU1_BUFFER_QW;
+}
+
+static bool ps2GsVu1BuildTransformPayloadImpl(
     uint32_t *destination, uint32_t capacity_qw,
     const float scale[4], const float offset[4], uint32_t flags,
+    const struct Ps2GsVu1ObjectTransform *xform,
     const struct Ps2GsPackedReg *prefix, uint32_t prefix_count,
     const struct Ps2GsVu1TransformVertex *vertices, uint32_t vertex_count,
     const struct Ps2GsPackedReg *suffix, uint32_t suffix_count,
@@ -169,8 +184,10 @@ extern "C" bool ps2GsVu1BuildTexturedTransformPayload(
         (flags & ~PS2_GS_VU1_TRANSFORM_FLAG_FOG) != 0u ||
         (prefix_count != 0u && !prefix) ||
         (suffix_count != 0u && !suffix) ||
-        !ps2GsVu1PlanTexturedTransform(
-            vertex_count, prefix_count, suffix_count, &planned) ||
+        !(xform ? ps2GsVu1PlanObjectTransform(
+                vertex_count, prefix_count, suffix_count, &planned)
+            : ps2GsVu1PlanTexturedTransform(
+                vertex_count, prefix_count, suffix_count, &planned)) ||
         capacity_qw < planned.input_qw) {
         return false;
     }
@@ -220,6 +237,13 @@ extern "C" bool ps2GsVu1BuildTexturedTransformPayload(
     memcpy(cursor, padded_prefix, sizeof(padded_prefix));
     cursor += sizeof(padded_prefix);
 
+    if (xform) {
+        static_assert(sizeof(*xform) == PS2_GS_VU1_OBJECT_XFORM_QW * 16u,
+            "object transform must fill its quadwords exactly");
+        memcpy(cursor, xform, sizeof(*xform));
+        cursor += sizeof(*xform);
+    }
+
     /*
      * The destination is the uncached-accelerated VIF1 arena: quadword
      * stores are the fast path; a library memcpy here was the largest
@@ -239,6 +263,40 @@ extern "C" bool ps2GsVu1BuildTexturedTransformPayload(
         *layout = planned;
     }
     return true;
+}
+
+extern "C" bool ps2GsVu1BuildTexturedTransformPayload(
+    uint32_t *destination, uint32_t capacity_qw,
+    const float scale[4], const float offset[4], uint32_t flags,
+    const struct Ps2GsPackedReg *prefix, uint32_t prefix_count,
+    const struct Ps2GsVu1TransformVertex *vertices, uint32_t vertex_count,
+    const struct Ps2GsPackedReg *suffix, uint32_t suffix_count,
+    struct Ps2GsVu1TransformLayout *layout)
+{
+    return ps2GsVu1BuildTransformPayloadImpl(destination, capacity_qw,
+        scale, offset, flags, NULL, prefix, prefix_count,
+        vertices, vertex_count, suffix, suffix_count, layout);
+}
+
+extern "C" bool ps2GsVu1BuildObjectTransformPayload(
+    uint32_t *destination, uint32_t capacity_qw,
+    const float scale[4], const float offset[4], uint32_t flags,
+    const struct Ps2GsVu1ObjectTransform *xform,
+    const struct Ps2GsPackedReg *prefix, uint32_t prefix_count,
+    const struct Ps2GsVu1ObjectVertex *vertices, uint32_t vertex_count,
+    const struct Ps2GsPackedReg *suffix, uint32_t suffix_count,
+    struct Ps2GsVu1TransformLayout *layout)
+{
+    static_assert(sizeof(struct Ps2GsVu1ObjectVertex) ==
+            sizeof(struct Ps2GsVu1TransformVertex),
+        "object vertices occupy the same three quadwords");
+    if (!xform) {
+        return false;
+    }
+    return ps2GsVu1BuildTransformPayloadImpl(destination, capacity_qw,
+        scale, offset, flags, xform, prefix, prefix_count,
+        (const struct Ps2GsVu1TransformVertex *)vertices, vertex_count,
+        suffix, suffix_count, layout);
 }
 
 extern "C" bool ps2GsVu1BuildTexturedTransformStream(

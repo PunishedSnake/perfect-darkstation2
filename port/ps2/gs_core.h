@@ -290,6 +290,16 @@ void ps2GsCoreSetAlphaBlendDestinationScale(uint8_t fix);
 bool ps2GsCoreTryDrawTexturedTrianglesTransform(Ps2GsTextureHandle texture,
     const struct Ps2GsVu1TransformVertex *transform_vertices,
     uint32_t vertex_count, const float scale[4], const float offset[4]);
+/*
+ * Same contract with object-space vertices: VU1 applies `object` (clip
+ * matrix and fog constants) itself. At most PS2_GS_VU1_OBJECT_MAX_VERTICES.
+ */
+struct Ps2GsVu1ObjectTransform;
+struct Ps2GsVu1ObjectVertex;
+bool ps2GsCoreTryDrawTexturedTrianglesObject(Ps2GsTextureHandle texture,
+    const struct Ps2GsVu1ObjectVertex *object_vertices,
+    uint32_t vertex_count, const float scale[4], const float offset[4],
+    const struct Ps2GsVu1ObjectTransform *object);
 
 #ifdef __cplusplus
 }

@@ -40,6 +40,17 @@ bool ps2GsVu1QueueSubmitTexturedTransform(
     const struct Ps2GsVu1TransformVertex *vertices, uint32_t vertex_count,
     const struct Ps2GsPackedReg *suffix, uint32_t suffix_count);
 
+struct Ps2GsVu1ObjectTransform;
+struct Ps2GsVu1ObjectVertex;
+
+/* Same, through the object-space program: VU1 builds the records itself. */
+bool ps2GsVu1QueueSubmitObjectTransform(
+    const float scale[4], const float offset[4], uint32_t flags,
+    const struct Ps2GsVu1ObjectTransform *xform,
+    const struct Ps2GsPackedReg *prefix, uint32_t prefix_count,
+    const struct Ps2GsVu1ObjectVertex *vertices, uint32_t vertex_count,
+    const struct Ps2GsPackedReg *suffix, uint32_t suffix_count);
+
 #ifdef __cplusplus
 }
 #endif

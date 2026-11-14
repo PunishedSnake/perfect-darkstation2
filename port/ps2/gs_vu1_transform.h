@@ -52,6 +52,54 @@ struct Ps2GsVu1TransformLayout {
     uint32_t dma_chain_qw;
 };
 
+/*
+ * Object-space variant: VU1 builds the whole record. Each vertex is three
+ * quadwords of int32 lanes, straight from the N64 vertex:
+ *   (x, y, z, -)      object position (lane w ignored)
+ *   (u, v, 0, 0)      texture coordinate after the G_TEXTURE scale (s * S >> 16)
+ *   (r, g, b, a)      vertex colour bytes
+ * and VU1 computes
+ *   clip  = x * m[0] + y * m[1] + z * m[2] + m[3]   (Fast3D's convention)
+ *   s, t  = (u * tex_mul + tex_add) * tex_scale     (lanes x, y)
+ *   rgba  = trunc(r * color[0] + g * color[1] + b * color[2] + a * color[3]
+ *                 + color_add)                       (per lane)
+ * then the same divide/viewport/pack as the textured program. fog holds
+ * (255, B, -1, A): the XYZF2 fog lane is (255 - trunc(clamp(A z/w + B))) << 4.
+ * The constants follow the prefix slots (PS2_GS_VU1_OBJECT_XFORM_QW).
+ */
+#define PS2_GS_VU1_OBJECT_PROGRAM_ADDRESS 256u
+#define PS2_GS_VU1_OBJECT_XFORM_QW 13u
+#define PS2_GS_VU1_OBJECT_MAX_VERTICES 75u
+
+struct Ps2GsVu1ObjectTransform {
+    float m[4][4];
+    float fog[4];
+    float tex_mul[4];
+    float tex_add[4];
+    float tex_scale[4];
+    float color[4][4];
+    float color_add[4];
+};
+
+struct Ps2GsVu1ObjectVertex {
+    int32_t pos[4];
+    int32_t uv[4];
+    int32_t rgba[4];
+};
+
+bool ps2GsVu1PlanObjectTransform(uint32_t vertex_count,
+    uint32_t prefix_count, uint32_t suffix_count,
+    struct Ps2GsVu1TransformLayout *layout);
+
+bool ps2GsVu1BuildObjectTransformPayload(
+    uint32_t *destination, uint32_t capacity_qw,
+    const float scale[4], const float offset[4], uint32_t flags,
+    const struct Ps2GsVu1ObjectTransform *xform,
+    const struct Ps2GsPackedReg *prefix, uint32_t prefix_count,
+    const struct Ps2GsVu1ObjectVertex *vertices, uint32_t vertex_count,
+    const struct Ps2GsPackedReg *suffix, uint32_t suffix_count,
+    struct Ps2GsVu1TransformLayout *layout);
+
 bool ps2GsVu1PlanTexturedTransform(uint32_t vertex_count,
     uint32_t prefix_count, uint32_t suffix_count,
     struct Ps2GsVu1TransformLayout *layout);

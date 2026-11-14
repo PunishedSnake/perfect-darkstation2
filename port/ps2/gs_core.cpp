@@ -2859,7 +2859,8 @@ static bool ps2GsCoreDrawTexturedTrianglesInternal(GSTEXTURE *tex,
     bool texture_flush, const struct Ps2GsRenderTargetTextureView *target_view,
     const struct Ps2GsVu1TransformVertex *transform_vertices,
     const float transform_scale[4], const float transform_offset[4],
-    bool allow_path3 = true)
+    bool allow_path3 = true,
+    const struct Ps2GsVu1ObjectTransform *object = NULL)
 {
     /* PATH3 needs final vertices; a VU1-only attempt needs transform input. */
     if (!tex || vertex_count == 0u ||
@@ -2976,9 +2977,27 @@ static bool ps2GsCoreDrawTexturedTrianglesInternal(GSTEXTURE *tex,
         bool submitted = false;
         uint32_t final_register_count =
             prefix_count + vertex_count * 3u + suffix_count;
-        if (vertex_count <= PS2_GS_VU1_MAX_TEXTURED_VERTICES &&
+        if (vertex_count <= (object ? PS2_GS_VU1_OBJECT_MAX_VERTICES
+                                    : PS2_GS_VU1_MAX_TEXTURED_VERTICES) &&
             vertex_count % 3u == 0u) {
-            if (transform_vertices && transform_scale && transform_offset) {
+            if (object && transform_vertices && transform_scale &&
+                transform_offset) {
+                submitted = ps2GsVu1QueueSubmitObjectTransform(
+                    transform_scale, transform_offset,
+                    s_gs->PrimFogEnable != 0
+                        ? PS2_GS_VU1_TRANSFORM_FLAG_FOG : 0u,
+                    object,
+                    prefix_count != 0u ? prefix : NULL, prefix_count,
+                    (const struct Ps2GsVu1ObjectVertex *)transform_vertices,
+                    vertex_count,
+                    suffix_count != 0u ? suffix : NULL, suffix_count);
+                final_register_count =
+                    PS2_GS_VU1_TRANSFORM_MAX_PREFIX_RECORDS +
+                    vertex_count * 3u +
+                    PS2_GS_VU1_TRANSFORM_MAX_SUFFIX_RECORDS;
+            } else if (object) {
+                submitted = false;
+            } else if (transform_vertices && transform_scale && transform_offset) {
                 submitted = ps2GsVu1QueueSubmitTexturedTransform(
                     transform_scale, transform_offset,
                     s_gs->PrimFogEnable != 0
@@ -3281,6 +3300,30 @@ extern "C" bool ps2GsCoreTryDrawTexturedTrianglesTransform(
     return ps2GsCoreDrawTexturedTrianglesInternal(
         &slot->texture, NULL, vertex_count, false, NULL,
         transform_vertices, scale, offset, false);
+}
+
+extern "C" bool ps2GsCoreTryDrawTexturedTrianglesObject(
+    Ps2GsTextureHandle handle,
+    const struct Ps2GsVu1ObjectVertex *object_vertices,
+    uint32_t vertex_count, const float scale[4], const float offset[4],
+    const struct Ps2GsVu1ObjectTransform *object)
+{
+    if (!s_gs || !s_frame_building || !object_vertices || !object ||
+        !scale || !offset || vertex_count == 0u ||
+        vertex_count > PS2_GS_VU1_OBJECT_MAX_VERTICES) {
+        return false;
+    }
+
+    struct Ps2GsTextureSlot *slot = ps2GsCoreTextureSlot(handle);
+    if (!slot || !slot->uploaded) {
+        return false;
+    }
+
+    /* same three quadwords per vertex; the object program reads them as int32 */
+    return ps2GsCoreDrawTexturedTrianglesInternal(
+        &slot->texture, NULL, vertex_count, false, NULL,
+        (const struct Ps2GsVu1TransformVertex *)object_vertices,
+        scale, offset, false, object);
 }
 
 static bool ps2GsCoreDrawRenderTargetView(
