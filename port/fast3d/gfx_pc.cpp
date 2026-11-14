@@ -446,9 +446,13 @@ static void gfx_ps2_direct_flush_records(void) {
 }
 
 static inline void gfx_ps2_direct_invalidate_vertices(size_t first, size_t count) {
-    for (size_t i = 0; i < count && first + i < MAX_VERTICES; ++i) {
-        gfx_ps2_direct.tag[first + i] = 0;
+    if (first >= MAX_VERTICES) {
+        return;
     }
+    if (count > MAX_VERTICES - first) {
+        count = MAX_VERTICES - first;
+    }
+    memset(&gfx_ps2_direct.tag[first], 0, count * sizeof(gfx_ps2_direct.tag[0]));
     gfx_ps2_at_invalidate_vertices(first, count);
 }
 
@@ -1508,6 +1512,17 @@ static void gfx_adjust_width_height_for_scale(uint32_t& width, uint32_t& height)
     }
 }
 
+#if defined(PLATFORM_PS2) && defined(_EE)
+/* VU0 CLIP flags (bit0 +x, 1 -x, 2 +y, 3 -y, 4 +z) -> LoadedVertex.clip_rej. */
+static const uint8_t gfx_vclip_to_rej[32] = {
+#define R(f) (uint8_t)((((f) & 1) ? 2 : 0) | (((f) & 2) ? 1 : 0) | (((f) & 4) ? 8 : 0) | \
+                      (((f) & 8) ? 4 : 0) | (((f) & 16) ? 32 : 0))
+    R(0), R(1), R(2), R(3), R(4), R(5), R(6), R(7), R(8), R(9), R(10), R(11), R(12), R(13), R(14), R(15),
+    R(16), R(17), R(18), R(19), R(20), R(21), R(22), R(23), R(24), R(25), R(26), R(27), R(28), R(29), R(30), R(31),
+#undef R
+};
+#endif
+
 static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx* vertices) {
     SUPPORT_CHECK(n_vertices <= MAX_VERTICES);
 
@@ -1521,6 +1536,7 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx* verti
 #if defined(PLATFORM_PS2) && defined(_EE)
     int32_t vtx_in[4] __attribute__((aligned(16))) = { 0, 0, 0, 1 };
     float vtx_out[4] __attribute__((aligned(16)));
+    uint32_t vclip = 0;
     __asm__ __volatile__(
         "lqc2    $vf4, 0(%0)\n\t"
         "lqc2    $vf5, 16(%0)\n\t"
@@ -1533,6 +1549,20 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx* verti
     const bool aspect_adjust = !fbActive;
     const float aspect_ofs = rsp.aspect_ofs;
     const float aspect_k = rsp.aspect_scale / gfx_current_dimensions.aspect_ratio;
+#if defined(PLATFORM_PS2) && defined(_EE)
+    /* x' = (ofs * w + x) * k on VU0 (identity when not adjusting), so the
+     * transformed vertex in vf2 is final and VCLIP can classify it. */
+    {
+        float asp_k[4] __attribute__((aligned(16))) = { aspect_adjust ? aspect_k : 1.0f, 1.0f, 1.0f, 1.0f };
+        float asp_o[4] __attribute__((aligned(16))) = { aspect_adjust ? aspect_ofs : 0.0f, 0.0f, 0.0f, 0.0f };
+        __asm__ __volatile__(
+            "lqc2    $vf21, 0(%0)\n\t"
+            "lqc2    $vf22, 0(%1)\n\t"
+            :
+            : "r"(asp_k), "r"(asp_o)
+            : "memory");
+    }
+#endif
 
     /* Lighting state is per call too; the 1/127 normal scale folds into it. */
     const bool lighting = (rsp.geometry_mode & G_LIGHTING) != 0;
@@ -1634,14 +1664,22 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx* verti
         vtx_in[1] = v->v[1];
         vtx_in[2] = v->v[2];
         __asm__ __volatile__(
-            "lqc2    $vf1, 0(%1)\n\t"
+            "lqc2    $vf1, 0(%2)\n\t"
             "vitof0.xyz $vf1, $vf1\n\t"
             "vmulax.xyzw  $ACC, $vf4, $vf1x\n\t"
             "vmadday.xyzw $ACC, $vf5, $vf1y\n\t"
             "vmaddaz.xyzw $ACC, $vf6, $vf1z\n\t"
             "vmaddw.xyzw  $vf2, $vf7, $vf0w\n\t"
-            "sqc2    $vf2, 0(%0)\n\t"
-            :
+            "vmulw.x      $vf3, $vf22, $vf2w\n\t"
+            "vadd.x       $vf2, $vf2, $vf3\n\t"
+            "vmul.x       $vf2, $vf2, $vf21\n\t"
+            "vclipw.xyz   $vf2xyz, $vf2w\n\t"
+            "sqc2    $vf2, 0(%1)\n\t"
+            "vnop\n\t"
+            "vnop\n\t"
+            "vnop\n\t"
+            "cfc2    %0, $vi18\n\t"
+            : "=r"(vclip)
             : "r"(vtx_out), "r"(vtx_in)
             : "memory");
         float x = vtx_out[0];
@@ -1658,9 +1696,11 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx* verti
         float w = vx * m[0][3] + vy * m[1][3] + vz * m[2][3] + m[3][3];
 #endif
 
+#if !(defined(PLATFORM_PS2) && defined(_EE))
         if (aspect_adjust) {
             x = (aspect_ofs * w + x) * aspect_k;
         }
+#endif
 
         short U = v->s * rsp.texture_scaling_factor.s >> 16;
         short V = v->t * rsp.texture_scaling_factor.t >> 16;
@@ -1781,22 +1821,33 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx* verti
         d->v = V;
 
         // trivial clip rejection
-        d->clip_rej = 0;
-        if (x < -w) {
-            d->clip_rej |= 1; // CLIP_LEFT
-        }
-        if (x > w) {
-            d->clip_rej |= 2; // CLIP_RIGHT
-        }
-        if (y < -w) {
-            d->clip_rej |= 4; // CLIP_BOTTOM
-        }
-        if (y > w) {
-            d->clip_rej |= 8; // CLIP_TOP
-        }
-        // if (z < -w) d->clip_rej |= 16; // CLIP_NEAR
-        if (z > w) {
-            d->clip_rej |= 32; // CLIP_FAR
+#if defined(PLATFORM_PS2) && defined(_EE)
+        /* VCLIP compares against |w|, which matches the signed tests below
+         * only for w > 0. Its flags (+x -x +y -y +z -z) map to
+         * RIGHT LEFT TOP BOTTOM FAR -. */
+        if (w > 0.0f) {
+            d->clip_rej = gfx_vclip_to_rej[vclip & 0x1f];
+        } else
+#endif
+        {
+            uint8_t rej = 0;
+            if (x < -w) {
+                rej |= 1; // CLIP_LEFT
+            }
+            if (x > w) {
+                rej |= 2; // CLIP_RIGHT
+            }
+            if (y < -w) {
+                rej |= 4; // CLIP_BOTTOM
+            }
+            if (y > w) {
+                rej |= 8; // CLIP_TOP
+            }
+            // if (z < -w) rej |= 16; // CLIP_NEAR
+            if (z > w) {
+                rej |= 32; // CLIP_FAR
+            }
+            d->clip_rej = rej;
         }
 
         d->x = x;
@@ -2562,9 +2613,8 @@ static struct {
 } gfx_ps2_at = { 0, 1 };
 
 static inline void gfx_ps2_at_invalidate_vertices(size_t first, size_t count) {
-    for (size_t i = 0; i < count && first + i < MAX_VERTICES; ++i) {
-        gfx_ps2_at.tag[first + i] = 0;
-    }
+    /* range already clamped by gfx_ps2_direct_invalidate_vertices */
+    memset(&gfx_ps2_at.tag[first], 0, count * sizeof(gfx_ps2_at.tag[0]));
 }
 
 static void gfx_ps2_at_flush(void) {
