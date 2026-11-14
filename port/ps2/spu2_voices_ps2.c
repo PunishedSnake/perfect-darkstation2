@@ -50,6 +50,9 @@ extern u8 *_seqtblSegmentRomStart, *_seqtblSegmentRomEnd;
 bool g_Ps2HwVoices;
 
 static s32 s_enabled_cfg = 1;
+/* SPU2 reverb for hardware voices: SD_EFFECT_MODE_* (0 off, 5 hall). */
+static s32 s_reverb_mode = 5;
+static s32 s_reverb_depth = 0x3000;
 static SifRpcClientData_t s_client __attribute__((aligned(64)));
 static PdSndFrameArgs s_frame[2] __attribute__((aligned(64)));
 static u32 s_frame_index;
@@ -69,6 +72,8 @@ static PdSndFrameArgs *cur_frame(void)
 PD_CONSTRUCTOR static void ps2HwVoicesConfigInit(void)
 {
     configRegisterInt("Audio.HardwareVoices", &s_enabled_cfg, 0, 1);
+    configRegisterInt("Audio.HardwareReverb", &s_reverb_mode, 0, 9);
+    configRegisterInt("Audio.HardwareReverbDepth", &s_reverb_depth, 0, 0x7fff);
 }
 
 static bool load_bank_index(void)
@@ -130,6 +135,8 @@ void ps2HwVoicesInit(s32 output_rate)
     args.protocol = PDSND_PROTOCOL;
     args.spu_base = PS2_HW_SPU_BASE;
     args.spu_end = PS2_HW_SPU_END;
+    args.reverb_mode = (u16)s_reverb_mode;
+    args.reverb_depth = (u16)s_reverb_depth;
     strncpy(args.path, fsFullPath(PS2_HW_BANK_NAME), sizeof(args.path) - 1);
     if (SifCallRpc(&s_client, PDSND_FUNC_INIT, 0, &args, sizeof(args), &args, sizeof(args), NULL, NULL) < 0) {
         sysLogPrintf(LOG_ERROR, "SPU2 voices: INIT RPC failed");

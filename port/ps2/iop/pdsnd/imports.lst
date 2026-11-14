@@ -13,6 +13,8 @@ I_sceSdSetSwitch
 I_sceSdGetSwitch
 I_sceSdVoiceTrans
 I_sceSdVoiceTransStatus
+I_sceSdSetEffectAttr
+I_sceSdSetCoreAttr
 libsd_IMPORTS_end
 
 loadcore_IMPORTS_start

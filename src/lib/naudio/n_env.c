@@ -39,9 +39,10 @@ N_PVoice *g_N64PVoiceBase;
 static s16 hwVoiceVol(N_PVoice *e, s32 right)
 {
 	s32 v = (e->em_volume * n_eqpower[right ? N_EQPOWER_LENGTH - e->em_pan - 1 : e->em_pan]) >> 15;
-	/* No per-voice reverb send yet: fold the wet share in at half level so
-	 * effects routed mostly to the FX bus do not vanish. */
-	s32 g = (e->em_dryamt & 0xfffe) + ((e->em_wetamt & 0xfffe) >> 1);
+	/* An SPU2 voice has one level for both its dry output and its reverb
+	 * send. Dry plus a quarter of the wet amount keeps mostly-wet voices
+	 * audible and feeding the reverb, whose return makes up the rest. */
+	s32 g = (e->em_dryamt & 0xfffe) + ((e->em_wetamt & 0xfffe) >> 2);
 
 	if (g > 0x7fff) {
 		g = 0x7fff;
@@ -54,6 +55,11 @@ static s16 hwVoiceVol(N_PVoice *e, s32 right)
 	 * Match that so music, effects and the streamed speech keep the N64
 	 * balance. */
 	return (s16)(v >> 2);
+}
+
+static u16 hwVoiceFlags(N_PVoice *e)
+{
+	return (e->em_wetamt & 0xfffe) >= 0x1000 ? PDSND_FLAG_REVERB : 0;
 }
 
 static u32 hwSamplesToUs(s32 samples)
@@ -70,6 +76,7 @@ static void hwRamp(N_PVoice *e, s32 remaining)
 	PdSndVoiceCmd cmd = {0};
 	cmd.op = PDSND_OP_RAMP;
 	cmd.voice = (u8)(e - g_N64PVoiceBase);
+	cmd.flags = hwVoiceFlags(e);
 	cmd.tgt_l = hwVoiceVol(e, 0);
 	cmd.tgt_r = hwVoiceVol(e, 1);
 	cmd.ramp_us = hwSamplesToUs(remaining);
@@ -97,6 +104,7 @@ static void hwKeyOn(N_PVoice *e, ALWaveTable *w, s32 attack)
 	cmd.op = PDSND_OP_KEYON;
 	cmd.voice = (u8)(e - g_N64PVoiceBase);
 	cmd.entry = (u16)entry;
+	cmd.flags = hwVoiceFlags(e);
 	cmd.pitch = ps2HwVoicesPitch(e->rs_upitch ? 1.0f : e->rs_ratio);
 	cmd.tgt_l = hwVoiceVol(e, 0);
 	cmd.tgt_r = hwVoiceVol(e, 1);

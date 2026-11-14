@@ -16,9 +16,10 @@
  *    1 ms steps.
  *
  * Coexists with audsrv, which keeps the PCM stream (speech, mixed residue)
- * on core 1's sound-data input. Voices 0..23 are core 0, routed into core 1
- * through its external input; 24..47 are core 1. audsrv silences core 0's
- * master volume whenever it changes state, so each FRAME restores it.
+ * on core 1's sound-data input. Voices 0..23 are core 1, which also runs the
+ * SPU2 reverb for voices with an FX send; 24..47 are core 0, routed into
+ * core 1 through its external input. audsrv silences core 0's master volume
+ * whenever it changes state, so each FRAME restores it.
  */
 
 #include "irx_imports.h"
@@ -88,10 +89,26 @@ struct Voice {
 };
 
 static struct Voice s_voices[PDSND_MAX_VOICES];
-
-static inline int voice_core(int v) { return v / 24; }
+/* Low voice numbers (allocated first by n_audio) go to core 1, the core
+ * whose effect unit runs the reverb. */
+static inline int voice_core(int v) { return v < 24 ? 1 : 0; }
 static inline int voice_index(int v) { return v % 24; }
 static inline int voice_reg(int v) { return SD_VOICE(voice_core(v), voice_index(v)); }
+
+static u32 s_wet_mask; /* core 1 voices currently sending to the reverb */
+
+static void voice_set_wet(int v, int wet)
+{
+    if (voice_core(v) != 1) {
+        return;
+    }
+    if (wet) {
+        s_wet_mask |= 1u << voice_index(v);
+    } else {
+        s_wet_mask &= ~(1u << voice_index(v));
+    }
+}
+
 
 static void lock(void) { WaitSema(s_lock); }
 static void unlock(void) { SignalSema(s_lock); }
@@ -270,6 +287,7 @@ static void apply_frame(const PdSndFrameArgs *f)
     u32 koff[2] = { 0, 0 };
 
     lock();
+    const u32 wet_before = s_wet_mask;
     /* Unpin voices whose release has run out. */
     for (int v = 0; v < (int)PDSND_MAX_VOICES; ++v) {
         struct Voice *vs = &s_voices[v];
@@ -326,11 +344,13 @@ static void apply_frame(const PdSndFrameArgs *f)
             vs->cur_r = (s32)cmd->cur_r << 16;
             voice_start_ramp(vs, cmd->tgt_l, cmd->tgt_r, cmd->ramp_us);
             voice_set_volume(v, vs->cur_l, vs->cur_r);
+            voice_set_wet(v, cmd->flags & PDSND_FLAG_REVERB);
             kon[voice_core(v)] |= 1u << voice_index(v);
             koff[voice_core(v)] &= ~(1u << voice_index(v));
             break;
         }
         case PDSND_OP_RAMP:
+            voice_set_wet(v, cmd->flags & PDSND_FLAG_REVERB);
             voice_start_ramp(vs, cmd->tgt_l, cmd->tgt_r, cmd->ramp_us);
             if (vs->steps_left == 0) {
                 voice_set_volume(v, vs->cur_l, vs->cur_r);
@@ -356,6 +376,11 @@ static void apply_frame(const PdSndFrameArgs *f)
      * external input, which audsrv keeps at full volume. */
     sceSdSetParam(SD_CORE_0 | SD_PARAM_MVOLL, 0x3fff);
     sceSdSetParam(SD_CORE_0 | SD_PARAM_MVOLR, 0x3fff);
+
+    if (s_wet_mask != wet_before) {
+        sceSdSetSwitch(SD_CORE_1 | SD_SWITCH_VMIXEL, s_wet_mask);
+        sceSdSetSwitch(SD_CORE_1 | SD_SWITCH_VMIXER, s_wet_mask);
+    }
 
     for (int core = 0; core < 2; ++core) {
         if (koff[core]) {
@@ -450,9 +475,10 @@ static int do_init(const PdSndInitArgs *a)
         s_voices[v].entry = NO_ENTRY;
     }
     /* Voices: dry to the core's output; core 1 also mixes its external
-     * input (core 0) and sound-data input (audsrv's stream) dry. */
+     * input (core 0) and sound-data input (audsrv's stream) dry, and its
+     * voices' wet sends through the effect unit. */
     sceSdSetParam(SD_CORE_0 | SD_PARAM_MMIX, 0x000c);
-    sceSdSetParam(SD_CORE_1 | SD_PARAM_MMIX, 0x0ccc);
+    sceSdSetParam(SD_CORE_1 | SD_PARAM_MMIX, 0x0ccf);
     sceSdSetSwitch(SD_CORE_0 | SD_SWITCH_VMIXL, 0xffffff);
     sceSdSetSwitch(SD_CORE_0 | SD_SWITCH_VMIXR, 0xffffff);
     sceSdSetSwitch(SD_CORE_1 | SD_SWITCH_VMIXL, 0xffffff);
@@ -461,8 +487,26 @@ static int do_init(const PdSndInitArgs *a)
     sceSdSetSwitch(SD_CORE_0 | SD_SWITCH_VMIXER, 0);
     sceSdSetSwitch(SD_CORE_1 | SD_SWITCH_VMIXEL, 0);
     sceSdSetSwitch(SD_CORE_1 | SD_SWITCH_VMIXER, 0);
+    s_wet_mask = 0;
     sceSdSetParam(SD_CORE_0 | SD_PARAM_MVOLL, 0x3fff);
     sceSdSetParam(SD_CORE_0 | SD_PARAM_MVOLR, 0x3fff);
+
+    /* Core 1 reverb in the top of SPU2 RAM, above the sample cache. */
+    if (a->reverb_mode != 0) {
+        sceSdEffectAttr fx;
+        memset(&fx, 0, sizeof(fx));
+        fx.core = SD_CORE_1;
+        fx.mode = (int)a->reverb_mode | SD_EFFECT_MODE_CLEAR;
+        fx.depth_L = (short)a->reverb_depth;
+        fx.depth_R = (short)a->reverb_depth;
+        fx.delay = 0;
+        fx.feedback = 0;
+        sceSdSetAddr(SD_CORE_1 | SD_ADDR_EEA, 0x1fffff);
+        sceSdSetEffectAttr(SD_CORE_1, &fx);
+        sceSdSetParam(SD_CORE_1 | SD_PARAM_EVOLL, a->reverb_depth);
+        sceSdSetParam(SD_CORE_1 | SD_PARAM_EVOLR, a->reverb_depth);
+        sceSdSetCoreAttr(SD_CORE_1 | SD_CORE_EFFECT_ENABLE, 1);
+    }
     s_fd = fd;
     s_init_result.entries = s_header.entry_count;
     s_init_result.rom_crc = s_header.rom_crc;
