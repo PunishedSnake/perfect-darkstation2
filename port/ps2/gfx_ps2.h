@@ -244,6 +244,20 @@ struct GfxPs2DirectContext {
 };
 
 bool gfxPs2DirectQuery(struct GfxPs2DirectContext *ctx);
+
+/*
+ * Alpha-trilerp shared-vertex path: the frontend hands one vertex's VBO
+ * floats to gfxPs2DirectFillAT once per (vertex slot, state), then appends
+ * triangles of cached slots and submits the batch with gfxPs2DirectDrawAT.
+ * gfxPs2DirectQueryAT returns 0 when the current state is not eligible.
+ */
+int gfxPs2DirectQueryAT(void);
+void gfxPs2DirectUpdateGuard(float *guard_x, float *guard_y);
+void gfxPs2DirectFillAT(uint32_t slot, const float *vbo_vertex);
+uint32_t gfxPs2DirectATCapacity(void);
+uint32_t gfxPs2DirectATCount(void);
+void gfxPs2DirectAppendAT(uint32_t a, uint32_t b, uint32_t c);
+void gfxPs2DirectDrawAT(const uint8_t fog_rgb[3]);
 void gfxPs2DirectDraw(const struct Ps2GsVu1TransformVertex *vertices,
     uint32_t vertex_count, bool trilerp, bool w_ok, const uint8_t fog_rgb[3]);
 

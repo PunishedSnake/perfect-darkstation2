@@ -63,7 +63,7 @@ jobs:
 
     steps:
       - name: Install host-side build tools
-        run: apk add --no-cache bash cmake g++ git ninja python3 zlib-dev
+        run: apk add --no-cache bash cmake g++ git make ninja python3 zlib-dev
 
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -133,6 +133,11 @@ jobs:
             port/ps2/spu2_adpcm_test.c \
             -lm -o /tmp/spu2_adpcm_test
           /tmp/spu2_adpcm_test
+          gcc -std=c11 -O2 -Wall -Wextra -Werror \
+            -Iport/ps2 \
+            tools/ps2/pd_spu2bank.c \
+            port/ps2/spu2_adpcm.c \
+            -lm -o /tmp/pd_spu2bank
 
       - name: Test GS command budget and VRAM allocator
         run: |

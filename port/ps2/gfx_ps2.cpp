@@ -5544,7 +5544,13 @@ extern "C" bool gfxPs2DirectQuery(struct GfxPs2DirectContext *ctx)
         }
     }
 
-    /* Same guard band ps2_draw_triangles() derives for this viewport. */
+    gfxPs2DirectUpdateGuard(&ctx->guard_x, &ctx->guard_y);
+    return true;
+}
+
+/* Same guard band ps2_draw_triangles() derives for this viewport. */
+extern "C" void gfxPs2DirectUpdateGuard(float *out_gx, float *out_gy)
+{
     {
         const float half_w = (float)s_viewport.width * 0.5f;
         const float half_h = (float)s_viewport.height * 0.5f;
@@ -5560,10 +5566,9 @@ extern "C" bool gfxPs2DirectQuery(struct GfxPs2DirectContext *ctx)
         gx = gx > 8.0f ? 8.0f : gx;
         gy = gy > 8.0f ? 8.0f : gy;
         ps2GsClipSetGuardBand(gx, gy);
-        ctx->guard_x = gx;
-        ctx->guard_y = gy;
+        *out_gx = gx;
+        *out_gy = gy;
     }
-    return true;
 }
 
 /*
@@ -5673,6 +5678,354 @@ extern "C" void gfxPs2DirectDraw(const struct Ps2GsVu1TransformVertex *vertices,
         ps2GsCoreSetAlphaWrite(true);
     }
 }
+/*
+ * Alpha-trilerp shared-vertex path. These shaders (two-texture blends with
+ * per-vertex alpha) dominate the heaviest scenes, the intro especially; the
+ * generic translator spent ~700 EE cycles on every triangle corner. Here each
+ * loaded vertex is translated once per state into the same per-vertex
+ * structures (Ps2AlphaTrilerpVertex plus the two packed pass vertices),
+ * cached per vertex slot, and triangles copy them into the batch that
+ * ps2_draw_alpha_trilerp / ps2_draw_trilerp_independent_alpha consume.
+ *
+ * The translation below is the translator's alpha-trilerp branch for one
+ * vertex, fed with the frontend's VBO floats for that vertex.
+ */
+enum { PS2_AT_CACHE_SLOTS = 128 };
+static struct Ps2AlphaTrilerpVertex s_at_cache[PS2_AT_CACHE_SLOTS];
+static struct Ps2GsTexturedVertex s_at_cache_stq[2][PS2_AT_CACHE_SLOTS];
+static uint32_t s_at_count;
+static bool s_at_opaque_textures;
+static bool s_at_independent;
+
+/* 0: no, 1: alpha trilerp, 2: independent alpha trilerp. */
+static int ps2_direct_at_path(void)
+{
+    if (!s_shader || !s_shader->plan.supported || !s_shader->plan.textured) {
+        return 0;
+    }
+    const bool alpha_trilerp = s_shader->plan.pass_graph ==
+        PS2_PASS_GRAPH_ALPHA_TRILERP_MODULATE;
+    const bool independent = ps2_is_trilerp_independent_alpha(&s_shader->plan);
+    if (ps2_is_independent_tex0_alpha(&s_shader->plan)) {
+        return 0;
+    }
+    return alpha_trilerp ? 1 : independent ? 2 : 0;
+}
+
+/*
+ * Per-setup constants for gfxPs2DirectFillAT. The shader, textures,
+ * viewport and depth range only change with a new triangle setup, so the
+ * per-vertex fill reads these instead of re-deriving them (the generic
+ * translator branch re-read the shader features, sampler table and GS
+ * offsets for every vertex).
+ */
+enum {
+    PS2_AT_ALPHA_CUSTOM22_23,
+    PS2_AT_ALPHA_CUSTOM24,
+    PS2_AT_ALPHA_TEX01_LERP,
+    PS2_AT_ALPHA_INPUT1,
+    PS2_AT_ALPHA_TEX1_MUL_INPUT1,
+    PS2_AT_ALPHA_DEFAULT_TEXFRAG,
+    PS2_AT_ALPHA_DEFAULT_MODULATE,
+};
+static struct {
+    float ss[2], st[2];
+    float vx, vw, vy, vh;
+    float depth_near, depth_span;
+    uint8_t used[2];
+    uint8_t fog;
+    uint8_t alpha;
+    uint8_t num_inputs;
+    uint8_t alpha_kind;
+    uint8_t final_from_input1; /* alpha-trilerp default recipe */
+    bool decal;
+} s_at_plan;
+
+static void ps2_at_plan_build(void)
+{
+    const struct ShaderProgram *prg = s_shader;
+    ps2_refresh_gs_offsets();
+    for (int t = 0; t < 2; ++t) {
+        s_at_plan.used[t] = prg->features.used_textures[t] ? 1u : 0u;
+        const Ps2GsTextureHandle handle = s_selected_texture[t];
+        s_at_plan.ss[t] = handle < PS2_GFX_TEXTURE_STATE_SLOTS
+            ? s_texture_sampler[handle].coordinate_scale_s : 1.0f;
+        s_at_plan.st[t] = handle < PS2_GFX_TEXTURE_STATE_SLOTS
+            ? s_texture_sampler[handle].coordinate_scale_t : 1.0f;
+    }
+    s_at_plan.fog = prg->features.opt_fog ? 1u : 0u;
+    s_at_plan.alpha = prg->features.opt_alpha ? 1u : 0u;
+    s_at_plan.num_inputs = (uint8_t)(prg->features.num_inputs > 3
+        ? 3 : prg->features.num_inputs);
+    s_at_plan.vx = (float)s_viewport.x;
+    s_at_plan.vw = (float)s_viewport.width;
+    s_at_plan.vy = (float)s_viewport.y;
+    s_at_plan.vh = (float)s_viewport.height;
+    s_at_plan.depth_near = s_depth_near;
+    s_at_plan.depth_span = s_depth_far - s_depth_near;
+    s_at_plan.decal = s_depth_decal;
+    s_at_plan.final_from_input1 = prg->plan.pass_graph ==
+        PS2_PASS_GRAPH_ALPHA_TRILERP_MODULATE ? 1u : 0u;
+    if (ps2_independent_alpha_is_custom22_23(&prg->plan)) {
+        s_at_plan.alpha_kind = PS2_AT_ALPHA_CUSTOM22_23;
+    } else if (ps2_independent_alpha_is_custom24(&prg->plan)) {
+        s_at_plan.alpha_kind = PS2_AT_ALPHA_CUSTOM24;
+    } else if (prg->plan.alpha_recipe ==
+            PS2_ALPHA_TEX01_LERP_INPUT1_MUL_INPUT2_PLUS_INPUT3) {
+        s_at_plan.alpha_kind = PS2_AT_ALPHA_TEX01_LERP;
+    } else if (prg->plan.alpha_recipe == PS2_ALPHA_INPUT1) {
+        s_at_plan.alpha_kind = PS2_AT_ALPHA_INPUT1;
+    } else if (prg->plan.alpha_recipe == PS2_ALPHA_TEX1_MUL_INPUT1) {
+        s_at_plan.alpha_kind = PS2_AT_ALPHA_TEX1_MUL_INPUT1;
+    } else if (prg->plan.alpha_recipe == PS2_ALPHA_TEX0_MUL_INPUT1_MUL_INPUT2) {
+        s_at_plan.alpha_kind = PS2_AT_ALPHA_DEFAULT_TEXFRAG;
+    } else {
+        s_at_plan.alpha_kind = PS2_AT_ALPHA_DEFAULT_MODULATE;
+    }
+}
+
+extern "C" int gfxPs2DirectQueryAT(void)
+{
+    if (!ps2GsCoreIsReady() || ps2RendererTraceIsCapturing() ||
+        s_fb_draw_target != 0 || s_fb_texture != 0 || !s_shader) {
+        return 0;
+    }
+    const int path = ps2_direct_at_path();
+    if (path == 0 || s_shader->features.opt_grayscale || s_modulate) {
+        return 0;
+    }
+    for (int t = 0; t < 2; ++t) {
+        if (s_shader->features.clamp[t][0] || s_shader->features.clamp[t][1]) {
+            return 0; /* region clamps are decoded per draw from the VBO */
+        }
+    }
+    /* This recipe derives the draw's texture-edge reference from its first
+     * vertex; keep it on the VBO path. */
+    if (s_shader->plan.alpha_recipe == PS2_ALPHA_INPUT1_PLUS_INPUT2_EDGE) {
+        return 0;
+    }
+    ps2_at_plan_build();
+    return path;
+}
+
+/* Translate one vertex (VBO floats) into cache slot `slot`. Same arithmetic
+ * as the translator's alpha-trilerp branch, with the per-setup decisions
+ * taken from s_at_plan. */
+extern "C" void gfxPs2DirectFillAT(uint32_t slot, const float *src)
+{
+    if (slot >= PS2_AT_CACHE_SLOTS) {
+        return;
+    }
+    const float clip_x = src[0];
+    const float clip_y = src[1];
+    const float clip_z = src[2];
+    const float clip_w = src[3];
+    const float *in = src + 4;
+    const float inv_w = ps2_clip_inv_w(clip_w);
+
+    float tex_u0 = 0.0f, tex_v0 = 0.0f, tex_u1 = 0.0f, tex_v1 = 0.0f;
+    if (s_at_plan.used[0]) {
+        tex_u0 = in[0] * s_at_plan.ss[0];
+        tex_v0 = in[1] * s_at_plan.st[0];
+        in += 2;
+    }
+    if (s_at_plan.used[1]) {
+        tex_u1 = in[0] * s_at_plan.ss[1];
+        tex_v1 = in[1] * s_at_plan.st[1];
+        in += 2;
+    }
+    float fog_factor = 0.0f;
+    if (s_at_plan.fog) {
+        fog_factor = in[3];
+        in += 4;
+    }
+    float input[3][4] = {
+        { 1.0f, 1.0f, 1.0f, 1.0f },
+        { 1.0f, 1.0f, 1.0f, 1.0f },
+        { 1.0f, 1.0f, 1.0f, 1.0f },
+    };
+    const int n = s_at_plan.num_inputs;
+    if (s_at_plan.alpha) {
+        for (int k = 0; k < n; ++k, in += 4) {
+            input[k][0] = in[0];
+            input[k][1] = in[1];
+            input[k][2] = in[2];
+            input[k][3] = in[3];
+        }
+    } else {
+        for (int k = 0; k < n; ++k, in += 3) {
+            input[k][0] = in[0];
+            input[k][1] = in[1];
+            input[k][2] = in[2];
+        }
+    }
+
+    /* ps2_project_screen / ps2_map_clip_depth_inv with plan constants. */
+    const float sx = s_at_plan.vx +
+        (clip_x * inv_w * 0.5f + 0.5f) * s_at_plan.vw;
+    const float sy = s_at_plan.vy +
+        (0.5f - clip_y * inv_w * 0.5f) * s_at_plan.vh;
+    const float ndc = inv_w != 0.0f ? ps2_saturate(clip_z * inv_w) : 1.0f;
+    const float ranged = ps2_saturate(
+        s_at_plan.depth_near + ndc * s_at_plan.depth_span);
+    const int iz = gfxPs2ApplyDecalDepthBias(
+        1 + (int)((1.0f - ranged) * 65534.0f), s_at_plan.decal);
+    const uint8_t fog = ps2_fog_coefficient(fog_factor);
+    const struct Ps2GsPackedReg packed_position = s_at_plan.fog
+        ? ps2_pack_xyzf2(sx, sy, iz, fog)
+        : ps2_pack_xyz2(sx, sy, iz);
+
+    struct Ps2AlphaTrilerpVertex *vertex = &s_at_cache[slot];
+    vertex->x = sx;
+    vertex->y = sy;
+    vertex->inv_w = inv_w;
+    vertex->tex_u[0] = tex_u0;
+    vertex->tex_u[1] = tex_u1;
+    vertex->tex_v[0] = tex_v0;
+    vertex->tex_v[1] = tex_v1;
+    vertex->z = iz;
+    const uint8_t shade_r = ps2_modulate_component(input[1][0]);
+    const uint8_t shade_g = ps2_modulate_component(input[1][1]);
+    const uint8_t shade_b = ps2_modulate_component(input[1][2]);
+    const uint8_t lod = ps2_modulate_component(input[0][0]);
+    vertex->shade_r = shade_r;
+    vertex->shade_g = shade_g;
+    vertex->shade_b = shade_b;
+    vertex->lod = lod;
+    vertex->primitive_alpha = 0u;
+    vertex->alpha_add = 0u;
+    vertex->final_alpha = 0x80u;
+    vertex->direct_alpha = ps2_texture_alpha_fragment_component(input[1][3]);
+    vertex->signed_alpha_delta = 0.0f;
+    switch (s_at_plan.alpha_kind) {
+        case PS2_AT_ALPHA_CUSTOM22_23:
+            vertex->shade_a = 0u;
+            vertex->independent_alpha = 0u;
+            vertex->primitive_alpha = ps2_modulate_component(input[2][3]);
+            vertex->signed_alpha_delta = input[0][3] - input[1][3];
+            break;
+        case PS2_AT_ALPHA_CUSTOM24:
+            vertex->shade_a = ps2_modulate_component(input[0][3]);
+            vertex->independent_alpha =
+                ps2_modulate_component(input[0][3] * input[1][3]);
+            break;
+        case PS2_AT_ALPHA_TEX01_LERP:
+            vertex->shade_a = ps2_modulate_component(input[1][3]);
+            vertex->independent_alpha = 0u;
+            vertex->final_alpha = ps2_modulate_component(input[1][3]);
+            vertex->alpha_add = ps2_u8_component(input[2][3]);
+            break;
+        case PS2_AT_ALPHA_INPUT1:
+            vertex->shade_a = 0x80u;
+            vertex->independent_alpha = ps2_modulate_component(input[0][3]);
+            break;
+        case PS2_AT_ALPHA_TEX1_MUL_INPUT1:
+            vertex->shade_a = 0x80u;
+            vertex->independent_alpha =
+                ps2_texture_alpha_fragment_component(input[0][3]);
+            break;
+        default:
+            vertex->shade_a = ps2_texture_alpha_fragment_component(input[1][3]);
+            vertex->independent_alpha =
+                s_at_plan.alpha_kind == PS2_AT_ALPHA_DEFAULT_TEXFRAG
+                ? ps2_texture_alpha_fragment_component(input[0][3] * input[1][3])
+                : ps2_modulate_component(input[0][3] * input[1][3]);
+            if (s_at_plan.final_from_input1) {
+                vertex->final_alpha = ps2_modulate_component(input[1][3]);
+            }
+            break;
+    }
+    vertex->fog = fog;
+
+    /* The opaque-texture-pair passes, built for every vertex so the cache
+     * does not depend on the textures' alpha (checked again at draw). */
+    s_at_cache_stq[0][slot].rgbaq = ps2_pack_rgbaq(
+        shade_r, shade_g, shade_b, 0x80u, inv_w);
+    s_at_cache_stq[0][slot].st = ps2_pack_st(tex_u0 * inv_w, tex_v0 * inv_w);
+    s_at_cache_stq[0][slot].xyz2 = packed_position;
+    s_at_cache_stq[1][slot].rgbaq = ps2_pack_rgbaq(
+        shade_r, shade_g, shade_b, lod, inv_w);
+    s_at_cache_stq[1][slot].st = ps2_pack_st(tex_u1 * inv_w, tex_v1 * inv_w);
+    s_at_cache_stq[1][slot].xyz2 = packed_position;
+}
+
+extern "C" uint32_t gfxPs2DirectATCapacity(void)
+{
+    return PS2_GFX_TRANSLATE_VERTS - (PS2_GFX_TRANSLATE_VERTS % 3u);
+}
+
+extern "C" void gfxPs2DirectAppendAT(uint32_t a, uint32_t b, uint32_t c)
+{
+    const uint32_t idx[3] = { a, b, c };
+    for (uint32_t k = 0; k < 3u; ++k) {
+        s_alpha_trilerp_vertices[s_at_count] = s_at_cache[idx[k]];
+        s_stq_vertices[0][s_at_count] = s_at_cache_stq[0][idx[k]];
+        s_stq_vertices[1][s_at_count] = s_at_cache_stq[1][idx[k]];
+        ++s_at_count;
+    }
+}
+
+extern "C" uint32_t gfxPs2DirectATCount(void)
+{
+    return s_at_count;
+}
+
+/* Submit the batch with the translator's per-draw state handling. */
+extern "C" void gfxPs2DirectDrawAT(const uint8_t fog_rgb[3])
+{
+    const uint32_t count = s_at_count;
+    s_at_count = 0u;
+    if (count == 0u || !ps2GsCoreIsReady() || !s_shader ||
+        !s_shader->plan.supported) {
+        return;
+    }
+    ps2_refresh_gs_offsets();
+    if (!ps2GsCoreTextureReady(s_selected_texture[0]) ||
+        !ps2GsCoreTextureReady(s_selected_texture[1])) {
+        return;
+    }
+    const int path = ps2_direct_at_path();
+    const bool texture_edge = s_shader->features.opt_texture_edge;
+    const bool invisible = s_shader->features.opt_invisible;
+    if (invisible) {
+        ps2GsCoreSetColorWrite(false);
+        ps2GsCoreSetAlphaWrite(false);
+    }
+    if (texture_edge) {
+        ps2GsCoreSetAlphaTest(true, PS2_GFX_TEXTURE_EDGE_THRESHOLD);
+        ps2GsCoreSetFramebufferAlphaForce(true);
+        ps2GsCoreSetAlphaBlend(false);
+    }
+    memset(s_draw_region_clamp, 0, sizeof(s_draw_region_clamp));
+    s_draw_texture_edge_reference = PS2_GFX_TEXTURE_EDGE_THRESHOLD;
+    if (s_shader->features.opt_fog) {
+        if (!s_direct_luts_ready) {
+            ps2_direct_init_luts();
+        }
+        s_draw_fog_r = s_direct_lut_u8[fog_rgb[0]];
+        s_draw_fog_g = s_direct_lut_u8[fog_rgb[1]];
+        s_draw_fog_b = s_direct_lut_u8[fog_rgb[2]];
+        ps2GsCoreSetFog(true, s_draw_fog_r, s_draw_fog_g, s_draw_fog_b);
+    }
+    if (path == 1) {
+        (void)ps2_draw_alpha_trilerp(count);
+    } else if (path == 2) {
+        (void)ps2_draw_trilerp_independent_alpha(count);
+    }
+    if (texture_edge) {
+        ps2GsCoreSetFramebufferAlphaForce(false);
+        ps2GsCoreSetAlphaBlend(s_alpha_blend);
+        ps2GsCoreSetAlphaTest(
+            s_shader->features.opt_alpha_threshold,
+            s_shader->features.opt_alpha_threshold ?
+                PS2_GFX_ALPHA_THRESHOLD : 0u);
+    }
+    if (invisible) {
+        ps2GsCoreSetColorWrite(true);
+        ps2GsCoreSetAlphaWrite(true);
+    }
+}
+
 #else
 extern "C" bool gfxPs2DirectQuery(struct GfxPs2DirectContext *ctx)
 {
@@ -5685,6 +6038,14 @@ extern "C" void gfxPs2DirectDraw(const struct Ps2GsVu1TransformVertex *vertices,
 {
     (void)vertices; (void)vertex_count; (void)trilerp; (void)w_ok; (void)fog_rgb;
 }
+
+extern "C" int gfxPs2DirectQueryAT(void) { return 0; }
+extern "C" void gfxPs2DirectUpdateGuard(float *gx, float *gy) { *gx = 1.0f; *gy = 1.0f; }
+extern "C" void gfxPs2DirectFillAT(uint32_t slot, const float *v) { (void)slot; (void)v; }
+extern "C" uint32_t gfxPs2DirectATCapacity(void) { return 0u; }
+extern "C" uint32_t gfxPs2DirectATCount(void) { return 0u; }
+extern "C" void gfxPs2DirectAppendAT(uint32_t a, uint32_t b, uint32_t c) { (void)a; (void)b; (void)c; }
+extern "C" void gfxPs2DirectDrawAT(const uint8_t fog_rgb[3]) { (void)fog_rgb; }
 #endif
 
 static void ps2_reset_viewport(void)

@@ -427,7 +427,16 @@ static struct {
     uint8_t batch_fog[3];
 } gfx_ps2_direct;
 
+static void gfx_ps2_at_flush(void);
+static void gfx_ps2_direct_flush_records(void);
+static inline void gfx_ps2_at_invalidate_vertices(size_t first, size_t count);
+
 static void gfx_ps2_direct_flush(void) {
+    gfx_ps2_at_flush();
+    gfx_ps2_direct_flush_records();
+}
+
+static void gfx_ps2_direct_flush_records(void) {
     if (gfx_ps2_direct.batch_count == 0) {
         return;
     }
@@ -437,9 +446,14 @@ static void gfx_ps2_direct_flush(void) {
 }
 
 static inline void gfx_ps2_direct_invalidate_vertices(size_t first, size_t count) {
-    for (size_t i = 0; i < count && first + i < MAX_VERTICES; ++i) {
-        gfx_ps2_direct.tag[first + i] = 0;
+    if (first >= MAX_VERTICES) {
+        return;
     }
+    if (count > MAX_VERTICES - first) {
+        count = MAX_VERTICES - first;
+    }
+    memset(&gfx_ps2_direct.tag[first], 0, count * sizeof(gfx_ps2_direct.tag[0]));
+    gfx_ps2_at_invalidate_vertices(first, count);
 }
 
 #endif
@@ -1498,6 +1512,17 @@ static void gfx_adjust_width_height_for_scale(uint32_t& width, uint32_t& height)
     }
 }
 
+#if defined(PLATFORM_PS2) && defined(_EE)
+/* VU0 CLIP flags (bit0 +x, 1 -x, 2 +y, 3 -y, 4 +z) -> LoadedVertex.clip_rej. */
+static const uint8_t gfx_vclip_to_rej[32] = {
+#define R(f) (uint8_t)((((f) & 1) ? 2 : 0) | (((f) & 2) ? 1 : 0) | (((f) & 4) ? 8 : 0) | \
+                      (((f) & 8) ? 4 : 0) | (((f) & 16) ? 32 : 0))
+    R(0), R(1), R(2), R(3), R(4), R(5), R(6), R(7), R(8), R(9), R(10), R(11), R(12), R(13), R(14), R(15),
+    R(16), R(17), R(18), R(19), R(20), R(21), R(22), R(23), R(24), R(25), R(26), R(27), R(28), R(29), R(30), R(31),
+#undef R
+};
+#endif
+
 static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx* vertices) {
     SUPPORT_CHECK(n_vertices <= MAX_VERTICES);
 
@@ -1511,6 +1536,7 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx* verti
 #if defined(PLATFORM_PS2) && defined(_EE)
     int32_t vtx_in[4] __attribute__((aligned(16))) = { 0, 0, 0, 1 };
     float vtx_out[4] __attribute__((aligned(16)));
+    uint32_t vclip = 0;
     __asm__ __volatile__(
         "lqc2    $vf4, 0(%0)\n\t"
         "lqc2    $vf5, 16(%0)\n\t"
@@ -1523,6 +1549,20 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx* verti
     const bool aspect_adjust = !fbActive;
     const float aspect_ofs = rsp.aspect_ofs;
     const float aspect_k = rsp.aspect_scale / gfx_current_dimensions.aspect_ratio;
+#if defined(PLATFORM_PS2) && defined(_EE)
+    /* x' = (ofs * w + x) * k on VU0 (identity when not adjusting), so the
+     * transformed vertex in vf2 is final and VCLIP can classify it. */
+    {
+        float asp_k[4] __attribute__((aligned(16))) = { aspect_adjust ? aspect_k : 1.0f, 1.0f, 1.0f, 1.0f };
+        float asp_o[4] __attribute__((aligned(16))) = { aspect_adjust ? aspect_ofs : 0.0f, 0.0f, 0.0f, 0.0f };
+        __asm__ __volatile__(
+            "lqc2    $vf21, 0(%0)\n\t"
+            "lqc2    $vf22, 0(%1)\n\t"
+            :
+            : "r"(asp_k), "r"(asp_o)
+            : "memory");
+    }
+#endif
 
     /* Lighting state is per call too; the 1/127 normal scale folds into it. */
     const bool lighting = (rsp.geometry_mode & G_LIGHTING) != 0;
@@ -1624,14 +1664,22 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx* verti
         vtx_in[1] = v->v[1];
         vtx_in[2] = v->v[2];
         __asm__ __volatile__(
-            "lqc2    $vf1, 0(%1)\n\t"
+            "lqc2    $vf1, 0(%2)\n\t"
             "vitof0.xyz $vf1, $vf1\n\t"
             "vmulax.xyzw  $ACC, $vf4, $vf1x\n\t"
             "vmadday.xyzw $ACC, $vf5, $vf1y\n\t"
             "vmaddaz.xyzw $ACC, $vf6, $vf1z\n\t"
             "vmaddw.xyzw  $vf2, $vf7, $vf0w\n\t"
-            "sqc2    $vf2, 0(%0)\n\t"
-            :
+            "vmulw.x      $vf3, $vf22, $vf2w\n\t"
+            "vadd.x       $vf2, $vf2, $vf3\n\t"
+            "vmul.x       $vf2, $vf2, $vf21\n\t"
+            "vclipw.xyz   $vf2xyz, $vf2w\n\t"
+            "sqc2    $vf2, 0(%1)\n\t"
+            "vnop\n\t"
+            "vnop\n\t"
+            "vnop\n\t"
+            "cfc2    %0, $vi18\n\t"
+            : "=r"(vclip)
             : "r"(vtx_out), "r"(vtx_in)
             : "memory");
         float x = vtx_out[0];
@@ -1648,9 +1696,11 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx* verti
         float w = vx * m[0][3] + vy * m[1][3] + vz * m[2][3] + m[3][3];
 #endif
 
+#if !(defined(PLATFORM_PS2) && defined(_EE))
         if (aspect_adjust) {
             x = (aspect_ofs * w + x) * aspect_k;
         }
+#endif
 
         short U = v->s * rsp.texture_scaling_factor.s >> 16;
         short V = v->t * rsp.texture_scaling_factor.t >> 16;
@@ -1771,22 +1821,33 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx* verti
         d->v = V;
 
         // trivial clip rejection
-        d->clip_rej = 0;
-        if (x < -w) {
-            d->clip_rej |= 1; // CLIP_LEFT
-        }
-        if (x > w) {
-            d->clip_rej |= 2; // CLIP_RIGHT
-        }
-        if (y < -w) {
-            d->clip_rej |= 4; // CLIP_BOTTOM
-        }
-        if (y > w) {
-            d->clip_rej |= 8; // CLIP_TOP
-        }
-        // if (z < -w) d->clip_rej |= 16; // CLIP_NEAR
-        if (z > w) {
-            d->clip_rej |= 32; // CLIP_FAR
+#if defined(PLATFORM_PS2) && defined(_EE)
+        /* VCLIP compares against |w|, which matches the signed tests below
+         * only for w > 0. Its flags (+x -x +y -y +z -z) map to
+         * RIGHT LEFT TOP BOTTOM FAR -. */
+        if (w > 0.0f) {
+            d->clip_rej = gfx_vclip_to_rej[vclip & 0x1f];
+        } else
+#endif
+        {
+            uint8_t rej = 0;
+            if (x < -w) {
+                rej |= 1; // CLIP_LEFT
+            }
+            if (x > w) {
+                rej |= 2; // CLIP_RIGHT
+            }
+            if (y < -w) {
+                rej |= 4; // CLIP_BOTTOM
+            }
+            if (y > w) {
+                rej |= 8; // CLIP_TOP
+            }
+            // if (z < -w) rej |= 16; // CLIP_NEAR
+            if (z > w) {
+                rej |= 32; // CLIP_FAR
+            }
+            d->clip_rej = rej;
         }
 
         d->x = x;
@@ -2347,6 +2408,7 @@ static inline void gfx_ps2_direct_copy_record(struct Ps2GsVu1TransformVertex* ds
  * linear, so they agree to the last rounding step.
  */
 static void gfx_ps2_direct_begin_batch(void) {
+    gfx_ps2_at_flush();
     if (gfx_ps2_direct.batch_count == 0) {
         gfx_ps2_direct.batch_trilerp = gfx_ps2_direct.key.ctx.trilerp != 0;
         gfx_ps2_direct.batch_w_ok = true;
@@ -2451,6 +2513,158 @@ static bool gfx_ps2_direct_tri(const struct GfxTriSetup* S, uint8_t a, uint8_t b
 }
 #endif
 
+/* One vertex of the float VBO, exactly as gfx_sp_tri1 lays it out. */
+static inline float* gfx_emit_vbo_vertex(const struct GfxTriSetup* S, const struct LoadedVertex* V, float* out) {
+    const bool use_alpha = S->use_alpha;
+    const int num_inputs = S->num_inputs;
+    float z = V->z, w = V->w;
+    if (S->depth_source_prim) {
+        z = gfx_primitive_depth_to_clip_z(rdp.primitive_depth_z, w);
+    }
+    if (S->z_is_from_0_to_1) {
+        z = (z + w) / 2.0f;
+    }
+
+    *out++ = V->x;
+    *out++ = S->invert_y ? -V->y : V->y;
+    *out++ = z;
+    *out++ = w;
+
+    for (int t = 0; t < 2; t++) {
+        if (!S->used_textures[t]) {
+            continue;
+        }
+        *out++ = V->u * S->u_scale[t] + S->u_bias[t];
+        *out++ = V->v * S->v_scale[t] + S->v_bias[t];
+        if (S->clamp_s[t]) {
+            *out++ = S->tex_clamp_s[t];
+        }
+        if (S->clamp_t[t]) {
+            *out++ = S->tex_clamp_t[t];
+        }
+    }
+
+    if (S->use_fog) {
+        *out++ = gfx_u8_unit[rdp.fog_color.r];
+        *out++ = gfx_u8_unit[rdp.fog_color.g];
+        *out++ = gfx_u8_unit[rdp.fog_color.b];
+        *out++ = gfx_u8_unit[V->fog]; // fog factor
+    }
+
+    if (S->use_grayscale) {
+        *out++ = gfx_u8_unit[rdp.grayscale_color.r];
+        *out++ = gfx_u8_unit[rdp.grayscale_color.g];
+        *out++ = gfx_u8_unit[rdp.grayscale_color.b];
+        *out++ = gfx_u8_unit[rdp.grayscale_color.a]; // lerp interpolation factor (not alpha)
+    }
+
+    for (int j = 0; j < num_inputs; j++) {
+        for (int k = 0; k < 1 + (use_alpha ? 1 : 0); k++) {
+            uint8_t r, g, b, a;
+            switch (S->in_kind[k][j]) {
+                case GFX_TRI_IN_SHADE:
+                    r = V->color.r; g = V->color.g; b = V->color.b; a = V->color.a;
+                    break;
+                case GFX_TRI_IN_SHADE_ALPHA:
+                    r = g = b = V->color.a; a = 0;
+                    break;
+                case GFX_TRI_IN_LOD: {
+                    // HACK: very roughly eyeballed based on the carpets in Defection
+                    // this is actually supposed to be calculated per pixel
+                    const float distance_frac = std::max(0.f, std::min(w / 1024.f, 1.f));
+                    r = g = b = a = (uint8_t)((0.7f + distance_frac * 0.3f) * 255.f);
+                    break;
+                }
+                default:
+                    if (k == 0) {
+                        *out++ = S->in_const[j][0];
+                        *out++ = S->in_const[j][1];
+                        *out++ = S->in_const[j][2];
+                    } else {
+                        *out++ = S->in_const[j][3];
+                    }
+                    continue;
+            }
+            if (k == 0) {
+                *out++ = gfx_u8_unit[r];
+                *out++ = gfx_u8_unit[g];
+                *out++ = gfx_u8_unit[b];
+            } else {
+                *out++ = gfx_u8_unit[a];
+            }
+        }
+    }
+    return out;
+}
+
+#if defined(GFX_PS2_DIRECT)
+/*
+ * Alpha-trilerp shared-vertex path (see gfxPs2DirectFillAT): each loaded
+ * vertex is translated by the backend once per triangle setup; triangles
+ * append cached slots to the backend's batch. Like the record path, this
+ * batch, the record batch and the float VBO are never non-empty together.
+ */
+static struct {
+    int path; /* gfxPs2DirectQueryAT() for the current setup */
+    uint32_t serial;
+    uint32_t tag[MAX_VERTICES];
+    uint32_t codes[MAX_VERTICES];
+    uint8_t fog[3];
+} gfx_ps2_at = { 0, 1 };
+
+static inline void gfx_ps2_at_invalidate_vertices(size_t first, size_t count) {
+    /* range already clamped by gfx_ps2_direct_invalidate_vertices */
+    memset(&gfx_ps2_at.tag[first], 0, count * sizeof(gfx_ps2_at.tag[0]));
+}
+
+static void gfx_ps2_at_flush(void) {
+    if (gfxPs2DirectATCount() != 0) {
+        gfxPs2DirectDrawAT(gfx_ps2_at.fog);
+    }
+}
+
+static bool gfx_ps2_at_tri(const struct GfxTriSetup* S, uint8_t a, uint8_t b, uint8_t c) {
+    if (a >= MAX_VERTICES || b >= MAX_VERTICES || c >= MAX_VERTICES) {
+        gfx_ps2_at_flush();
+        return false;
+    }
+    const uint8_t idx[3] = { a, b, c };
+    for (int k = 0; k < 3; ++k) {
+        const uint8_t i = idx[k];
+        if (gfx_ps2_at.tag[i] != gfx_ps2_at.serial) {
+            float v[32];
+            gfx_emit_vbo_vertex(S, &rsp.loaded_vertices[i], v);
+            gfx_ps2_at.codes[i] = ps2GsClipVertexCodes(v);
+            gfxPs2DirectFillAT(i, v);
+            gfx_ps2_at.tag[i] = gfx_ps2_at.serial;
+        }
+    }
+    switch (ps2GsClipClassifyCodes(gfx_ps2_at.codes[a], gfx_ps2_at.codes[b], gfx_ps2_at.codes[c])) {
+        case PS2_GS_CLIP_REJECT:
+            return true;
+        case PS2_GS_CLIP_PARTIAL:
+            gfx_ps2_at_flush();
+            return false;
+        default:
+            break;
+    }
+    if (buf_vbo_len > 0) {
+        gfx_flush();
+    }
+    gfx_ps2_direct_flush_records();
+    if (gfxPs2DirectATCount() + 3 > gfxPs2DirectATCapacity()) {
+        gfx_ps2_at_flush();
+    }
+    if (gfxPs2DirectATCount() == 0) {
+        gfx_ps2_at.fog[0] = rdp.fog_color.r;
+        gfx_ps2_at.fog[1] = rdp.fog_color.g;
+        gfx_ps2_at.fog[2] = rdp.fog_color.b;
+    }
+    gfxPs2DirectAppendAT(a, b, c);
+    return true;
+}
+#endif
+
 static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx, bool is_rect) {
     struct LoadedVertex* v1 = &rsp.loaded_vertices[vtx1_idx];
     struct LoadedVertex* v2 = &rsp.loaded_vertices[vtx2_idx];
@@ -2524,6 +2738,18 @@ static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx, bo
         gfx_tri_setup_cache.valid = true;
 #if defined(GFX_PS2_DIRECT)
         gfx_ps2_direct_refresh(&gfx_tri_setup_cache);
+        if (++gfx_ps2_at.serial == 0) {
+            gfx_ps2_at.serial = 1;
+        }
+        gfx_ps2_at.path = 0;
+        if (!gfx_ps2_direct.active && !gfx_tri_setup_cache.depth_source_prim &&
+            !gfx_tri_setup_cache.use_grayscale) {
+            gfx_ps2_at.path = gfxPs2DirectQueryAT();
+            if (gfx_ps2_at.path != 0) {
+                float gx, gy;
+                gfxPs2DirectUpdateGuard(&gx, &gy);
+            }
+        }
 #endif
     }
 #if defined(GFX_PS2_DIRECT) && defined(PD_PS2_DIRECT_VERIFY)
@@ -2547,91 +2773,15 @@ static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx, bo
         gfx_ps2_direct_tri(&gfx_tri_setup_cache, vtx1_idx, vtx2_idx, vtx3_idx)) {
         return;
     }
+    if (!is_rect && gfx_ps2_at.path != 0 &&
+        gfx_ps2_at_tri(&gfx_tri_setup_cache, vtx1_idx, vtx2_idx, vtx3_idx)) {
+        return;
+    }
     gfx_ps2_direct_flush();
 #endif
 
-    const bool use_alpha = S->use_alpha;
-    const int num_inputs = S->num_inputs;
     for (int i = 0; i < 3; i++) {
-        const struct LoadedVertex* V = v_arr[i];
-        float z = V->z, w = V->w;
-        if (S->depth_source_prim) {
-            z = gfx_primitive_depth_to_clip_z(rdp.primitive_depth_z, w);
-        }
-        if (S->z_is_from_0_to_1) {
-            z = (z + w) / 2.0f;
-        }
-
-        float* out = &buf_vbo[buf_vbo_len];
-        *out++ = V->x;
-        *out++ = S->invert_y ? -V->y : V->y;
-        *out++ = z;
-        *out++ = w;
-
-        for (int t = 0; t < 2; t++) {
-            if (!S->used_textures[t]) {
-                continue;
-            }
-            *out++ = V->u * S->u_scale[t] + S->u_bias[t];
-            *out++ = V->v * S->v_scale[t] + S->v_bias[t];
-            if (S->clamp_s[t]) {
-                *out++ = S->tex_clamp_s[t];
-            }
-            if (S->clamp_t[t]) {
-                *out++ = S->tex_clamp_t[t];
-            }
-        }
-
-        if (S->use_fog) {
-            *out++ = gfx_u8_unit[rdp.fog_color.r];
-            *out++ = gfx_u8_unit[rdp.fog_color.g];
-            *out++ = gfx_u8_unit[rdp.fog_color.b];
-            *out++ = gfx_u8_unit[V->fog]; // fog factor
-        }
-
-        if (S->use_grayscale) {
-            *out++ = gfx_u8_unit[rdp.grayscale_color.r];
-            *out++ = gfx_u8_unit[rdp.grayscale_color.g];
-            *out++ = gfx_u8_unit[rdp.grayscale_color.b];
-            *out++ = gfx_u8_unit[rdp.grayscale_color.a]; // lerp interpolation factor (not alpha)
-        }
-
-        for (int j = 0; j < num_inputs; j++) {
-            for (int k = 0; k < 1 + (use_alpha ? 1 : 0); k++) {
-                uint8_t r, g, b, a;
-                switch (S->in_kind[k][j]) {
-                    case GFX_TRI_IN_SHADE:
-                        r = V->color.r; g = V->color.g; b = V->color.b; a = V->color.a;
-                        break;
-                    case GFX_TRI_IN_SHADE_ALPHA:
-                        r = g = b = V->color.a; a = 0;
-                        break;
-                    case GFX_TRI_IN_LOD: {
-                        // HACK: very roughly eyeballed based on the carpets in Defection
-                        // this is actually supposed to be calculated per pixel
-                        const float distance_frac = std::max(0.f, std::min(w / 1024.f, 1.f));
-                        r = g = b = a = (uint8_t)((0.7f + distance_frac * 0.3f) * 255.f);
-                        break;
-                    }
-                    default:
-                        if (k == 0) {
-                            *out++ = S->in_const[j][0];
-                            *out++ = S->in_const[j][1];
-                            *out++ = S->in_const[j][2];
-                        } else {
-                            *out++ = S->in_const[j][3];
-                        }
-                        continue;
-                }
-                if (k == 0) {
-                    *out++ = gfx_u8_unit[r];
-                    *out++ = gfx_u8_unit[g];
-                    *out++ = gfx_u8_unit[b];
-                } else {
-                    *out++ = gfx_u8_unit[a];
-                }
-            }
-        }
+        float* out = gfx_emit_vbo_vertex(S, v_arr[i], &buf_vbo[buf_vbo_len]);
         buf_vbo_len = (size_t)(out - buf_vbo);
     }
 

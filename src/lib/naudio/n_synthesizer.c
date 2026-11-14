@@ -1,4 +1,8 @@
 #include "n_synthInternals.h"
+#ifdef PLATFORM_PS2
+#include "spu2_voices_ps2.h"
+extern N_PVoice *g_N64PVoiceBase;
+#endif
 
 void n_alSynNew(ALSynConfig *c)
 {
@@ -64,6 +68,9 @@ void n_alSynNew(ALSynConfig *c)
 	n_syn->pAllocList.prev = 0;
 
 	pvoices = alHeapAlloc(hp, c->maxPVoices, sizeof(N_PVoice));
+#ifdef PLATFORM_PS2
+	g_N64PVoiceBase = pvoices;
+#endif
 
 	for (i = 0; i < c->maxPVoices; i++) {
 		pv = &pvoices[i];
@@ -87,6 +94,12 @@ void n_alSynNew(ALSynConfig *c)
 	}
 
 	n_syn->heap = hp;
+
+#ifdef PLATFORM_PS2
+	if (c->maxPVoices <= (s32)PDSND_MAX_VOICES) {
+		ps2HwVoicesInit(c->outputRate);
+	}
+#endif
 }
 
 s32 __n_nextSampleTime(ALPlayer **client);
@@ -155,6 +168,10 @@ Acmd *n_alAudioFrame(Acmd *cmdList, s32 *cmdLen, s16 *outBuf, s32 outLen)
 	*cmdLen = (s32) (cmdlEnd - cmdList);
 
 	_n_collectPVoices(); /* collect free physical voices */
+
+#ifdef PLATFORM_PS2
+	ps2HwVoicesFlush();
+#endif
 
 	return cmdlEnd;
 }
