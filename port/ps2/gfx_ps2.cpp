@@ -6014,9 +6014,13 @@ __attribute__((constructor)) static void ps2_object_geometry_config_init(void)
 }
 
 /*
- * Video.Ps2Emotion3D (default 1): room leaves are compiled once and replayed
- * through the object batches (port/fast3d/e3d_room_ps2.inc). 0 runs them as
- * plain display lists, for A/B checks.
+ * Video.Ps2Emotion3D (default 1): room leaves and model display lists are
+ * compiled once and replayed through the object batches
+ * (port/fast3d/e3d_geom_ps2.inc). 0 runs them as plain display lists, for
+ * A/B checks. Video.Ps2Emotion3DModels (default 0) turns on the model half
+ * (stage 3): in PCSX2 it measures 0.3-0.7 ms slower per frame than plain
+ * model lists with per-G_VTX deferral, so it stays off until real hardware
+ * says otherwise.
  */
 static int32_t s_emotion3d = 1;
 
@@ -6028,6 +6032,18 @@ __attribute__((constructor)) static void ps2_emotion3d_config_init(void)
 extern "C" bool gfxPs2Emotion3DEnabled(void)
 {
     return s_emotion3d != 0;
+}
+
+static int32_t s_emotion3d_models = 0;
+
+__attribute__((constructor)) static void ps2_emotion3d_models_config_init(void)
+{
+    configRegisterInt("Video.Ps2Emotion3DModels", &s_emotion3d_models, 0, 1);
+}
+
+extern "C" bool gfxPs2Emotion3DModelsEnabled(void)
+{
+    return s_emotion3d != 0 && s_emotion3d_models != 0;
 }
 
 /*
@@ -6635,6 +6651,7 @@ extern "C" void gfxPs2DirectDrawObject(
 extern "C" bool gfxPs2DirectLutScale(const uint8_t *lut, float *scale) { (void)lut; (void)scale; return false; }
 extern "C" bool gfxPs2ObjectGeometryEnabled(void) { return false; }
 extern "C" bool gfxPs2Emotion3DEnabled(void) { return false; }
+extern "C" bool gfxPs2Emotion3DModelsEnabled(void) { return false; }
 extern "C" bool gfxPs2ObjectDeferEnabled(void) { return false; }
 extern "C" void gfxPs2DirectPeekGuard(float *gx, float *gy) { *gx = 1.0f; *gy = 1.0f; }
 extern "C" bool gfxPs2DirectFogLinear(void) { return false; }

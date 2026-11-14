@@ -35,7 +35,7 @@ display list in w1. Exceptions:
 
 ### Compile (first use of a leaf)
 
-`port/fast3d/e3d_room_ps2.inc` walks the list once and splits it into ops:
+`port/fast3d/e3d_geom_ps2.inc` walks the list once and splits it into ops:
 * **STATE**: runs of anything except geometry commands (texture loads,
   combiner, render modes). They are copied into a compact list that Fast3D
   still interprets, so textures and render state behave exactly as before.
@@ -164,17 +164,95 @@ Turning per-block deferral off for everything except rooms is a wash: the
 early cutscene is 0.5-1.4 ms slower, the 60-65 s windows about 1 ms faster.
 Rigid props gain from it, skinned characters lose.
 
-## Next stages (revised)
+## Stage 3: model display lists (round 20)
 
-3. **Models: matrix-palette skinning on VU1.**
-   * Compile a model's display lists once per model definition. Each
-     `G_VTX` becomes a vertex run tagged with the matrix it was loaded
-     under, and each triangle refers to vertices across runs.
-   * VU1 receives the node matrices of a model instance as a palette and
-     transforms each vertex by its own matrix. This is the classic PS2
-     skinning layout, and it removes both the per-`G_VTX` EE transform
-     (`gfx_sp_vertex`, `gfx_ps2_direct_vertex`: ~8 % in gameplay) and the
-     deferral and replay overhead.
-4. **GS-side work**, aimed by hardware measurements: the alpha-trilerp
-   passes and fill rate rather than packet building, which round 15
-   already templated.
+Rooms and models now share one compiler, `port/fast3d/e3d_geom_ps2.inc`
+(was `e3d_room_ps2.inc`).
+
+### Hook
+
+`modelRenderNodeDl` emits `G_E3D_MODELDL_EXT` (0x47, w1 = the node's list)
+in place of `gSPDisplayList`, for the opaque list and both translucent
+ones. Without the direct PS2 renderer, or with the switch off, the command
+runs the list as a plain `G_DL`.
+
+### What differs from rooms
+
+* **Keys.** A model list is shared by every instance of a model
+  definition. Vertices (segment 4), colours (segments 5 and 6) and
+  matrices (segment 3) are per instance, so they are read live. Only the
+  list's structure is compiled.
+* **Run-time lists.** Some lists are built at run time (monitor screens,
+  gun lists from a pointer). Every use checks a 32-bit checksum of the
+  list's words, at most once per frame per list. A list is compiled only
+  the second time it is seen unchanged, so lists in per-frame memory never
+  fill the arena. A list whose content changes three times is marked
+  volatile and always runs plain.
+* **Matrices.** `G_MTX` and `G_POPMTX` are items in the geometry stream.
+  Each starts a new matrix epoch, and each load is tagged with its epoch.
+* **Skinning.** A triangle that reads a load from an earlier epoch is a
+  skinned join. Both epochs are then linear: their loads run in list order
+  under their own matrix, and their triangles go to `gfx_sp_tri1`. A list
+  with any linear epoch is marked `skinned`.
+* **Bounds.** Chunk bounds are computed per instance, as the union of the
+  bounds of the chunk's loads. Each load's bounds are computed once per
+  replay, in 16-bit integers.
+* **Resident loads.** A load that several chunks read is transformed once
+  per geometry run, not once per chunk. This also helps rooms on the slow
+  path.
+
+Skinned lists, lit lists, and lists whose last replay drew nothing through
+the batches run as plain lists with per-`G_VTX` deferral. The last group
+retries after 16 frames.
+
+### Results (PCSX2, Defection)
+
+The counters show that the compiler handles the whole game's model set:
+* about 30-100 model lists per frame;
+* no fallbacks beyond one or two run-time lists;
+* skinned joins found where round 14 replayed blocks (up to 550 linear
+  triangles per frame in the cutscene, and no deferred-block replays inside
+  Emotion3D).
+
+It is **not faster**. Against the same build with only the model half off,
+the cutscene's gfx time is 0.3-0.7 ms per frame higher with models on.
+That holds even after:
+* skinned and lit lists were sent to the plain path;
+* the checksum went to once per frame;
+* bounds went per load;
+* failed replays got a back-off.
+
+The hook alone, with every list sent plain, measures the same as off, so
+the cost is in the replay itself. Rigid models are small, about three
+triangles per chunk. At that size, round 14's per-block deferral already
+does the same classification with less bookkeeping.
+
+So **`Video.Ps2Emotion3DModels` defaults to 0**. `Video.Ps2Emotion3D=1`
+keeps rooms and lazy palettes. The model path stays in the build for
+hardware A/B tests, since PCSX2's EE timing is approximate. The stats build
+(`PD_PS2_OBJECT_STATS`) logs `E3D leaves/models/plain/...` once a second.
+
+## Stage 4: VU1 microcode (folded into the GS work)
+
+VU1 transforms about 950 vertices per frame in rooftop gameplay, in 32
+batches. The object microcode costs about 80 cycles per vertex,
+unpipelined, which is about 0.26 ms of VU1 time per frame. Pipelining it
+fully would save about 0.13 ms.
+
+The VIF1 wait the EE sees (23 % in `ps2GsNativeQueueSubmitInternal`) is
+DMA and GS volume, not VU1 arithmetic. The VU1 microcode therefore gets
+rewritten together with the GS-side libraries, where packet layout and
+draw volume are decided, rather than on its own. The stats build logs the
+VU1 counters as `E3D vu1`.
+
+## Next: PS2-specific GS libraries
+
+* Measure on hardware where the GS time goes: alpha-trilerp passes, fill,
+  texture uploads.
+* Replace the gsKit-style per-draw packet path with Emotion3D-owned
+  packet templates and a VU1 microcode that builds GS primitives (XGKICK)
+  straight from object batches.
+* Revisit models on top of that. With a VU1 skinning palette, a model
+  would be one upload per instance instead of per-`G_VTX` EE transforms,
+  which is where stage 3's structure (epochs, skinned joins, resident
+  loads) pays off.
