@@ -27,6 +27,11 @@ struct GfxRdpTmemLiveStats {
     uint32_t load_block_deferred;
     uint32_t load_block_elided;
     uint32_t fingerprint_source_hash;
+    /* Emotion3D lazy palettes */
+    uint32_t load_tlut_deferred;
+    uint32_t load_tlut_flushed;
+    uint32_t load_tlut_elided;
+    uint32_t fingerprint_tlut_source;
 };
 
 struct GfxRdpTmemLiveTextureView {

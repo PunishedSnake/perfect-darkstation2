@@ -526,6 +526,11 @@ extern "C" void sysLogPrintf(int level, const char *fmt, ...);
 static uint32_t s_texmem_verify_checked, s_texmem_verify_stale;
 #endif
 
+extern "C" uint32_t gfxRdpTmemSourceEpoch(void)
+{
+    return s_source_epoch;
+}
+
 extern "C" void gfxRdpTmemSourceMemoNewEpoch(void)
 {
     if (++s_source_epoch == 0u) {

@@ -155,6 +155,9 @@ bool gfxRdpTmemLoadBlockLinear(struct GfxRdpTmem *tmem,
  */
 /* Start a new source-memory epoch (source bytes may have changed). */
 void gfxRdpTmemSourceMemoNewEpoch(void);
+/* Current source epoch (changes whenever texture memory may have been
+ * written); identities derived from source bytes stay valid while equal. */
+uint32_t gfxRdpTmemSourceEpoch(void);
 
 bool gfxRdpTmemLoadBlockLinearPart(struct GfxRdpTmem *tmem,
     uint32_t first_tmem_word, const uint8_t *block_source,

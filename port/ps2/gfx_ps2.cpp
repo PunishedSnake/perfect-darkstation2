@@ -6030,6 +6030,22 @@ extern "C" bool gfxPs2Emotion3DEnabled(void)
     return s_emotion3d != 0;
 }
 
+/*
+ * Video.Ps2ObjectDefer: per-G_VTX object-space deferral outside Emotion3D
+ * room leaves (round 14). Temporarily a switch while measuring.
+ */
+static int32_t s_object_defer = 1;
+
+__attribute__((constructor)) static void ps2_object_defer_config_init(void)
+{
+    configRegisterInt("Video.Ps2ObjectDefer", &s_object_defer, 0, 1);
+}
+
+extern "C" bool gfxPs2ObjectDeferEnabled(void)
+{
+    return s_object_defer != 0;
+}
+
 extern "C" bool gfxPs2ObjectGeometryEnabled(void)
 {
     return s_object_geometry != 0 && ps2GsVu1QueueEnabled();
@@ -6619,6 +6635,7 @@ extern "C" void gfxPs2DirectDrawObject(
 extern "C" bool gfxPs2DirectLutScale(const uint8_t *lut, float *scale) { (void)lut; (void)scale; return false; }
 extern "C" bool gfxPs2ObjectGeometryEnabled(void) { return false; }
 extern "C" bool gfxPs2Emotion3DEnabled(void) { return false; }
+extern "C" bool gfxPs2ObjectDeferEnabled(void) { return false; }
 extern "C" void gfxPs2DirectPeekGuard(float *gx, float *gy) { *gx = 1.0f; *gy = 1.0f; }
 extern "C" bool gfxPs2DirectFogLinear(void) { return false; }
 

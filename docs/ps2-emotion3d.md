@@ -92,27 +92,89 @@ only along edges. The same edge pattern appears on the weapon and the star
 streaks, which this stage does not touch, so the cause is a camera phase
 offset from different frame pacing, not rendering.
 
-## Where the time still is
+## Stage 2: lazy palettes (round 19)
 
-From the EE profile of the same scenes:
-* **TMEM emulation and texture identification: ~8-9 %.**
-  `gfxRdpTmemWriteTlutBytes`, `LoadBlockLinear`, `HashValidRange`,
-  `TextureFingerprint` and `IdentifyTexture`. Room textures are static, so
-  most of this re-derives the same GS texture every frame.
-* **Display-list decoding and vertex work for models** (props, characters,
-  weapons): `gfx_run_dl`, `gfx_sp_vertex`, `gfx_ps2_direct_vertex`, object
-  contexts and matrix work, ~20 %.
-* **Triangle setup and combiner → GS state mapping: ~4-5 %.**
+PD loads a different palette before nearly every colour-indexed draw. The
+TMEM model wrote each one in full, then hashed the region whenever a
+texture was identified:
+* four copies per entry, plus validity bytes, generations and a hash mix;
+* `gfxRdpTmemWriteTlutBytes` alone was about 3.3 % of EE time, and 88 % of
+  its samples were in the write loop itself. These are real changes of
+  palette, not redundant reloads.
 
-## Next stages
+A draw whose texture is already on the GS never needs those bytes, only
+the palette's identity. So, in `rdp_tmem_live.cpp`:
+* **Record, don't write.** A well-formed TLUT load is recorded (source,
+  TMEM range) instead of written. A newer palette that covers it, or a
+  block load that covers it, simply replaces it.
+* **Identity from the source.** A colour-indexed fingerprint whose palette
+  range lies inside the pending load takes the palette hash from the
+  source entries. The value is bit-identical to hashing the written TMEM
+  words, so texture cache keys do not change.
+* **Memo with a content copy.** Source hashes are memoized with a copy of
+  the entries and compared on every use. Palettes the game rewrites in
+  place are never stale, and no write epoch is trusted.
+* **Write only when needed.** The palette is written into TMEM only when
+  something reads or overlaps those words: texel materialization, a texture
+  whose rows reach the palette half, a load that may invalidate TMEM, or
+  the end of the frame.
 
-2. **Room state ops resolved to GS state.** Record what each STATE op
-   resolves to the first time it runs: GS texture handle, sampler, combiner
-   path. Replay that instead of the TMEM emulation, as long as the inputs
-   and the TMEM contents it relies on are unchanged. This is where most of
-   the remaining per-frame cost of rooms is.
-3. **Model display lists.** Model definitions are static per model, and
-   only matrices, colours and a few dynamic fields change. Compile their
-   lists the same way and key them by model definition.
-4. **Prebuilt GS/VU1 packets.** Once state and geometry are both compiled,
-   a leaf's DMA chain can be built once and only patched per frame.
+The randomized eager-vs-lazy host test (`rdp_tmem_live_test.cpp`, in CI)
+must give identical fingerprints, texels and final TMEM. It now also
+asserts that the lazy-palette path runs. It caught one ordering bug during
+development: a malformed TLUT load invalidates all of TMEM, so a pending
+palette must be settled before it.
+
+In Defection, 85-90 % of palette loads are never written, and most
+colour-indexed fingerprints come from the source.
+
+Also in this round:
+* An object context that is recycled while it owns no deferred vertex slots
+  now skips the 128-slot replay scan. In gameplay that is 52 of 78 recycles
+  per frame.
+* `Video.Ps2ObjectDefer=0` turns off round 14's per-`G_VTX` object
+  deferral outside room leaves, for hardware A/B checks. It stays on by
+  default (see below).
+
+Against round 18 in the cutscene, the heavy windows are 0.6-1.2 ms faster,
+about 4 %. Rooftop gameplay stays at the 60 fps cap.
+
+## What the data says about the next stages
+
+**Gameplay is GS/VU1-bound in PCSX2, not EE-bound.** On the Defection
+rooftop:
+* the EE spends 23 % of its time waiting for VIF1/GS to drain the previous
+  packet chain (`ps2GsNativeQueueSubmitInternal`), plus 4 % idle;
+* every frame there makes the 16.7 ms vsync deadline.
+
+PCSX2 does not model GS fill rate faithfully, so where that wait really
+comes from has to be measured on hardware before a GS-side stage is
+designed.
+
+**PD's models are skinned at vertex-load time.** A character's display list
+loads one vertex block under the thigh matrix and the next under the shin
+matrix, then draws triangles that join them. Counters on the rooftop, per
+frame:
+* 42-60 triangles join blocks the frustum test classified differently;
+* 6-7 join blocks loaded under different matrices;
+* about 25 deferred blocks are replayed, against 1-35 triangles that
+  actually drew through the object path.
+
+Turning per-block deferral off for everything except rooms is a wash: the
+early cutscene is 0.5-1.4 ms slower, the 60-65 s windows about 1 ms faster.
+Rigid props gain from it, skinned characters lose.
+
+## Next stages (revised)
+
+3. **Models: matrix-palette skinning on VU1.**
+   * Compile a model's display lists once per model definition. Each
+     `G_VTX` becomes a vertex run tagged with the matrix it was loaded
+     under, and each triangle refers to vertices across runs.
+   * VU1 receives the node matrices of a model instance as a palette and
+     transforms each vertex by its own matrix. This is the classic PS2
+     skinning layout, and it removes both the per-`G_VTX` EE transform
+     (`gfx_sp_vertex`, `gfx_ps2_direct_vertex`: ~8 % in gameplay) and the
+     deferral and replay overhead.
+4. **GS-side work**, aimed by hardware measurements: the alpha-trilerp
+   passes and fill rate rather than packet building, which round 15
+   already templated.
