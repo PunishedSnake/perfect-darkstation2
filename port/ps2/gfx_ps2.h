@@ -226,6 +226,17 @@ struct Ps2GsVu1TransformVertex;
  */
 struct GfxPs2DirectContext {
     uint8_t trilerp;     /* same-tap opaque trilerp submission */
+    /*
+     * Two-pass lerp(input1, TEX0, input2) [* input3]: the records describe
+     * the textured pass (rgb from rgb_input, alpha from the red byte of
+     * alpha_input when alpha_from_rgb), and each vertex also carries the
+     * colour pass rgb = u8(unit(input[pass0_a]) * unit(input[pass0_b])),
+     * pass0_b < 0 meaning * 1.
+     */
+    uint8_t two_pass;
+    uint8_t alpha_from_rgb;
+    int8_t pass0_a;
+    int8_t pass0_b;
     uint8_t color_only;  /* untextured: records carry no texture coordinates */
     uint8_t fog;         /* write the fog coefficient (fog_lut) */
     uint8_t use_alpha;   /* shader parses an alpha per input */
@@ -278,8 +289,11 @@ void gfxPs2DirectAppendAT(uint32_t a, uint32_t b, uint32_t c);
 /* First of 24 scratch cache slots for clipped-polygon vertices. */
 #define PS2_AT_SCRATCH_SLOT 128u
 void gfxPs2DirectDrawAT(const uint8_t fog_rgb[3]);
+/* color_pass: per-vertex packed rgb (alpha ignored) of the two-pass shaders'
+ * first pass, else NULL. */
 void gfxPs2DirectDraw(const struct Ps2GsVu1TransformVertex *vertices,
-    uint32_t vertex_count, bool trilerp, bool w_ok, const uint8_t fog_rgb[3]);
+    uint32_t vertex_count, bool trilerp, bool w_ok, const uint8_t fog_rgb[3],
+    const uint32_t *color_pass);
 
 /*
  * Object-space batch: raw integer vertices (struct Ps2GsVu1ObjectVertex) and

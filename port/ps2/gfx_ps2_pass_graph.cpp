@@ -141,23 +141,6 @@ static void ps2GfxIncludeSpanX(
     if (x > *max_x) *max_x = x;
 }
 
-static void ps2GfxIncludeEdgeAtY(
-    float ax, float ay, float bx, float by, float y,
-    bool *hit, float *min_x, float *max_x)
-{
-    if (ay == by) {
-        return;
-    }
-    const float edge_min_y = ay < by ? ay : by;
-    const float edge_max_y = ay > by ? ay : by;
-    if (y < edge_min_y || y > edge_max_y) {
-        return;
-    }
-    const float factor = (y - ay) / (by - ay);
-    ps2GfxIncludeSpanX(
-        ax + (bx - ax) * factor, hit, min_x, max_x);
-}
-
 extern "C" bool ps2GfxDescribePassGraphRowSpans(
     const struct Ps2GfxPassGraphTriangle *triangle,
     const struct Ps2GfxPassGraphRect *tile,
@@ -175,6 +158,20 @@ extern "C" bool ps2GfxDescribePassGraphRowSpans(
         PS2_GFX_PASS_GRAPH_SHUFFLE_ROW_HEIGHT);
     if (row_count > PS2_GFX_PASS_GRAPH_SHUFFLE_ROWS) {
         return false;
+    }
+
+    /* Per-edge slope once per tile instead of a divide per row and edge. */
+    struct { float ax, ay, slope, min_y, max_y; bool live; } edge[3];
+    for (uint32_t i = 0u; i < 3u; ++i) {
+        const uint32_t j = (i + 1u) % 3u;
+        const float ax = triangle->x[i], ay = triangle->y[i];
+        const float bx = triangle->x[j], by = triangle->y[j];
+        edge[i].live = ay != by;
+        edge[i].ax = ax;
+        edge[i].ay = ay;
+        edge[i].slope = edge[i].live ? (bx - ax) / (by - ay) : 0.0f;
+        edge[i].min_y = ay < by ? ay : by;
+        edge[i].max_y = ay > by ? ay : by;
     }
 
     spans->row_count = row_count;
@@ -207,15 +204,17 @@ extern "C" bool ps2GfxDescribePassGraphRowSpans(
         }
 
         for (uint32_t i = 0u; i < 3u; ++i) {
-            const uint32_t j = (i + 1u) % 3u;
-            ps2GfxIncludeEdgeAtY(
-                triangle->x[i], triangle->y[i],
-                triangle->x[j], triangle->y[j],
-                strip_y0, &hit, &min_x, &max_x);
-            ps2GfxIncludeEdgeAtY(
-                triangle->x[i], triangle->y[i],
-                triangle->x[j], triangle->y[j],
-                strip_y1, &hit, &min_x, &max_x);
+            if (!edge[i].live) {
+                continue;
+            }
+            if (strip_y0 >= edge[i].min_y && strip_y0 <= edge[i].max_y) {
+                ps2GfxIncludeSpanX(edge[i].ax + (strip_y0 - edge[i].ay) * edge[i].slope,
+                    &hit, &min_x, &max_x);
+            }
+            if (strip_y1 >= edge[i].min_y && strip_y1 <= edge[i].max_y) {
+                ps2GfxIncludeSpanX(edge[i].ax + (strip_y1 - edge[i].ay) * edge[i].slope,
+                    &hit, &min_x, &max_x);
+            }
         }
 
         if (!hit) {

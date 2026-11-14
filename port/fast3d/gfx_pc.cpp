@@ -432,6 +432,12 @@ static struct {
     uint8_t rec_const[4];
     const uint8_t* rec_lut[4];
     bool rec_lod;
+    /* two-pass shaders: colour pass rgb = u8(unit(a) * unit(b)) per channel,
+     * each operand a bank byte (src < 6) or a constant unit value */
+    uint8_t p0_src[2][3];
+    float p0_unit[2][3];
+    uint32_t color2[MAX_VERTICES];
+    uint32_t batch_color2[GFX_PS2_DIRECT_MAX_VERTICES];
 } gfx_ps2_direct;
 
 static void gfx_ps2_at_flush(void);
@@ -527,7 +533,8 @@ static void gfx_ps2_direct_flush_records(void) {
                                gfx_ps2_direct.batch_trilerp, gfx_ps2_direct.batch_fog, &gfx_obj.batch_xf);
     } else {
         gfxPs2DirectDraw(gfx_ps2_direct.batch, gfx_ps2_direct.batch_count,
-                         gfx_ps2_direct.batch_trilerp, gfx_ps2_direct.batch_w_ok, gfx_ps2_direct.batch_fog);
+                         gfx_ps2_direct.batch_trilerp, gfx_ps2_direct.batch_w_ok, gfx_ps2_direct.batch_fog,
+                         gfx_ps2_direct.key.ctx.two_pass ? gfx_ps2_direct.batch_color2 : nullptr);
     }
     gfx_ps2_direct.batch_count = 0;
     gfx_obj.batch_ctx = -1;
@@ -2400,7 +2407,19 @@ static void gfx_ps2_direct_refresh(const struct GfxTriSetup* S) {
             const uint8_t* lut = c < 3 ? C->rgb_lut : C->alpha_lut;
             uint8_t src = 0xff;
             uint8_t cval = c < 3 ? C->rgb_const : C->alpha_const;
-            if (j >= 0) {
+            if (j >= 0 && c == 3 && C->alpha_from_rgb) {
+                /* the red byte of input j's colour (two-pass lerp factor) */
+                if (j >= S->num_inputs) {
+                    cval = lut[255];
+                } else {
+                    switch (S->in_kind[0][j]) {
+                        case GFX_TRI_IN_SHADE: src = 0; break;
+                        case GFX_TRI_IN_SHADE_ALPHA: src = 3; break;
+                        case GFX_TRI_IN_LOD: src = 4; break;
+                        default: cval = lut[S->in_const_u8[j][0]]; break;
+                    }
+                }
+            } else if (j >= 0) {
                 if (j >= S->num_inputs || (c == 3 && !S->use_alpha)) {
                     cval = lut[255];
                 } else {
@@ -2418,6 +2437,31 @@ static void gfx_ps2_direct_refresh(const struct GfxTriSetup* S) {
         }
         gfx_ps2_direct.rec_lod = gfx_ps2_direct.rec_src[0] == 4 || gfx_ps2_direct.rec_src[1] == 4 ||
                                  gfx_ps2_direct.rec_src[2] == 4 || gfx_ps2_direct.rec_src[3] == 4;
+        if (C->two_pass) {
+            bool lod_operand = false;
+            for (int k = 0; k < 2; ++k) {
+                const int j = k == 0 ? C->pass0_a : C->pass0_b;
+                for (int ch = 0; ch < 3; ++ch) {
+                    uint8_t src = 0xff;
+                    float unit = 1.0f;
+                    if (j >= 0 && j < S->num_inputs) {
+                        switch (S->in_kind[0][j]) {
+                            case GFX_TRI_IN_SHADE: src = (uint8_t)ch; break;
+                            case GFX_TRI_IN_SHADE_ALPHA: src = 3; break;
+                            /* the translator's LOD input is not a byte: no direct path */
+                            case GFX_TRI_IN_LOD: lod_operand = true; break;
+                            default: unit = gfx_u8_unit[S->in_const_u8[j][ch]]; break;
+                        }
+                    }
+                    gfx_ps2_direct.p0_src[k][ch] = src;
+                    gfx_ps2_direct.p0_unit[k][ch] = unit;
+                }
+            }
+            if (lod_operand) {
+                gfx_ps2_direct.active = false;
+                return;
+            }
+        }
     }
     const bool fog_differs = key.ctx.fog && gfx_ps2_direct.batch_count != 0 &&
         memcmp(gfx_ps2_direct.batch_fog, &rdp.fog_color, 3) != 0;
@@ -2514,6 +2558,19 @@ static inline uint32_t gfx_ps2_direct_vertex(const struct GfxTriSetup* S, uint8_
         const uint8_t src = gfx_ps2_direct.rec_src[c];
         R->rgba[c] = src == 0xff ? gfx_ps2_direct.rec_const[c] : gfx_ps2_direct.rec_lut[c][bank[src]];
     }
+    if (C->two_pass) {
+        /* == ps2_u8_component(input[a][ch] * input[b][ch]) in the translator */
+        uint32_t packed = 0;
+        for (int ch = 0; ch < 3; ++ch) {
+            const uint8_t sa = gfx_ps2_direct.p0_src[0][ch], sb = gfx_ps2_direct.p0_src[1][ch];
+            const float ua = sa == 0xff ? gfx_ps2_direct.p0_unit[0][ch] : gfx_u8_unit[bank[sa]];
+            const float ub = sb == 0xff ? gfx_ps2_direct.p0_unit[1][ch] : gfx_u8_unit[bank[sb]];
+            float v = ua * ub;
+            v = v < 0.0f ? 0.0f : v > 1.0f ? 1.0f : v;
+            packed |= (uint32_t)(uint8_t)(int)(v * 255.0f + 0.5f) << (8 * ch);
+        }
+        gfx_ps2_direct.color2[idx] = packed;
+    }
 
     /* DIV on VU treats subnormal W as zero; such batches stay on the EE. */
     gfx_ps2_direct.w_ok[idx] = w >= FLT_MIN && w <= FLT_MAX;
@@ -2567,6 +2624,11 @@ static void gfx_ps2_direct_begin_batch(int obj_ctx = -1) {
 }
 
 static bool gfx_ps2_direct_clip_tri(uint8_t a, uint8_t b, uint8_t c) {
+    if (gfx_ps2_direct.key.ctx.two_pass) {
+        /* clipped vertices would need an interpolated colour-pass colour too */
+        gfx_ps2_direct_flush();
+        return false;
+    }
     enum { STRIDE = 11 };
     float in[3 * STRIDE];
     const uint8_t idx[3] = { a, b, c };
@@ -2651,6 +2713,12 @@ static bool gfx_ps2_direct_tri(const struct GfxTriSetup* S, uint8_t a, uint8_t b
     gfx_ps2_direct_copy_record(&out[0], &gfx_ps2_direct.records[a]);
     gfx_ps2_direct_copy_record(&out[1], &gfx_ps2_direct.records[b]);
     gfx_ps2_direct_copy_record(&out[2], &gfx_ps2_direct.records[c]);
+    if (gfx_ps2_direct.key.ctx.two_pass) {
+        uint32_t* c2 = &gfx_ps2_direct.batch_color2[gfx_ps2_direct.batch_count];
+        c2[0] = gfx_ps2_direct.color2[a];
+        c2[1] = gfx_ps2_direct.color2[b];
+        c2[2] = gfx_ps2_direct.color2[c];
+    }
     gfx_ps2_direct.batch_w_ok = gfx_ps2_direct.batch_w_ok && gfx_ps2_direct.w_ok[a] &&
                                 gfx_ps2_direct.w_ok[b] && gfx_ps2_direct.w_ok[c];
     gfx_ps2_direct.batch_count += 3;
@@ -2940,7 +3008,8 @@ static inline void gfx_tri_ensure_setup(void) {
     if (gfx_ps2_direct.active) {
         gfx_obj_update_prog(&gfx_tri_setup_cache);
     }
-    gfx_obj.setup_ok = gfx_ps2_direct.active && gfx_obj.prog_ok && !gfx_ps2_direct.rec_lod;
+    gfx_obj.setup_ok = gfx_ps2_direct.active && gfx_obj.prog_ok && !gfx_ps2_direct.rec_lod &&
+                       !gfx_ps2_direct.key.ctx.two_pass;
     if (++gfx_ps2_at.serial == 0) {
         gfx_ps2_at.serial = 1;
     }
@@ -3404,7 +3473,7 @@ static bool gfx_obj_tri(uint8_t a, uint8_t b, uint8_t c) {
             if (gfx_ps2_direct.active && gfx_obj.prog_serial != gfx_ps2_direct.serial) {
                 gfx_obj_update_prog(S);
             }
-            if (gfx_ps2_direct.active && gfx_obj.prog_ok && !gfx_ps2_direct.rec_lod &&
+            if (gfx_ps2_direct.active && gfx_obj.prog_ok && !gfx_ps2_direct.rec_lod && !C->two_pass &&
                 S->z_is_from_0_to_1 == (X->z_is_from_0_to_1 != 0) && S->invert_y == (X->invert_y != 0) &&
                 C->guard_x >= X->guard_x && C->guard_y >= X->guard_y && (!C->fog || gfx_obj.fog_linear == 1)) {
                 if (buf_vbo_len > 0) {

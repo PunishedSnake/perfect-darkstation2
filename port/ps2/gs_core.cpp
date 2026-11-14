@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <malloc.h>
+#include <kernel.h>
 
 #include <dmaKit.h>
 #include <gsKit.h>
@@ -3506,6 +3507,115 @@ static bool ps2GsCoreRestoreChannelBlitState(
     return true;
 }
 
+/*
+ * Channel shuffle sprite templates. A full 64x32 page shuffles as 16 rows of
+ * eight 8x2 sprites (CLAMP, UV, XYZ2, UV, XYZ2 each). Those registers depend
+ * only on the channel, the page's place in the target, the GS offset and the
+ * drawing context, so they are built once and copied, row span by row span,
+ * instead of being recomputed for every tile of every alpha-trilerp triangle.
+ * Templates are never replaced once built: queued GIF chains reference them
+ * in place (ps2GsNativeQueueAppendAdRefs), so they must not change.
+ */
+enum { PS2_GS_SHUFFLE_SPRITES_PER_ROW = 8, PS2_GS_SHUFFLE_ROWS = 16,
+    PS2_GS_SHUFFLE_TEMPLATE_REGS = PS2_GS_SHUFFLE_ROWS * PS2_GS_SHUFFLE_SPRITES_PER_ROW * 5,
+    PS2_GS_SHUFFLE_TEMPLATES = 16 };
+struct Ps2GsShuffleTemplate {
+    bool valid;
+    uint32_t channel, page_x, page_y, context;
+    int offset_x, offset_y;
+    struct Ps2GsPackedReg regs[PS2_GS_SHUFFLE_TEMPLATE_REGS] __attribute__((aligned(16)));
+};
+static struct Ps2GsShuffleTemplate *s_shuffle_templates;
+static uint32_t s_shuffle_template_next;
+
+static const struct Ps2GsShuffleTemplate *ps2GsCoreShuffleTemplate(
+    enum Ps2GsCt32Channel channel, uint32_t page_x, uint32_t page_y)
+{
+    if (!s_shuffle_templates) {
+        s_shuffle_templates = (struct Ps2GsShuffleTemplate *)memalign(64,
+            sizeof(struct Ps2GsShuffleTemplate) * PS2_GS_SHUFFLE_TEMPLATES);
+        if (!s_shuffle_templates) {
+            return NULL;
+        }
+        for (uint32_t i = 0u; i < PS2_GS_SHUFFLE_TEMPLATES; ++i) {
+            s_shuffle_templates[i].valid = false;
+        }
+    }
+    const uint32_t context = (uint32_t)s_gs->PrimContext;
+    for (uint32_t i = 0u; i < PS2_GS_SHUFFLE_TEMPLATES; ++i) {
+        const struct Ps2GsShuffleTemplate *t = &s_shuffle_templates[i];
+        if (t->valid && t->channel == (uint32_t)channel && t->page_x == page_x &&
+            t->page_y == page_y && t->context == context &&
+            t->offset_x == s_gs->OffsetX && t->offset_y == s_gs->OffsetY) {
+            return t;
+        }
+    }
+    if (s_shuffle_template_next >= PS2_GS_SHUFFLE_TEMPLATES) {
+        return NULL; /* full: the caller builds the sprites itself */
+    }
+    struct Ps2GsShuffleTemplate *t =
+        &s_shuffle_templates[s_shuffle_template_next++];
+    t->valid = true;
+    t->channel = (uint32_t)channel;
+    t->page_x = page_x;
+    t->page_y = page_y;
+    t->context = context;
+    t->offset_x = s_gs->OffsetX;
+    t->offset_y = s_gs->OffsetY;
+    const uint32_t destination_x = page_x * 64u;
+    const uint32_t destination_y = page_y * 32u;
+    uint32_t out = 0u;
+    /* identical arithmetic to the generic loop below, full 8x2 sprites */
+    for (uint32_t y = 0u; y < 32u; y += 2u) {
+        for (uint32_t tile_x = 0u; tile_x < 64u; tile_x += 8u) {
+            struct Ps2GsT8PageCoordinate first = {};
+            (void)ps2GsMapCt32PixelChannelToT8Page(tile_x, y, channel, &first);
+            const bool right_lane = channel == PS2_GS_CT32_CHANNEL_BLUE ||
+                channel == PS2_GS_CT32_CHANNEL_ALPHA;
+            const uint32_t raw_tile_x = tile_x * 2u + (right_lane ? 8u : 0u);
+            const uint32_t u_xor = first.u - raw_tile_x;
+            const uint32_t x0 = destination_x + tile_x;
+            const uint32_t y0 = destination_y + y;
+            ps2GsCoreWriteReg(&t->regs[out++],
+                GS_SETREG_CLAMP(GS_CMODE_REGION_REPEAT, GS_CMODE_REGION_CLAMP,
+                    7u, raw_tile_x, first.v, first.v + 1u),
+                GS_CLAMP_1 + context);
+            ps2GsCoreWriteReg(&t->regs[out++],
+                GS_SETREG_UV(u_xor * 16u, first.v * 16u), GS_UV);
+            ps2GsCoreWriteReg(&t->regs[out++],
+                ps2GsCoreMakeXyz2Fixed((int)x0 * 16 - 8, (int)y0 * 16 - 8, 0u),
+                GS_XYZ2);
+            ps2GsCoreWriteReg(&t->regs[out++],
+                GS_SETREG_UV((u_xor + 8u) * 16u, (first.v + 2u) * 16u), GS_UV);
+            ps2GsCoreWriteReg(&t->regs[out++],
+                ps2GsCoreMakeXyz2Fixed((int)(x0 + 8u) * 16 - 8,
+                    (int)(y0 + 2u) * 16 - 8, 0u),
+                GS_XYZ2);
+        }
+    }
+    /* queued chains DMA-read it straight from memory */
+    SyncDCache(t->regs, (uint8_t *)t->regs + sizeof(t->regs));
+    return t;
+}
+
+/* Sprites [k0, k1) of a template row that overlap the span [s0, s1). */
+static inline void ps2GsCoreShuffleRowRange(uint32_t destination_x,
+    bool sparse, uint32_t s0, uint32_t s1, uint32_t *k0, uint32_t *k1)
+{
+    if (!sparse) {
+        *k0 = 0u;
+        *k1 = PS2_GS_SHUFFLE_SPRITES_PER_ROW;
+        return;
+    }
+    const uint32_t first = s0 <= destination_x ? 0u : (s0 - destination_x) / 8u;
+    uint32_t last = s1 <= destination_x ? 0u : (s1 - destination_x + 7u) / 8u;
+    if (last > PS2_GS_SHUFFLE_SPRITES_PER_ROW) {
+        last = PS2_GS_SHUFFLE_SPRITES_PER_ROW;
+    }
+    *k0 = first;
+    *k1 = last > first ? last : first;
+}
+
 static bool ps2GsCoreBlitRenderTargetChannelRectToActiveAlphaImpl(
     Ps2GsRenderTargetHandle source, enum Ps2GsCt32Channel channel,
     uint32_t width, uint32_t height,
@@ -3638,6 +3748,105 @@ static bool ps2GsCoreBlitRenderTargetChannelRectToActiveAlphaImpl(
             const uint32_t destination_x = page_x * 64u;
             const uint32_t page_width = width - destination_x < 64u ?
                 width - destination_x : 64u;
+            /* Partial pages use the leading rows and sprites of the full
+             * template; the last ones may cover up to 7 columns / 1 row past
+             * the blit, which the scissor set above (width x height) clips. */
+            const struct Ps2GsShuffleTemplate *shuffle =
+                ps2GsCoreShuffleTemplate(channel, page_x, page_y);
+            const uint32_t used_rows = (page_height + 1u) / 2u;
+            const uint32_t used_sprites = (page_width + 7u) / 8u;
+            if (shuffle) {
+                const uint32_t first_row = destination_y / 2u;
+                uint32_t sprites = 0u;
+                for (uint32_t r = 0u; r < used_rows; ++r) {
+                    uint32_t k0, k1;
+                    ps2GsCoreShuffleRowRange(destination_x, sparse,
+                        sparse ? span_x0[first_row + r] : 0u,
+                        sparse ? span_x1[first_row + r] : 0u, &k0, &k1);
+                    k1 = k1 < used_sprites ? k1 : used_sprites;
+                    sprites += k1 > k0 ? k1 - k0 : 0u;
+                }
+                if (sprites == 0u) {
+                    continue;
+                }
+                const uint32_t page_index =
+                    page_y * source_slot->layout.fbw + page_x;
+                struct Ps2GsPackedReg tex0_reg __attribute__((aligned(16)));
+                ps2GsCoreWriteReg(&tex0_reg,
+                    GS_SETREG_TEX0(
+                        (source_slot->vram +
+                            page_index * PS2_GS_FRAMEBUFFER_ALIGNMENT) / 256u,
+                        2u, GS_PSM_T8, 7u, 6u, 1u, 0u,
+                        shared->vram / 256u, GS_PSM_CT32, 0u, 0u,
+                        load_clut ? GS_CLUT_STOREMODE_LOAD :
+                            GS_CLUT_STOREMODE_NOLOAD),
+                    GS_TEX0_1 + s_gs->PrimContext);
+                const struct Ps2GsPackedReg *parts[PS2_GS_SHUFFLE_ROWS];
+                uint32_t part_counts[PS2_GS_SHUFFLE_ROWS];
+                uint32_t part_total = 0u;
+                for (uint32_t r = 0u; r < used_rows; ++r) {
+                    uint32_t k0, k1;
+                    ps2GsCoreShuffleRowRange(destination_x, sparse,
+                        sparse ? span_x0[first_row + r] : 0u,
+                        sparse ? span_x1[first_row + r] : 0u, &k0, &k1);
+                    k1 = k1 < used_sprites ? k1 : used_sprites;
+                    if (k1 > k0) {
+                        const struct Ps2GsPackedReg *row_regs = &shuffle->regs[
+                            (r * PS2_GS_SHUFFLE_SPRITES_PER_ROW + k0) * 5u];
+                        /* whole rows are contiguous in the template: merge */
+                        if (part_total != 0u &&
+                            parts[part_total - 1u] + part_counts[part_total - 1u] == row_regs) {
+                            part_counts[part_total - 1u] += (k1 - k0) * 5u;
+                        } else {
+                            parts[part_total] = row_regs;
+                            part_counts[part_total] = (k1 - k0) * 5u;
+                            ++part_total;
+                        }
+                    }
+                }
+                if (ps2GsNativeQueueAppendAdRefs(&tex0_reg, 1u, parts,
+                        part_counts, part_total)) {
+                    s_loaded_clut_vram = shared->vram;
+                    s_loaded_clut_psm = GS_PSM_CT32;
+                    load_clut = false;
+                    ps2GsCoreMarkActiveRenderTargetWritten();
+                    continue;
+                }
+                struct Ps2GsPackedReg *p =
+                    ps2GsCoreReserveChunk(1u + sprites * 5u);
+                if (!p) {
+                    success = false;
+                    break;
+                }
+                ps2GsCoreWriteReg(&p[0],
+                    GS_SETREG_TEX0(
+                        (source_slot->vram +
+                            page_index * PS2_GS_FRAMEBUFFER_ALIGNMENT) / 256u,
+                        2u, GS_PSM_T8, 7u, 6u, 1u, 0u,
+                        shared->vram / 256u, GS_PSM_CT32, 0u, 0u,
+                        load_clut ? GS_CLUT_STOREMODE_LOAD :
+                            GS_CLUT_STOREMODE_NOLOAD),
+                    GS_TEX0_1 + s_gs->PrimContext);
+                struct Ps2GsPackedReg *dst = &p[1];
+                for (uint32_t r = 0u; r < used_rows; ++r) {
+                    uint32_t k0, k1;
+                    ps2GsCoreShuffleRowRange(destination_x, sparse,
+                        sparse ? span_x0[first_row + r] : 0u,
+                        sparse ? span_x1[first_row + r] : 0u, &k0, &k1);
+                    k1 = k1 < used_sprites ? k1 : used_sprites;
+                    if (k1 > k0) {
+                        const size_t regs = (size_t)(k1 - k0) * 5u;
+                        memcpy(dst, &shuffle->regs[(r * PS2_GS_SHUFFLE_SPRITES_PER_ROW + k0) * 5u],
+                            regs * sizeof(*dst));
+                        dst += regs;
+                    }
+                }
+                s_loaded_clut_vram = shared->vram;
+                s_loaded_clut_psm = GS_PSM_CT32;
+                load_clut = false;
+                ps2GsCoreMarkActiveRenderTargetWritten();
+                continue;
+            }
             uint32_t tile_count = 0u;
             for (uint32_t y = 0u; y < page_height; y += 2u) {
                 const uint32_t row_index =
