@@ -59,7 +59,13 @@ static s16 hwVoiceVol(N_PVoice *e, s32 right)
 
 static u16 hwVoiceFlags(N_PVoice *e)
 {
-	return (e->em_wetamt & 0xfffe) >= 0x1000 ? PDSND_FLAG_REVERB : 0;
+	u16 flags = (e->em_wetamt & 0xfffe) >= 0x1000 ? PDSND_FLAG_REVERB : 0;
+
+	if (e->vvoice && e->vvoice->fxBus == 1) {
+		flags |= PDSND_FLAG_BUS1;
+	}
+
+	return flags;
 }
 
 static u32 hwSamplesToUs(s32 samples)

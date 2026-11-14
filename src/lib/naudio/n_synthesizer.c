@@ -97,7 +97,11 @@ void n_alSynNew(ALSynConfig *c)
 
 #ifdef PLATFORM_PS2
 	if (c->maxPVoices <= (s32)PDSND_MAX_VOICES) {
+		extern void n_ps2HwFxUpdate(s32 bus);
 		ps2HwVoicesInit(c->outputRate);
+		for (i = 0; i < n_syn->maxAuxBusses; i++) {
+			n_ps2HwFxUpdate(i);
+		}
 	}
 #endif
 }

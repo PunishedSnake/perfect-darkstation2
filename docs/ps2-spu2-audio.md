@@ -115,11 +115,21 @@ to within about 15 %.
 
 Known differences from the software mixer:
 
-* Reverb is the SPU2's own (core 1 hall preset, `Audio.HardwareReverb` /
-  `Audio.HardwareReverbDepth`), not PD's per-stage software reverb. A voice
-  sends to it when its FX amount is significant. An SPU2 voice has one level
-  for dry and send, so it plays at dry + 1/4 wet. Over the 40 s capture the
-  loudness is 0.97x the software mixer's.
+* Effects follow the game's two FX buses:
+  * Bus 0 is PD's multi-tap reverb. Its taps can be changed at run time by
+    the level's sequences, which is what gives areas their room character.
+    It maps to core 1's reverb, with the preset chosen by its longest active
+    tap (room / studio S-M-L / hall / space) and the return level by its
+    tap gains.
+  * Bus 1 is the echo. It maps to core 0's echo, with delay and feedback
+    from its tap.
+  * Voices play on the core of their FX bus, mapped at KEYON, and send to
+    its effect when their FX amount is significant.
+  * Parameter changes are re-mapped as they happen. `Audio.HardwareReverb=0`
+    turns effects off; `Audio.HardwareReverbDepth` scales the return (%).
+  * An SPU2 voice has one level for dry and send, so it plays at dry + 1/4
+    wet. Over a 40 s intro capture the loudness is 1.05x the software
+    mixer's.
 * PD's per-voice low-pass filter (`fx`, used for muffled sounds) is not
   applied.
 * Parameter changes take effect at audio-frame granularity (184 samples,

@@ -43,16 +43,17 @@ extern u8 *_seqtblSegmentRomStart, *_seqtblSegmentRomEnd;
 #define PS2_HW_BANK_NAME "pd.pssb"
 /* SPU2 RAM window for the sample cache. Below: audsrv's sound-data input
  * areas and its ADPCM region start (0x5010); above: core reverb work
- * areas, which stay untouched while reverb is off. */
+ * areas: core 0's echo ends at 0x1dffff, core 1's reverb at 0x1fffff. */
 #define PS2_HW_SPU_BASE 0x00010000u
-#define PS2_HW_SPU_END 0x001e0000u
+#define PS2_HW_SPU_END 0x001c0000u
 
 bool g_Ps2HwVoices;
 
 static s32 s_enabled_cfg = 1;
-/* SPU2 reverb for hardware voices: SD_EFFECT_MODE_* (0 off, 5 hall). */
-static s32 s_reverb_mode = 5;
-static s32 s_reverb_depth = 0x3000;
+/* SPU2 effects for hardware voices: 0 off, 1 follow the game's FX buses.
+ * Depth is a percentage applied to the derived effect return level. */
+static s32 s_reverb_mode = 1;
+static s32 s_reverb_depth = 100;
 static SifRpcClientData_t s_client __attribute__((aligned(64)));
 static PdSndFrameArgs s_frame[2] __attribute__((aligned(64)));
 static u32 s_frame_index;
@@ -72,8 +73,8 @@ static PdSndFrameArgs *cur_frame(void)
 PD_CONSTRUCTOR static void ps2HwVoicesConfigInit(void)
 {
     configRegisterInt("Audio.HardwareVoices", &s_enabled_cfg, 0, 1);
-    configRegisterInt("Audio.HardwareReverb", &s_reverb_mode, 0, 9);
-    configRegisterInt("Audio.HardwareReverbDepth", &s_reverb_depth, 0, 0x7fff);
+    configRegisterInt("Audio.HardwareReverb", &s_reverb_mode, 0, 1);
+    configRegisterInt("Audio.HardwareReverbDepth", &s_reverb_depth, 0, 200);
 }
 
 static bool load_bank_index(void)
@@ -135,8 +136,6 @@ void ps2HwVoicesInit(s32 output_rate)
     args.protocol = PDSND_PROTOCOL;
     args.spu_base = PS2_HW_SPU_BASE;
     args.spu_end = PS2_HW_SPU_END;
-    args.reverb_mode = (u16)s_reverb_mode;
-    args.reverb_depth = (u16)s_reverb_depth;
     strncpy(args.path, fsFullPath(PS2_HW_BANK_NAME), sizeof(args.path) - 1);
     if (SifCallRpc(&s_client, PDSND_FUNC_INIT, 0, &args, sizeof(args), &args, sizeof(args), NULL, NULL) < 0) {
         sysLogPrintf(LOG_ERROR, "SPU2 voices: INIT RPC failed");
@@ -205,6 +204,59 @@ void ps2HwVoicesPush(const PdSndVoiceCmd *cmd)
     f->cmds[f->count++] = *cmd;
 }
 
+/*
+ * The game's two FX buses are delay networks: bus 0 a multi-tap reverb
+ * (room character set by the level's sequences), bus 1 a single echo.
+ * Map bus 0 onto the SPU2 reverb preset whose size matches its longest
+ * tap, and bus 1 onto the SPU2 echo with the tap's delay and feedback.
+ */
+void ps2HwVoicesSetFx(s32 bus, s32 delay_ms, s32 gain, s32 feedback)
+{
+    if (!g_Ps2HwVoices || bus < 0 || bus > 1) {
+        return;
+    }
+    int mode = 0, delay = 0, fb = 0;
+    s32 depth = 0;
+    if (s_reverb_mode != 0 && gain > 0 && delay_ms > 0) {
+        if (bus == 0) {
+            mode = delay_ms < 40 ? 1 /* room */
+                : delay_ms < 80 ? 2 /* studio small */
+                : delay_ms < 140 ? 3 /* studio medium */
+                : delay_ms < 220 ? 4 /* studio large */
+                : delay_ms < 400 ? 5 /* hall */
+                : 6; /* space */
+            depth = gain * 6 / 10;
+        } else {
+            mode = 7; /* echo */
+            delay = delay_ms * 127 / 1000;
+            delay = delay < 1 ? 1 : delay > 127 ? 127 : delay;
+            fb = feedback * 127 / 0x7fff;
+            depth = gain / 2;
+        }
+        depth = depth * s_reverb_depth / 100;
+        depth = depth < 0x400 ? 0x400 : depth > 0x6000 ? 0x6000 : depth;
+    }
+    static s32 last[2][4] = { { -1, -1, -1, -1 }, { -1, -1, -1, -1 } };
+    if (last[bus][0] == mode && last[bus][1] == depth && last[bus][2] == delay && last[bus][3] == fb) {
+        return;
+    }
+    last[bus][0] = mode;
+    last[bus][1] = depth;
+    last[bus][2] = delay;
+    last[bus][3] = fb;
+    PdSndVoiceCmd cmd;
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.op = PDSND_OP_FX;
+    cmd.voice = bus == 0 ? 1 : 0; /* core */
+    cmd.entry = (u16)mode;
+    cmd.pitch = (u16)depth;
+    cmd.cur_l = (s16)delay;
+    cmd.cur_r = (s16)fb;
+    ps2HwVoicesPush(&cmd);
+    sysLogPrintf(LOG_NOTE, "SPU2 voices: FX bus %d -> mode %d depth %04x delay %d feedback %d (taps %d ms, gain %d)",
+        (int)bus, mode, (unsigned)depth, delay, fb, (int)delay_ms, (int)gain);
+}
+
 void ps2HwVoicesFlush(void)
 {
     if (!g_Ps2HwVoices) {
@@ -229,11 +281,11 @@ void ps2HwVoicesFlush(void)
         }
         SifCallRpc(&s_client, PDSND_FUNC_STATUS, 0, NULL, 0, &s_status, sizeof(s_status), NULL, NULL);
         sysLogPrintf(LOG_NOTE,
-            "SPU2 voices: frames=%u loads=%u (%u KiB, %u ms) evict=%u fail=%u cache=%u KiB qdrop=%u overflow=%u miss=%u",
+            "SPU2 voices: frames=%u loads=%u (%u KiB, %u ms) evict=%u fail=%u cache=%u KiB qdrop=%u overflow=%u miss=%u fx=%u",
             (unsigned)s_status.frames, (unsigned)s_status.loads,
             (unsigned)(s_status.load_bytes >> 10), (unsigned)(s_status.load_us / 1000u),
             (unsigned)s_status.evictions, (unsigned)s_status.failures,
             (unsigned)(s_status.cache_used >> 10), (unsigned)s_status.queue_drops,
-            (unsigned)s_overflow, (unsigned)s_misses);
+            (unsigned)s_overflow, (unsigned)s_misses, (unsigned)s_status.fx_changes);
     }
 }

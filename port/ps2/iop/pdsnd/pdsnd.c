@@ -89,24 +89,62 @@ struct Voice {
 };
 
 static struct Voice s_voices[PDSND_MAX_VOICES];
-/* Low voice numbers (allocated first by n_audio) go to core 1, the core
- * whose effect unit runs the reverb. */
+/*
+ * Hardware voices: 0..23 are core 1, whose effect unit carries the game's
+ * FX bus 0 (the reverb); 24..47 are core 0, carrying FX bus 1 (the echo).
+ * The game's voice numbers are mapped onto them at KEYON, on the core of
+ * the voice's FX bus, so its send reaches the right effect.
+ */
 static inline int voice_core(int v) { return v < 24 ? 1 : 0; }
 static inline int voice_index(int v) { return v % 24; }
 static inline int voice_reg(int v) { return SD_VOICE(voice_core(v), voice_index(v)); }
 
-static u32 s_wet_mask; /* core 1 voices currently sending to the reverb */
+static s8 s_map[PDSND_MAX_VOICES];   /* game voice -> hardware voice, -1 */
+static s8 s_owner[PDSND_MAX_VOICES]; /* hardware voice -> game voice, -1 */
+static u8 s_keyed[PDSND_MAX_VOICES]; /* hardware voice playing (not released) */
+static u32 s_wet_mask[2];            /* per core: voices sending to its effect */
 
 static void voice_set_wet(int v, int wet)
 {
-    if (voice_core(v) != 1) {
-        return;
-    }
+    const int core = voice_core(v);
     if (wet) {
-        s_wet_mask |= 1u << voice_index(v);
+        s_wet_mask[core] |= 1u << voice_index(v);
     } else {
-        s_wet_mask &= ~(1u << voice_index(v));
+        s_wet_mask[core] &= ~(1u << voice_index(v));
     }
+}
+
+/* Hardware voice for game voice g on its bus's core; may take a voice the
+ * other core's range when its own is exhausted. */
+static int voice_assign(int g, int bus)
+{
+    const int prefer = bus == 1 ? 24 : 0;
+    const int cur = s_map[g];
+    if (cur >= 0 && (cur >= 24) == (prefer == 24)) {
+        return cur;
+    }
+    int pick = -1;
+    for (int pass = 0; pass < 4 && pick < 0; ++pass) {
+        const int base = (pass & 1) ? 24 - prefer : prefer;
+        for (int h = base; h < base + 24; ++h) {
+            if (pass < 2 ? s_owner[h] < 0 : (!s_keyed[h] && s_owner[h] != g)) {
+                pick = h;
+                break;
+            }
+        }
+    }
+    if (pick < 0) {
+        return cur;
+    }
+    if (s_owner[pick] >= 0) {
+        s_map[(int)s_owner[pick]] = -1;
+    }
+    if (cur >= 0) {
+        s_owner[cur] = -1;
+    }
+    s_owner[pick] = (s8)g;
+    s_map[g] = (s8)pick;
+    return pick;
 }
 
 
@@ -281,13 +319,15 @@ static void voice_start_ramp(struct Voice *vs, s32 tgt_l, s32 tgt_r, u32 ramp_us
     }
 }
 
+static void apply_fx(int core, int mode, int depth, int delay, int feedback);
+
 static void apply_frame(const PdSndFrameArgs *f)
 {
     u32 kon[2] = { 0, 0 };
     u32 koff[2] = { 0, 0 };
 
     lock();
-    const u32 wet_before = s_wet_mask;
+    const u32 wet_before[2] = { s_wet_mask[0], s_wet_mask[1] };
     /* Unpin voices whose release has run out. */
     for (int v = 0; v < (int)PDSND_MAX_VOICES; ++v) {
         struct Voice *vs = &s_voices[v];
@@ -299,16 +339,38 @@ static void apply_frame(const PdSndFrameArgs *f)
     const u32 count = f->count < PDSND_MAX_CMDS ? f->count : PDSND_MAX_CMDS;
     for (u32 c = 0; c < count; ++c) {
         const PdSndVoiceCmd *cmd = &f->cmds[c];
-        const int v = cmd->voice;
         if (cmd->op == PDSND_OP_STOPALL) {
             for (int k = 0; k < (int)PDSND_MAX_VOICES; ++k) {
                 koff[voice_core(k)] |= 1u << voice_index(k);
                 s_voices[k].steps_left = 0;
                 s_voices[k].release = RELEASE_FRAMES;
+                s_keyed[k] = 0;
             }
             continue;
         }
-        if (v >= (int)PDSND_MAX_VOICES) {
+        if (cmd->op == PDSND_OP_FX) {
+            apply_fx(cmd->voice & 1, cmd->entry, cmd->pitch, cmd->cur_l, cmd->cur_r);
+            continue;
+        }
+        if (cmd->voice >= PDSND_MAX_VOICES) {
+            continue;
+        }
+        int v;
+        if (cmd->op == PDSND_OP_KEYON) {
+            const int old = s_map[cmd->voice];
+            v = voice_assign(cmd->voice, (cmd->flags & PDSND_FLAG_BUS1) ? 1 : 0);
+            if (old >= 0 && old != v && s_keyed[old]) {
+                /* moved to the other core: release the old voice */
+                koff[voice_core(old)] |= 1u << voice_index(old);
+                s_voices[old].steps_left = 0;
+                s_voices[old].release = RELEASE_FRAMES;
+                s_keyed[old] = 0;
+                voice_set_wet(old, 0);
+            }
+        } else {
+            v = s_map[cmd->voice];
+        }
+        if (v < 0) {
             continue;
         }
         struct Voice *vs = &s_voices[v];
@@ -347,6 +409,7 @@ static void apply_frame(const PdSndFrameArgs *f)
             voice_set_wet(v, cmd->flags & PDSND_FLAG_REVERB);
             kon[voice_core(v)] |= 1u << voice_index(v);
             koff[voice_core(v)] &= ~(1u << voice_index(v));
+            s_keyed[v] = 1;
             break;
         }
         case PDSND_OP_RAMP:
@@ -363,6 +426,7 @@ static void apply_frame(const PdSndFrameArgs *f)
             koff[voice_core(v)] |= 1u << voice_index(v);
             kon[voice_core(v)] &= ~(1u << voice_index(v));
             vs->steps_left = 0;
+            s_keyed[v] = 0;
             if (vs->entry != NO_ENTRY) {
                 vs->release = RELEASE_FRAMES;
             }
@@ -377,9 +441,11 @@ static void apply_frame(const PdSndFrameArgs *f)
     sceSdSetParam(SD_CORE_0 | SD_PARAM_MVOLL, 0x3fff);
     sceSdSetParam(SD_CORE_0 | SD_PARAM_MVOLR, 0x3fff);
 
-    if (s_wet_mask != wet_before) {
-        sceSdSetSwitch(SD_CORE_1 | SD_SWITCH_VMIXEL, s_wet_mask);
-        sceSdSetSwitch(SD_CORE_1 | SD_SWITCH_VMIXER, s_wet_mask);
+    for (int core = 0; core < 2; ++core) {
+        if (s_wet_mask[core] != wet_before[core]) {
+            sceSdSetSwitch(core | SD_SWITCH_VMIXEL, s_wet_mask[core]);
+            sceSdSetSwitch(core | SD_SWITCH_VMIXER, s_wet_mask[core]);
+        }
     }
 
     for (int core = 0; core < 2; ++core) {
@@ -392,6 +458,48 @@ static void apply_frame(const PdSndFrameArgs *f)
     }
     ++s_status.frames;
     unlock();
+}
+
+/*
+ * One SPU2 effect per core. A mode change re-initialises (and clears) the
+ * work area at the top of SPU2 RAM; depth-only changes just set EVOL.
+ */
+static struct { int mode, depth, delay, feedback; } s_fx[2];
+
+static void apply_fx(int core, int mode, int depth, int delay, int feedback)
+{
+    if (mode == s_fx[core].mode && delay == s_fx[core].delay &&
+        feedback == s_fx[core].feedback) {
+        if (depth != s_fx[core].depth) {
+            sceSdSetParam(core | SD_PARAM_EVOLL, (u16)depth);
+            sceSdSetParam(core | SD_PARAM_EVOLR, (u16)depth);
+            s_fx[core].depth = depth;
+        }
+        return;
+    }
+    sceSdSetCoreAttr(core | SD_CORE_EFFECT_ENABLE, 0);
+    sceSdSetParam(core | SD_PARAM_EVOLL, 0);
+    sceSdSetParam(core | SD_PARAM_EVOLR, 0);
+    if (mode != 0) {
+        sceSdEffectAttr fx;
+        memset(&fx, 0, sizeof(fx));
+        fx.core = core;
+        fx.mode = mode | SD_EFFECT_MODE_CLEAR;
+        fx.depth_L = (short)depth;
+        fx.depth_R = (short)depth;
+        fx.delay = delay;
+        fx.feedback = feedback;
+        sceSdSetAddr(core | SD_ADDR_EEA, core == 1 ? 0x1fffff : 0x1dffff);
+        sceSdSetEffectAttr(core, &fx);
+        sceSdSetParam(core | SD_PARAM_EVOLL, (u16)depth);
+        sceSdSetParam(core | SD_PARAM_EVOLR, (u16)depth);
+        sceSdSetCoreAttr(core | SD_CORE_EFFECT_ENABLE, 1);
+    }
+    s_fx[core].mode = mode;
+    s_fx[core].depth = depth;
+    s_fx[core].delay = delay;
+    s_fx[core].feedback = feedback;
+    ++s_status.fx_changes;
 }
 
 /* ------------------------------------------------------------------ */
@@ -477,7 +585,7 @@ static int do_init(const PdSndInitArgs *a)
     /* Voices: dry to the core's output; core 1 also mixes its external
      * input (core 0) and sound-data input (audsrv's stream) dry, and its
      * voices' wet sends through the effect unit. */
-    sceSdSetParam(SD_CORE_0 | SD_PARAM_MMIX, 0x000c);
+    sceSdSetParam(SD_CORE_0 | SD_PARAM_MMIX, 0x000f);
     sceSdSetParam(SD_CORE_1 | SD_PARAM_MMIX, 0x0ccf);
     sceSdSetSwitch(SD_CORE_0 | SD_SWITCH_VMIXL, 0xffffff);
     sceSdSetSwitch(SD_CORE_0 | SD_SWITCH_VMIXR, 0xffffff);
@@ -487,26 +595,17 @@ static int do_init(const PdSndInitArgs *a)
     sceSdSetSwitch(SD_CORE_0 | SD_SWITCH_VMIXER, 0);
     sceSdSetSwitch(SD_CORE_1 | SD_SWITCH_VMIXEL, 0);
     sceSdSetSwitch(SD_CORE_1 | SD_SWITCH_VMIXER, 0);
-    s_wet_mask = 0;
+    s_wet_mask[0] = s_wet_mask[1] = 0;
+    for (int v = 0; v < (int)PDSND_MAX_VOICES; ++v) {
+        s_map[v] = -1;
+        s_owner[v] = -1;
+        s_keyed[v] = 0;
+    }
+    s_fx[0].mode = s_fx[1].mode = 0;
     sceSdSetParam(SD_CORE_0 | SD_PARAM_MVOLL, 0x3fff);
     sceSdSetParam(SD_CORE_0 | SD_PARAM_MVOLR, 0x3fff);
 
-    /* Core 1 reverb in the top of SPU2 RAM, above the sample cache. */
-    if (a->reverb_mode != 0) {
-        sceSdEffectAttr fx;
-        memset(&fx, 0, sizeof(fx));
-        fx.core = SD_CORE_1;
-        fx.mode = (int)a->reverb_mode | SD_EFFECT_MODE_CLEAR;
-        fx.depth_L = (short)a->reverb_depth;
-        fx.depth_R = (short)a->reverb_depth;
-        fx.delay = 0;
-        fx.feedback = 0;
-        sceSdSetAddr(SD_CORE_1 | SD_ADDR_EEA, 0x1fffff);
-        sceSdSetEffectAttr(SD_CORE_1, &fx);
-        sceSdSetParam(SD_CORE_1 | SD_PARAM_EVOLL, a->reverb_depth);
-        sceSdSetParam(SD_CORE_1 | SD_PARAM_EVOLR, a->reverb_depth);
-        sceSdSetCoreAttr(SD_CORE_1 | SD_CORE_EFFECT_ENABLE, 1);
-    }
+    /* Effects start off; the EE sends the game's FX bus settings. */
     s_fd = fd;
     s_init_result.entries = s_header.entry_count;
     s_init_result.rom_crc = s_header.rom_crc;
