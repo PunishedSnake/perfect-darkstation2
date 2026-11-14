@@ -5566,12 +5566,9 @@ extern "C" bool gfxPs2DirectQuery(struct GfxPs2DirectContext *ctx)
     if (path == 0 || s_shader->features.opt_grayscale) {
         return false;
     }
-    for (int t = 0; t < 2; ++t) {
-        if (s_shader->features.used_textures[t] &&
-            (s_shader->features.clamp[t][0] || s_shader->features.clamp[t][1])) {
-            return false;
-        }
-    }
+    /* texture clamps: the frontend passes Fast3D's bounds
+     * (gfxPs2DirectSetTextureClamp); each draw decodes them into the GS
+     * region clamp as the VBO path does */
     const Ps2GsTextureHandle handle = s_selected_texture[0];
     if (path != 3 && handle >= PS2_GFX_TEXTURE_STATE_SLOTS) {
         return false;
@@ -5732,6 +5729,34 @@ static const struct Ps2GsVu1TransformVertex *ps2_object_to_clip(
     const bool fog = s_shader->features.opt_fog;
     const struct Ps2GsVu1ObjectVertex *in =
         (const struct Ps2GsVu1ObjectVertex *)vertices;
+    const struct Ps2GsVu1SkinBatch *skin = ps2GsVu1QueueSkin();
+    if (skin) {
+        /* what the Emotion3D skin program computes, on the EE */
+        for (uint32_t i = 0u; i < vertex_count; ++i) {
+            const uint32_t e = ((uint32_t)in[i].pos[3] -
+                PS2_GS_VU1_SKIN_HEAD_QW) / PS2_GS_VU1_SKIN_ENTRY_QW;
+            ps2GsVu1SkinVertexToClip(skin->k,
+                &skin->entries[e < skin->entry_count ? e : 0u],
+                skin->flags, fog, &in[i], &s_object_clip[i]);
+        }
+        if (skin->flags & PS2_GS_VU1_TRANSFORM_FLAG_CULL) {
+            for (uint32_t t = 0u; t + 2u < vertex_count; t += 3u) {
+                struct Ps2GsVu1TransformVertex *v = &s_object_clip[t];
+                const float x0 = v[0].clip[0] / v[0].clip[3];
+                const float y0 = v[0].clip[1] / v[0].clip[3];
+                const float x1 = v[1].clip[0] / v[1].clip[3];
+                const float y1 = v[1].clip[1] / v[1].clip[3];
+                const float x2 = v[2].clip[0] / v[2].clip[3];
+                const float y2 = v[2].clip[1] / v[2].clip[3];
+                const float cross = (x0 - x1) * (y2 - y1) - (y0 - y1) * (x2 - x1);
+                if (!(cross * skin->k->misc[2] < 0.0f)) {
+                    memcpy(v[1].clip, v[0].clip, sizeof(v[0].clip));
+                    memcpy(v[2].clip, v[0].clip, sizeof(v[0].clip));
+                }
+            }
+        }
+        return s_object_clip;
+    }
     for (uint32_t i = 0u; i < vertex_count; ++i) {
         gfxPs2ObjectVertexToClip(object, fog, &in[i], &s_object_clip[i]);
     }
@@ -5783,6 +5808,27 @@ static bool ps2_direct_viewport_mapping(float scale[4], float offset[4])
     return s_direct_mapping.ok;
 }
 
+/*
+ * Texture 0 clamp of the direct path's current state (Fast3D's clamp bound,
+ * normalised): decoded into the GS region clamp per draw as the VBO path
+ * decodes the bound it carries per vertex.
+ */
+static struct {
+    bool s, t;
+    float bs, bt;
+} s_direct_clamp[2];
+
+extern "C" void gfxPs2DirectSetTextureClamp(int tile, bool s, float bs, bool t, float bt)
+{
+    if (tile < 0 || tile > 1) {
+        return;
+    }
+    s_direct_clamp[tile].s = s;
+    s_direct_clamp[tile].bs = bs;
+    s_direct_clamp[tile].t = t;
+    s_direct_clamp[tile].bt = bt;
+}
+
 static void ps2_direct_draw_impl(const struct Ps2GsVu1TransformVertex *vertices,
     uint32_t vertex_count, bool trilerp, bool w_ok, const uint8_t fog_rgb[3],
     const struct Ps2GsVu1ObjectTransform *object, const uint32_t *color_pass)
@@ -5813,6 +5859,18 @@ static void ps2_direct_draw_impl(const struct Ps2GsVu1TransformVertex *vertices,
     }
 
     memset(s_draw_region_clamp, 0, sizeof(s_draw_region_clamp));
+    for (int t = 0; t < (trilerp ? 2 : 1) && !color_only; ++t) {
+        if (s_direct_clamp[t].s) {
+            s_draw_region_clamp[t].region_s = ps2_decode_texture_region_clamp(
+                s_selected_texture[t], true, s_direct_clamp[t].bs,
+                &s_draw_region_clamp[t].max_u);
+        }
+        if (s_direct_clamp[t].t) {
+            s_draw_region_clamp[t].region_t = ps2_decode_texture_region_clamp(
+                s_selected_texture[t], false, s_direct_clamp[t].bt,
+                &s_draw_region_clamp[t].max_v);
+        }
+    }
     s_draw_texture_edge_reference = PS2_GFX_TEXTURE_EDGE_THRESHOLD;
     const bool fog = s_shader->features.opt_fog;
     if (fog) {
@@ -5953,6 +6011,121 @@ extern "C" void gfxPs2DirectDraw(const struct Ps2GsVu1TransformVertex *vertices,
         color_pass);
 }
 
+/*
+ * Emotion3D: Fast3D's opaque two-texture trilerp (lerp(T0, T1, LOD) times
+ * shade) for VU1 skin batches. The translator draws it as T0 * shade, then
+ * T1 * shade blended by the LOD fraction over it with equal-depth Z; here
+ * both passes are skin batches over the same raw vertices, the second with
+ * the LOD fraction computed per vertex on VU1.
+ */
+extern "C" bool gfxPs2SkinTrilerpQuery(float scale_s[2], float scale_t[2],
+    bool *modulate)
+{
+    if (!ps2GsCoreIsReady() || ps2RendererTraceIsCapturing() || !s_shader ||
+        !s_shader->plan.supported || !s_shader->plan.textured ||
+        s_fb_draw_target != 0 || s_fb_texture != 0 || s_depth_decal ||
+        s_shader->plan.pass_graph != PS2_PASS_GRAPH_OPAQUE_TRILERP ||
+        !ps2_color_recipe_is_opaque_trilerp(s_shader->plan.color_recipe) ||
+        s_shader->features.opt_grayscale || s_shader->features.opt_invisible ||
+        s_shader->features.opt_texture_edge ||
+        !s_shader->features.used_textures[0] ||
+        !s_shader->features.used_textures[1] ||
+        !(s_depth_test && s_depth_compare && s_depth_update)) {
+        return false;
+    }
+    for (int t = 0; t < 2; ++t) {
+        const Ps2GsTextureHandle h = s_selected_texture[t];
+        if (h >= PS2_GFX_TEXTURE_STATE_SLOTS) {
+            return false;
+        }
+        scale_s[t] = s_texture_sampler[h].coordinate_scale_s;
+        scale_t[t] = s_texture_sampler[h].coordinate_scale_t;
+    }
+    *modulate = s_shader->plan.color_recipe ==
+        PS2_COLOR_TEX01_LERP_INPUT1_MUL_INPUT2;
+    return true;
+}
+
+static void ps2_skin_trilerp_pass(int tile,
+    const struct Ps2GsVu1ObjectVertex *vertices, uint32_t vertex_count,
+    const struct Ps2GsVu1SkinBatch *pass, bool mapped,
+    const float scale[4], const float offset[4],
+    const struct Ps2GsVu1ObjectTransform *object)
+{
+    const Ps2GsTextureHandle handle = s_selected_texture[tile];
+    ps2GsVu1QueueSetSkin(pass);
+    const bool submitted = mapped &&
+        ps2GsCoreVu1TexturedTransformCandidate(vertex_count) &&
+        ps2GsCoreTryDrawTexturedTrianglesObject(handle, vertices,
+            vertex_count, scale, offset, object);
+    if (!submitted) {
+        const struct Ps2GsVu1TransformVertex *clip = ps2_object_to_clip(
+            (const struct Ps2GsVu1TransformVertex *)vertices, vertex_count,
+            object);
+        ps2_pack_textured_from_vu1_input(clip, s_stq_vertices[0],
+            vertex_count, s_shader->features.opt_fog);
+        ps2GsCoreDrawTexturedTriangles(handle, s_stq_vertices[0],
+            vertex_count);
+    }
+    ps2GsVu1QueueSetSkin(NULL);
+}
+
+extern "C" void gfxPs2DirectDrawSkinTrilerp(
+    const struct Ps2GsVu1ObjectVertex *vertices, uint32_t vertex_count,
+    const uint8_t fog_rgb[3], const struct Ps2GsVu1SkinBatch *pass0,
+    const struct Ps2GsVu1SkinBatch *pass1, const float clamp_bounds[2][2],
+    const uint8_t clamp_flags[2][2],
+    const struct Ps2GsVu1ObjectTransform *object)
+{
+    if (!ps2GsCoreIsReady() || !s_shader || vertex_count == 0u ||
+        vertex_count > PS2_GS_VU1_OBJECT_MAX_VERTICES || !object ||
+        !ps2GsCoreTextureReady(s_selected_texture[0]) ||
+        !ps2GsCoreTextureReady(s_selected_texture[1])) {
+        return;
+    }
+    ps2_refresh_gs_offsets();
+    if (s_direct_bracket != PS2_DIRECT_BRACKET_NONE) {
+        ps2_direct_settle();
+    }
+    memset(s_draw_region_clamp, 0, sizeof(s_draw_region_clamp));
+    for (int t = 0; t < 2; ++t) {
+        if (clamp_flags[t][0]) {
+            s_draw_region_clamp[t].region_s = ps2_decode_texture_region_clamp(
+                s_selected_texture[t], true, clamp_bounds[t][0],
+                &s_draw_region_clamp[t].max_u);
+        }
+        if (clamp_flags[t][1]) {
+            s_draw_region_clamp[t].region_t = ps2_decode_texture_region_clamp(
+                s_selected_texture[t], false, clamp_bounds[t][1],
+                &s_draw_region_clamp[t].max_v);
+        }
+    }
+    const bool fog = s_shader->features.opt_fog;
+    if (fog) {
+        if (!s_direct_luts_ready) {
+            ps2_direct_init_luts();
+        }
+        s_draw_fog_r = s_direct_lut_u8[fog_rgb[0]];
+        s_draw_fog_g = s_direct_lut_u8[fog_rgb[1]];
+        s_draw_fog_b = s_direct_lut_u8[fog_rgb[2]];
+        ps2GsCoreSetFog(true, s_draw_fog_r, s_draw_fog_g, s_draw_fog_b);
+    }
+    float scale[4] __attribute__((aligned(16)));
+    float offset[4] __attribute__((aligned(16)));
+    const bool mapped = ps2_direct_viewport_mapping(scale, offset);
+
+    ps2_trilerp_set_base_state();
+    ps2_skin_trilerp_pass(0, vertices, vertex_count, pass0, mapped, scale,
+        offset, object);
+    ps2_trilerp_set_lerp_state();
+    ps2_skin_trilerp_pass(1, vertices, vertex_count, pass1, mapped, scale,
+        offset, object);
+    ps2_trilerp_restore_state();
+    if (fog) {
+        ps2GsCoreSetFog(false, 0u, 0u, 0u);
+    }
+}
+
 extern "C" void gfxPs2DirectDrawObject(
     const struct Ps2GsVu1ObjectVertex *vertices, uint32_t vertex_count,
     bool trilerp, const uint8_t fog_rgb[3],
@@ -6044,6 +6217,23 @@ __attribute__((constructor)) static void ps2_emotion3d_models_config_init(void)
 extern "C" bool gfxPs2Emotion3DModelsEnabled(void)
 {
     return s_emotion3d != 0 && s_emotion3d_models != 0;
+}
+
+/*
+ * Video.Ps2Emotion3DSkin (default 1): model lists run through the
+ * Emotion3D skin program: matrix palette, lighting, texture generation and
+ * culling on VU1 (port/fast3d/e3d_geom_ps2.inc, gs_vu1_skin.vsm).
+ */
+static int32_t s_emotion3d_skin = 1;
+
+__attribute__((constructor)) static void ps2_emotion3d_skin_config_init(void)
+{
+    configRegisterInt("Video.Ps2Emotion3DSkin", &s_emotion3d_skin, 0, 1);
+}
+
+extern "C" bool gfxPs2Emotion3DSkinEnabled(void)
+{
+    return s_emotion3d != 0 && s_emotion3d_skin != 0;
 }
 
 /*
@@ -6652,6 +6842,22 @@ extern "C" bool gfxPs2DirectLutScale(const uint8_t *lut, float *scale) { (void)l
 extern "C" bool gfxPs2ObjectGeometryEnabled(void) { return false; }
 extern "C" bool gfxPs2Emotion3DEnabled(void) { return false; }
 extern "C" bool gfxPs2Emotion3DModelsEnabled(void) { return false; }
+extern "C" bool gfxPs2Emotion3DSkinEnabled(void) { return false; }
+extern "C" bool gfxPs2SkinTrilerpQuery(float scale_s[2], float scale_t[2], bool *modulate)
+{
+    (void)scale_s; (void)scale_t; (void)modulate;
+    return false;
+}
+extern "C" void gfxPs2DirectDrawSkinTrilerp(
+    const struct Ps2GsVu1ObjectVertex *vertices, uint32_t vertex_count,
+    const uint8_t fog_rgb[3], const struct Ps2GsVu1SkinBatch *pass0,
+    const struct Ps2GsVu1SkinBatch *pass1, const float clamp_bounds[2][2],
+    const uint8_t clamp_flags[2][2],
+    const struct Ps2GsVu1ObjectTransform *object)
+{
+    (void)vertices; (void)vertex_count; (void)fog_rgb; (void)pass0; (void)pass1;
+    (void)clamp_bounds; (void)clamp_flags; (void)object;
+}
 extern "C" bool gfxPs2ObjectDeferEnabled(void) { return false; }
 extern "C" void gfxPs2DirectPeekGuard(float *gx, float *gy) { *gx = 1.0f; *gy = 1.0f; }
 extern "C" bool gfxPs2DirectFogLinear(void) { return false; }

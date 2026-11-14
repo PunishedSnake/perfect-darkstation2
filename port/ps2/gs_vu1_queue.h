@@ -51,6 +51,15 @@ bool ps2GsVu1QueueSubmitObjectTransform(
     const struct Ps2GsVu1ObjectVertex *vertices, uint32_t vertex_count,
     const struct Ps2GsPackedReg *suffix, uint32_t suffix_count);
 
+/*
+ * While set, object batches go to the Emotion3D skinned/lit program with
+ * these constants (struct Ps2GsVu1SkinBatch, gs_vu1_transform.h); NULL
+ * restores the object program. The caller keeps the batch alive.
+ */
+struct Ps2GsVu1SkinBatch;
+void ps2GsVu1QueueSetSkin(const struct Ps2GsVu1SkinBatch *skin);
+const struct Ps2GsVu1SkinBatch *ps2GsVu1QueueSkin(void);
+
 #ifdef __cplusplus
 }
 #endif

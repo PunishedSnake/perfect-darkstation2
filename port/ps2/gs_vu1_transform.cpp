@@ -420,3 +420,127 @@ extern "C" bool ps2GsVu1BuildTexturedTransformStream(
     }
     return true;
 }
+
+/* ---- Emotion3D skinned/lit object program ---- */
+
+extern "C" uint32_t ps2GsVu1SkinMaxVertices(uint32_t entry_count)
+{
+    if (entry_count > PS2_GS_VU1_SKIN_MAX_ENTRIES) {
+        return 0u;
+    }
+    /* input bank: head, palette, 3 QW a vertex, the suffix */
+    const uint32_t room = PS2_GS_VU1_BUFFER_QW - PS2_GS_VU1_SKIN_HEAD_QW -
+        entry_count * PS2_GS_VU1_SKIN_ENTRY_QW -
+        PS2_GS_VU1_TRANSFORM_MAX_SUFFIX_RECORDS;
+    uint32_t n = room / PS2_GS_VU1_TRANSFORM_VERTEX_QW;
+    if (n > PS2_GS_VU1_OBJECT_MAX_VERTICES) {
+        n = PS2_GS_VU1_OBJECT_MAX_VERTICES;
+    }
+    return n - n % 3u;
+}
+
+extern "C" uint32_t ps2GsVu1BuildSkinHead(uint32_t *head,
+    const float scale[4], const float offset[4], uint32_t flags,
+    const struct Ps2GsVu1SkinConst *k,
+    const struct Ps2GsVu1SkinEntry *entries, uint32_t entry_count,
+    const struct Ps2GsPackedReg *prefix, uint32_t prefix_count,
+    uint32_t vertex_count, uint32_t suffix_count)
+{
+    static_assert(sizeof(struct Ps2GsVu1SkinConst) ==
+        PS2_GS_VU1_SKIN_CONST_QW * 16u, "skin constants layout");
+    static_assert(sizeof(struct Ps2GsVu1SkinEntry) ==
+        PS2_GS_VU1_SKIN_ENTRY_QW * 16u, "skin entry layout");
+    static_assert(PS2_GS_VU1_SKIN_HEAD_QW == 27u, "skin head layout");
+    if (!head || !scale || !offset || !k || (entry_count != 0u && !entries) ||
+        entry_count == 0u || entry_count > PS2_GS_VU1_SKIN_MAX_ENTRIES ||
+        vertex_count == 0u || vertex_count % 3u != 0u ||
+        vertex_count > ps2GsVu1SkinMaxVertices(entry_count) ||
+        prefix_count > PS2_GS_VU1_TRANSFORM_MAX_PREFIX_RECORDS ||
+        suffix_count > PS2_GS_VU1_TRANSFORM_MAX_SUFFIX_RECORDS ||
+        (prefix_count != 0u && !prefix)) {
+        return 0u;
+    }
+    uint8_t *cursor = ps2GsVu1BuildTransformHead((uint8_t *)head, scale,
+        offset, flags & PS2_GS_VU1_TRANSFORM_FLAG_FOG, NULL, prefix,
+        prefix_count, vertex_count, suffix_count);
+    const uint32_t vertex_offset = PS2_GS_VU1_SKIN_HEAD_QW +
+        entry_count * PS2_GS_VU1_SKIN_ENTRY_QW;
+    head[1] = vertex_offset;
+    head[3] = flags;
+    memcpy(cursor, k, sizeof(*k));
+    cursor += sizeof(*k);
+    memcpy(cursor, entries, (size_t)entry_count * sizeof(*entries));
+    return vertex_offset;
+}
+
+static inline float ps2GsVu1Trunc(float v)
+{
+    return (float)(int32_t)v;
+}
+
+extern "C" void ps2GsVu1SkinVertexToClip(const struct Ps2GsVu1SkinConst *k,
+    const struct Ps2GsVu1SkinEntry *e, uint32_t flags, bool fog,
+    const struct Ps2GsVu1ObjectVertex *in,
+    struct Ps2GsVu1TransformVertex *out)
+{
+    const float x = in->pos[0], y = in->pos[1], z = in->pos[2];
+    for (int i = 0; i < 4; ++i) {
+        out->clip[i] = x * e->m[0][i] + y * e->m[1][i] + z * e->m[2][i] +
+            e->m[3][i];
+    }
+    float c[4] = { (float)in->rgba[0], (float)in->rgba[1],
+        (float)in->rgba[2], (float)in->rgba[3] };
+    float u = in->uv[0], v = in->uv[1];
+    const float nx = c[0], ny = c[1], nz = c[2];
+    if (flags & PS2_GS_VU1_TRANSFORM_FLAG_TEXGEN) {
+        float d[2];
+        const float *lx = e->look_x, *ly = e->look_y, *lz = e->look_z;
+        for (int i = 0; i < 2; ++i) {
+            d[i] = nx * lx[i] + ny * ly[i] + nz * lz[i];
+            d[i] = d[i] < -1.0f ? -1.0f : d[i] > 1.0f ? 1.0f : d[i];
+        }
+        u = ps2GsVu1Trunc((d[0] + 1.0f) * k->misc[0]);
+        v = ps2GsVu1Trunc((d[1] + 1.0f) * k->misc[1]);
+    }
+    if (flags & PS2_GS_VU1_TRANSFORM_FLAG_LIGHT) {
+        float inten[4];
+        for (int i = 0; i < 4; ++i) {
+            inten[i] = nx * e->light_x[i] + ny * e->light_y[i] +
+                nz * e->light_z[i];
+            inten[i] = inten[i] > 0.0f ? inten[i] : 0.0f;
+        }
+        float rgb[3];
+        for (int ch = 0; ch < 3; ++ch) {
+            float acc = k->ambient[ch];
+            for (int i = 0; i < 4; ++i) {
+                acc = ps2GsVu1Trunc(acc + k->light[i][ch] * inten[i]);
+            }
+            rgb[ch] = acc > 255.0f ? 255.0f : acc;
+        }
+        c[0] = rgb[0];
+        c[1] = rgb[1];
+        c[2] = rgb[2];
+    }
+    if (flags & PS2_GS_VU1_TRANSFORM_FLAG_LOD) {
+        float d = out->clip[3] * k->lod[0];
+        d = d < 0.0f ? 0.0f : d > 1.0f ? 1.0f : d;
+        c[3] = ps2GsVu1Trunc(d * k->lod[1] + k->lod[2]);
+    }
+    out->texcoord.s = (u * k->tex_mul[0] + k->tex_add[0]) * k->tex_scale[0];
+    out->texcoord.t = (v * k->tex_mul[1] + k->tex_add[1]) * k->tex_scale[1];
+    out->texcoord.q = 1.0f;
+    uint32_t control = 0u;
+    if (fog) {
+        float f = out->clip[2] * (1.0f / out->clip[3]) * k->fog[3] + k->fog[1];
+        f = f < 0.0f ? 0.0f : f > 255.0f ? 255.0f : f;
+        control = (255u - (uint32_t)f) << 4;
+    }
+    out->texcoord.xyz_control = control;
+    for (int ch = 0; ch < 4; ++ch) {
+        float acc = k->color_add[ch];
+        for (int j = 0; j < 4; ++j) {
+            acc += c[j] * k->color[j][ch];
+        }
+        out->rgba[ch] = (uint32_t)(int32_t)acc;
+    }
+}

@@ -255,6 +255,19 @@ struct GfxPs2DirectContext {
 };
 
 bool gfxPs2DirectQuery(struct GfxPs2DirectContext *ctx);
+struct Ps2GsVu1SkinBatch;
+struct Ps2GsVu1ObjectVertex;
+struct Ps2GsVu1ObjectTransform;
+/* Emotion3D two-texture trilerp skin batches (gfx_ps2.cpp). */
+bool gfxPs2SkinTrilerpQuery(float scale_s[2], float scale_t[2], bool *modulate);
+void gfxPs2DirectDrawSkinTrilerp(
+    const struct Ps2GsVu1ObjectVertex *vertices, uint32_t vertex_count,
+    const uint8_t fog_rgb[3], const struct Ps2GsVu1SkinBatch *pass0,
+    const struct Ps2GsVu1SkinBatch *pass1, const float clamp_bounds[2][2],
+    const uint8_t clamp_flags[2][2],
+    const struct Ps2GsVu1ObjectTransform *object);
+/* Tile clamp (flags and Fast3D's normalised bounds) for direct draws. */
+void gfxPs2DirectSetTextureClamp(int tile, bool s, float bs, bool t, float bt);
 
 /*
  * Alpha-trilerp shared-vertex path: the frontend hands one vertex's VBO

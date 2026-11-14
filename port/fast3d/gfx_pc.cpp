@@ -402,6 +402,9 @@ struct GfxPs2DirectKey {
     uint8_t in_kind[2][3];
     uint8_t in_const_u8[3][4];
     float u_scale, u_bias, v_scale, v_bias;
+    /* texture clamps: the GS region clamps of the draw */
+    uint8_t clamp_s[2], clamp_t[2];
+    float clamp_bs[2], clamp_bt[2];
 };
 
 #if defined(PD_PS2_DIRECT_VERIFY)
@@ -526,11 +529,15 @@ static void gfx_ps2_direct_flush(void) {
     gfx_ps2_direct_flush_records();
 }
 
+static void e3d_skin_flush(void);
+
 static void gfx_ps2_direct_flush_records(void) {
     if (gfx_ps2_direct.batch_count == 0) {
         return;
     }
-    if (gfx_obj.batch_ctx >= 0) {
+    if (gfx_obj.batch_ctx == -2) { /* Emotion3D skin batch (E3D_SKIN_CTX) */
+        e3d_skin_flush();
+    } else if (gfx_obj.batch_ctx >= 0) {
         gfxPs2DirectDrawObject((const struct Ps2GsVu1ObjectVertex*)gfx_ps2_direct.batch, gfx_ps2_direct.batch_count,
                                gfx_ps2_direct.batch_trilerp, gfx_ps2_direct.batch_fog, &gfx_obj.batch_xf);
     } else {
@@ -2373,7 +2380,7 @@ static void gfx_ps2_direct_refresh(const struct GfxTriSetup* S) {
     struct GfxPs2DirectKey key;
     memset(&key, 0, sizeof(key));
     bool ok = !S->depth_source_prim && !S->use_grayscale &&
-              !S->clamp_s[0] && !S->clamp_t[0] && !S->clamp_s[1] && !S->clamp_t[1] && S->num_inputs <= 3 &&
+              S->num_inputs <= 3 &&
               gfxPs2DirectQuery(&key.ctx);
     if (ok) {
         ok = key.ctx.num_inputs == S->num_inputs && (key.ctx.use_alpha != 0) == S->use_alpha &&
@@ -2399,6 +2406,15 @@ static void gfx_ps2_direct_refresh(const struct GfxTriSetup* S) {
         key.u_bias = S->u_bias[0];
         key.v_scale = S->v_scale[0];
         key.v_bias = S->v_bias[0];
+        for (int t = 0; t < 2; ++t) {
+            if (!S->used_textures[t]) {
+                continue;
+            }
+            key.clamp_s[t] = S->clamp_s[t];
+            key.clamp_t[t] = S->clamp_t[t];
+            key.clamp_bs[t] = S->clamp_s[t] ? S->tex_clamp_s[t] : 0.0f;
+            key.clamp_bt[t] = S->clamp_t[t] ? S->tex_clamp_t[t] : 0.0f;
+        }
     }
 
     {
@@ -2471,6 +2487,9 @@ static void gfx_ps2_direct_refresh(const struct GfxTriSetup* S) {
         /* Buffered triangles were built for the old state. */
         gfx_ps2_direct_flush();
         gfx_ps2_direct.key = key;
+        for (int t = 0; t < 2; ++t) {
+            gfxPs2DirectSetTextureClamp(t, key.clamp_s[t] != 0, key.clamp_bs[t], key.clamp_t[t] != 0, key.clamp_bt[t]);
+        }
         if (++gfx_ps2_direct.serial == 0) {
             gfx_ps2_direct.serial = 1;
         }

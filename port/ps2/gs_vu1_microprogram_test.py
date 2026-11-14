@@ -86,9 +86,10 @@ def execute(program, labels, memory, top):
                                        (16 if op == 'ftoi4' else 1))
                     values.append(value & 0xffffffff)
                     continue
-                if op == 'itof0':
+                if op in ('itof0', 'itof4'):
                     raw = read(args[1], lane, raw=True)
-                    values.append(bits(float(raw - (1 << 32) if raw & 0x80000000 else raw)))
+                    value = float(raw - (1 << 32) if raw & 0x80000000 else raw)
+                    values.append(bits(value / (16 if op == 'itof4' else 1)))
                     continue
                 if op == 'mulq':
                     assert cycle >= q_ready, 'DIV Q dependency'
@@ -130,18 +131,18 @@ def execute(program, labels, memory, top):
         elif op in ('iaddiu', 'isubiu'):
             amount = int(args[2], 0) * (-1 if op == 'isubiu' else 1)
             vi[integer(args[0])] = (vi[integer(args[1])] + amount) & 0xffff
-        elif op in ('lq', 'lqi', 'sqi', 'ilw.x', 'ilw.w'):
-            match = re.fullmatch(r'(\d*)\((VI\d+)(\+\+)?\)', args[1])
+        elif op in ('lq', 'lqi', 'sqi', 'sq', 'ilw.x', 'ilw.y', 'ilw.w'):
+            match = re.fullmatch(r'(-?\d*)\((VI\d+)(\+\+)?\)', args[1])
             assert match, lower
             offset, reg, increment = match.groups()
             address = vi[integer(reg)] + int(offset or 0)
             assert 0 <= address < 1024, ('VU memory overflow', address)
-            if op == 'sqi':
+            if op in ('sqi', 'sq'):
                 assert top + 512 <= address < top + 768, ('output bank', address)
                 memory[address] = [read(args[0], i, raw=True) for i in range(4)]
                 writes.append(address)
             elif op.startswith('ilw'):
-                vi[integer(args[0])] = memory[address][3 if op.endswith('w') else 0] & 0xffff
+                vi[integer(args[0])] = memory[address]['xyzw'.index(op[-1])] & 0xffff
             else:
                 for lane, value in enumerate(memory[address]):
                     write(args[0], lane, value)
@@ -150,8 +151,17 @@ def execute(program, labels, memory, top):
         elif op == 'div':
             q = number(bits(read(args[1], 3) / read(args[2], 3)))
             q_ready = cycle + 7
-        elif op == 'move.w':
-            write(args[0], 3, read(args[1], 3, raw=True))
+        elif op.startswith('move.'):
+            lanes = ['xyzw'.index(l) for l in op[5:]]
+            values = [read(args[1], l, raw=True) for l in lanes]
+            for l, value in zip(lanes, values):
+                write(args[0], l, value)
+        elif op == 'mtir':
+            vi[integer(args[0])] = read(args[1][:4], 'xyzw'.index(args[1][4]), raw=True) & 0xffff
+        elif op == 'iadd':
+            vi[integer(args[0])] = (vi[integer(args[1])] + vi[integer(args[2])]) & 0xffff
+        elif op == 'iand':
+            vi[integer(args[0])] = vi[integer(args[1])] & vi[integer(args[2])]
         elif op in ('ibeq', 'ibne'):
             equal = vi[integer(args[0])] == vi[integer(args[1])]
             if equal == (op == 'ibeq'):
@@ -348,6 +358,149 @@ def run_object_tests(library):
                         assert xyz[3] == 0
                 cases += 1
     print(f'VU1 object transform functional tests: {cases} cases passed (not hardware validation)')
+    run_skin_tests(library)
+
+
+class SkinConst(c.Structure):
+    _fields_ = [('fog', c.c_float * 4), ('tex_mul', c.c_float * 4),
+                ('tex_add', c.c_float * 4), ('tex_scale', c.c_float * 4),
+                ('color', c.c_float * 16), ('color_add', c.c_float * 4),
+                ('light', c.c_float * 16), ('ambient', c.c_float * 4),
+                ('misc', c.c_float * 4), ('lod', c.c_float * 4)]
+
+
+class SkinEntry(c.Structure):
+    _fields_ = [('m', c.c_float * 16), ('light_x', c.c_float * 4),
+                ('light_y', c.c_float * 4), ('light_z', c.c_float * 4),
+                ('look_x', c.c_float * 4), ('look_y', c.c_float * 4),
+                ('look_z', c.c_float * 4)]
+
+
+def run_skin_tests(library):
+    lib = c.CDLL(library)
+    program, labels = parse_program(Path(__file__).with_name('gs_vu1_skin.vsm'))
+    head_build = lib.ps2GsVu1BuildSkinHead
+    head_build.restype = c.c_uint32
+    head_build.argtypes = [c.POINTER(c.c_uint32), c.POINTER(c.c_float), c.POINTER(c.c_float),
+                           c.c_uint32, c.POINTER(SkinConst), c.POINTER(SkinEntry), c.c_uint32,
+                           c.POINTER(Reg), c.c_uint32, c.c_uint32, c.c_uint32]
+    ref = lib.ps2GsVu1SkinVertexToClip
+    ref.restype = None
+    ref.argtypes = [c.POINTER(SkinConst), c.POINTER(SkinEntry), c.c_uint32, c.c_bool,
+                    c.POINTER(ObjectVertex), c.POINTER(Vertex)]
+    max_vertices = lib.ps2GsVu1SkinMaxVertices
+    max_vertices.restype = c.c_uint32
+    max_vertices.argtypes = [c.c_uint32]
+    scale = (c.c_float * 4)(160, -120, -65534, 0)
+    offset = (c.c_float * 4)(2048, 2048, 65535, 4095.9375)
+    k = SkinConst()
+    k.fog[:] = (255.0, -60.0, -1.0, 1500.0)
+    k.tex_mul[:] = (0.03125, 0.0625, 0, 0)
+    k.tex_add[:] = (0.5, -0.25, 0, 0)
+    k.tex_scale[:] = (1.0 / 64, 1.0 / 32, 0, 0)
+    k.color[:] = [128 / 255, 0, 0, 0, 0, 128 / 255, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 64 / 255]
+    k.color_add[:] = (0.5, 0.5, 0.5, 0.5)
+    k.light[:] = [200, 180, 160, 0, 90, 120, 255, 0, 255, 0, 0, 0, 0, 0, 0, 0]
+    k.ambient[:] = (30, 40, 50, 0)
+    k.lod[:] = (1.0 / 1024, 0.3 * 255, 0.7 * 255, 0)
+    entry_count = 3
+    entries = (SkinEntry * entry_count)()
+    for e, entry in enumerate(entries):
+        a = 0.3 * e
+        m = [[math.cos(a), 0.1, math.sin(a) * 0.05, 0.02],
+             [-0.1, 1.2, 0.0, 0.01],
+             [-math.sin(a), 0.0, 0.5 * math.cos(a), 1.0],
+             [5.0 + 7 * e, -3.0 - 5 * e, 40.0, 200.0 + 10 * e if e < 2 else 1300.0]]
+        entry.m[:] = [v for row in m for v in row]
+        dirs = [(0.6, 0.5, 0.62), (-0.7, 0.1, 0.7), (0.0, -1.0, 0.0)]
+        for i, d in enumerate(dirs):
+            entry.light_x[i] = d[0] / 127 * (1 - 0.1 * e)
+            entry.light_y[i] = d[1] / 127
+            entry.light_z[i] = d[2] / 127
+        entry.look_x[:] = (0.8 / 127, 0.1 / 127, 0, 0)
+        entry.look_y[:] = (-0.2 / 127, 0.9 / 127, 0, 0)
+        entry.look_z[:] = (0.55 / 127, -0.4 / 127, 0, 0)
+    cases = 0
+    for top in (0, 256):
+        for fog in (0, 1):
+            for flags in (0, 2, 4, 6, 16, 18):
+                for cull in (0, 1, -1):
+                    count = max_vertices(entry_count)
+                    assert count >= 54, count
+                    count = 36 if (flags + fog) % 2 else count
+                    allflags = flags | fog | (8 if cull else 0)
+                    k.misc[:] = (4096 / 4, 2048 / 4, float(cull or 1), -18446744073709551616.0)
+                    vertices = (ObjectVertex * count)()
+                    head_qw = 27 + 10 * entry_count
+                    for i, vertex in enumerate(vertices):
+                        e = (i * 7 // 3 + i) % entry_count  # corners of one triangle mix entries
+                        vertex.pos[:] = ((i * 37) % 200 - 100, (i * 53) % 160 - 80, (i * 29) % 120 - 60,
+                                         27 + 10 * e)
+                        vertex.uv[:] = (i * 97 - 2000, 3000 - i * 41, 0, 0)
+                        if flags & 2 or flags & 4:
+                            vertex.rgba[:] = ((i * 37) % 255 - 127, (i * 91) % 255 - 127, (i * 13) % 255 - 127,
+                                              (i * 7) % 256)
+                        else:
+                            vertex.rgba[:] = ((i * 11) % 256, (i * 23) % 256, (i * 31) % 256, (i * 7) % 256)
+                    prefix = (Reg * 5)(*[Reg(0x1234 + i, i) for i in range(5)])
+                    suffix = Reg(0x5678, 8)
+                    payload = (c.c_uint32 * 1024)()
+                    assert head_build(payload, scale, offset, allflags, c.byref(k), entries, entry_count,
+                                      prefix, 2, count, 1) == head_qw
+                    memory = [[0xdeadbeef] * 4 for _ in range(1024)]
+                    for i in range(head_qw):
+                        memory[top + i] = list(payload[i * 4:i * 4 + 4])
+                    raw = bytes(vertices)
+                    for q in range(count * 3):
+                        memory[top + head_qw + q] = [l & 0xffffffff for l in struct.unpack_from('<4h', raw, q * 8)]
+                    memory[top + head_qw + count * 3] = [0x5678, 0, 8, 0]
+                    before = [row[:] for row in memory]
+                    writes = execute(program, labels, memory, top)
+                    output_qw = 9 + count * 3
+                    assert sorted(set(writes)) == list(range(top + 512, top + 512 + output_qw))
+                    output = memory[top + 512:top + 512 + output_qw]
+                    assert output[0] == before[top + 3]
+                    assert output[1:6] == before[top + 6:top + 11]
+                    assert output[6] == before[top + 4]
+                    assert output[-2] == before[top + 5]
+                    assert output[-1] == [0x5678, 0, 8, 0]
+                    want_xyz = []
+                    for i, vertex in enumerate(vertices):
+                        stq, rgba, xyz = output[7 + i * 3:10 + i * 3]
+                        out = Vertex()
+                        e = vertex.pos[3] - 27
+                        assert e % 10 == 0
+                        ref(c.byref(k), c.byref(entries[e // 10]), allflags, bool(fog),
+                            c.byref(vertex), c.byref(out))
+                        clip = list(out.clip)
+                        w = clip[3]
+                        assert w > 0
+                        for got, want in zip(stq[:3], [out.stq[0] / w, out.stq[1] / w, 1 / w]):
+                            assert abs(number(got) - want) <= 2e-3 * max(1.0, abs(want)) + 1e-6, (i, got, want, flags)
+                        for ch in range(4):
+                            assert abs(rgba[ch] - out.rgba[ch]) <= 1, (i, ch, rgba[ch], out.rgba[ch], flags)
+                        x = min(4095.9375, max(0, clip[0] / w * 160 + 2048))
+                        y = min(4095.9375, max(0, clip[1] / w * -120 + 2048))
+                        zz = 65535 - min(1, max(0, clip[2] / w)) * 65534
+                        want_xyz.append((x * 16, y * 16, zz * (16 if fog else 1), out.control))
+                    n_culled = 0
+                    for t in range(count // 3):
+                        got = [output[9 + (t * 3 + j) * 3] for j in range(3)]
+                        want = want_xyz[t * 3:t * 3 + 3]
+                        cross = ((want[0][0] - want[1][0]) * (want[2][1] - want[1][1]) -
+                                 (want[0][1] - want[1][1]) * (want[2][0] - want[1][0]))
+                        culled = cull != 0 and cross * cull >= 0
+                        for j in range(3):
+                            src = want[0] if culled else want[j]
+                            assert abs(got[j][0] - src[0]) <= 2 and abs(got[j][1] - src[1]) <= 2, (t, j, culled, got[j], src)
+                            assert abs(got[j][2] - src[2]) <= 2 * (16 if fog else 1)
+                            assert abs(got[j][3] - src[3]) <= (16 if fog else 0), (got[j][3], src[3])
+                        if culled:
+                            assert got[1] == got[0] and got[2] == got[0]
+                            n_culled += 1
+                    assert (n_culled == 0) == (cull == 0) and n_culled < count // 3, n_culled
+                    cases += 1
+    print(f'VU1 skin transform functional tests: {cases} cases passed (not hardware validation)')
 
 
 if __name__ == '__main__':
