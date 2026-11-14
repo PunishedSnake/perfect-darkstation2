@@ -125,6 +125,15 @@ jobs:
             -o /tmp/rdp_tmem_live_test
           /tmp/rdp_tmem_live_test
 
+      - name: Test SPU2 sample codecs
+        run: |
+          gcc -std=c11 -O2 -Wall -Wextra -Werror \
+            -Iport/ps2 \
+            port/ps2/spu2_adpcm.c \
+            port/ps2/spu2_adpcm_test.c \
+            -lm -o /tmp/spu2_adpcm_test
+          /tmp/spu2_adpcm_test
+
       - name: Test GS command budget and VRAM allocator
         run: |
           g++ -std=c++20 -Wall -Wextra -Werror \
