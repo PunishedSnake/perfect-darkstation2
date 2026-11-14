@@ -18,6 +18,9 @@ void ps2HwVoicesInit(s32 output_rate);
 s32 ps2HwVoicesEntryFor(const u8 *base, s32 len);
 u16 ps2HwVoicesPitch(f32 ratio);
 void ps2HwVoicesPush(const PdSndVoiceCmd *cmd);
+/* FX bus summary (longest tap in ms, summed output gain, max feedback,
+ * both 0..0x7fff scale) -> SPU2 effect on that bus's core. */
+void ps2HwVoicesSetFx(s32 bus, s32 delay_ms, s32 gain, s32 feedback);
 /* Send this audio frame's commands (non-blocking). */
 void ps2HwVoicesFlush(void);
 

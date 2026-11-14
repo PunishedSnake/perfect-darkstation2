@@ -29,7 +29,7 @@ typedef int32_t pdsnd_s32;
 #endif
 
 #define PDSND_RPC_ID 0x50445331u /* "PDS1" */
-#define PDSND_PROTOCOL 2u
+#define PDSND_PROTOCOL 3u
 
 enum PdSndRpcFunc {
     PDSND_FUNC_INIT = 1,
@@ -47,13 +47,17 @@ enum PdSndOp {
     PDSND_OP_PITCH = 3,
     PDSND_OP_KEYOFF = 4, /* fast release, then the sample slot is unpinned */
     PDSND_OP_STOPALL = 5,
+    /* voice = core, entry = SD_EFFECT_MODE_* (0 off), pitch = depth,
+     * cur_l = delay, cur_r = feedback (echo/delay modes, 0..127) */
+    PDSND_OP_FX = 6,
 };
 
-#define PDSND_FLAG_REVERB 0x0001u /* send this voice to the core 1 reverb */
+#define PDSND_FLAG_REVERB 0x0001u /* send this voice to its core's effect */
+#define PDSND_FLAG_BUS1 0x0002u   /* FX bus 1: play on core 0 (echo unit) */
 
 typedef struct PdSndVoiceCmd {
     pdsnd_u8 op;
-    pdsnd_u8 voice;      /* 0..23: core 1 (has the reverb), 24..47: core 0 */
+    pdsnd_u8 voice;      /* game voice 0..47 (FX: core) */
     pdsnd_u16 entry;     /* bank entry (KEYON) */
     pdsnd_u16 pitch;     /* SPU2 PITCH, 0x1000 = 48 kHz */
     pdsnd_s16 cur_l;     /* KEYON start volume, 0..0x3fff */
@@ -68,8 +72,8 @@ typedef struct PdSndInitArgs {
     pdsnd_u32 protocol;
     pdsnd_u32 spu_base;  /* SPU2 RAM cache window, bytes */
     pdsnd_u32 spu_end;
-    pdsnd_u16 reverb_mode;  /* SD_EFFECT_MODE_*, 0 = off */
-    pdsnd_u16 reverb_depth; /* EVOL / effect depth, 0..0x7fff */
+    pdsnd_u16 reserved0;
+    pdsnd_u16 reserved1;
     char path[240];      /* bank file, e.g. "mass:PDPS2/pd.pssb" */
 } PdSndInitArgs;         /* 256 bytes */
 
@@ -96,6 +100,8 @@ typedef struct PdSndStatus {
     pdsnd_u32 cache_used;    /* bytes resident */
     pdsnd_u32 load_us;       /* cumulative time spent streaming */
     pdsnd_u32 queue_drops;
+    pdsnd_u32 fx_changes;
+    pdsnd_u32 pad[3];
 } PdSndStatus;
 
 #endif

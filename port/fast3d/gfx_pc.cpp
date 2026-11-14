@@ -425,6 +425,13 @@ static struct {
     bool batch_trilerp;
     bool batch_w_ok;
     uint8_t batch_fog[3];
+    /* Per-key record colour program: channel c of a record is
+     * rec_const[c] when rec_src[c] == 0xff, else rec_lut[c][bank[rec_src[c]]]
+     * with bank = { r, g, b, a, lod, 0 } of the vertex. */
+    uint8_t rec_src[4];
+    uint8_t rec_const[4];
+    const uint8_t* rec_lut[4];
+    bool rec_lod;
 } gfx_ps2_direct;
 
 static void gfx_ps2_at_flush(void);
@@ -452,7 +459,12 @@ static inline void gfx_ps2_direct_invalidate_vertices(size_t first, size_t count
     if (count > MAX_VERTICES - first) {
         count = MAX_VERTICES - first;
     }
-    memset(&gfx_ps2_direct.tag[first], 0, count * sizeof(gfx_ps2_direct.tag[0]));
+    /* Plain word stores: newlib's memset takes its byte loop for these
+     * short, odd-sized ranges, and this runs on every G_VTX. */
+    uint32_t* direct_tag = &gfx_ps2_direct.tag[first];
+    for (size_t i = 0; i < count; ++i) {
+        direct_tag[i] = 0;
+    }
     gfx_ps2_at_invalidate_vertices(first, count);
 }
 
@@ -2275,6 +2287,33 @@ static void gfx_ps2_direct_refresh(const struct GfxTriSetup* S) {
         key.v_bias = S->v_bias[0];
     }
 
+    {
+        /* gfx_ps2_direct_input + LUTs, decided once per state */
+        const struct GfxPs2DirectContext* C = &key.ctx;
+        for (int c = 0; c < 4; ++c) {
+            const int j = c < 3 ? C->rgb_input : C->alpha_input;
+            const uint8_t* lut = c < 3 ? C->rgb_lut : C->alpha_lut;
+            uint8_t src = 0xff;
+            uint8_t cval = c < 3 ? C->rgb_const : C->alpha_const;
+            if (j >= 0) {
+                if (j >= S->num_inputs || (c == 3 && !S->use_alpha)) {
+                    cval = lut[255];
+                } else {
+                    switch (S->in_kind[c < 3 ? 0 : 1][j]) {
+                        case GFX_TRI_IN_SHADE: src = (uint8_t)c; break;
+                        case GFX_TRI_IN_SHADE_ALPHA: src = c < 3 ? 3 : 5; break;
+                        case GFX_TRI_IN_LOD: src = 4; break;
+                        default: cval = lut[S->in_const_u8[j][c]]; break;
+                    }
+                }
+            }
+            gfx_ps2_direct.rec_src[c] = src;
+            gfx_ps2_direct.rec_const[c] = cval;
+            gfx_ps2_direct.rec_lut[c] = lut;
+        }
+        gfx_ps2_direct.rec_lod = gfx_ps2_direct.rec_src[0] == 4 || gfx_ps2_direct.rec_src[1] == 4 ||
+                                 gfx_ps2_direct.rec_src[2] == 4 || gfx_ps2_direct.rec_src[3] == 4;
+    }
     const bool fog_differs = key.ctx.fog && gfx_ps2_direct.batch_count != 0 &&
         memcmp(gfx_ps2_direct.batch_fog, &rdp.fog_color, 3) != 0;
     if (memcmp(&key, &gfx_ps2_direct.key, sizeof(key)) != 0 || fog_differs) {
@@ -2288,7 +2327,7 @@ static void gfx_ps2_direct_refresh(const struct GfxTriSetup* S) {
 }
 
 /* Byte value of combiner input j for one vertex; channel 3 is alpha. */
-static inline void gfx_ps2_direct_input(const struct GfxTriSetup* S, const struct LoadedVertex* V, int j,
+[[maybe_unused]] static inline void gfx_ps2_direct_input(const struct GfxTriSetup* S, const struct LoadedVertex* V, int j,
                                         uint8_t out[4]) {
     if (j < 0 || j >= S->num_inputs) {
         out[0] = out[1] = out[2] = out[3] = 255; /* backend default 1.0 */
@@ -2356,27 +2395,27 @@ static inline uint32_t gfx_ps2_direct_vertex(const struct GfxTriSetup* S, uint8_
     R->texcoord.q = 1.0f;
     R->texcoord.xyz_control = C->fog ? C->fog_lut[V->fog] : 0u;
 
-    uint8_t in[4];
-    if (C->rgb_input >= 0) {
-        gfx_ps2_direct_input(S, V, C->rgb_input, in);
-        R->rgba[0] = C->rgb_lut[in[0]];
-        R->rgba[1] = C->rgb_lut[in[1]];
-        R->rgba[2] = C->rgb_lut[in[2]];
-    } else {
-        R->rgba[0] = R->rgba[1] = R->rgba[2] = C->rgb_const;
+    uint8_t bank[6];
+    bank[0] = V->color.r;
+    bank[1] = V->color.g;
+    bank[2] = V->color.b;
+    bank[3] = V->color.a;
+    bank[5] = 0;
+    if (gfx_ps2_direct.rec_lod) {
+        const float distance_frac = std::max(0.f, std::min(w / 1024.f, 1.f));
+        bank[4] = (uint8_t)((0.7f + distance_frac * 0.3f) * 255.f);
     }
-    if (C->alpha_input >= 0) {
-        if (C->alpha_input != C->rgb_input) {
-            gfx_ps2_direct_input(S, V, C->alpha_input, in);
-        }
-        R->rgba[3] = C->alpha_lut[in[3]];
-    } else {
-        R->rgba[3] = C->alpha_const;
+    for (int c = 0; c < 4; ++c) {
+        const uint8_t src = gfx_ps2_direct.rec_src[c];
+        R->rgba[c] = src == 0xff ? gfx_ps2_direct.rec_const[c] : gfx_ps2_direct.rec_lut[c][bank[src]];
     }
 
     /* DIV on VU treats subnormal W as zero; such batches stay on the EE. */
     gfx_ps2_direct.w_ok[idx] = w >= FLT_MIN && w <= FLT_MAX;
-    const uint32_t codes = ps2GsClipVertexCodes(R->clip);
+    /* ps2GsClipVertexCodes under this context's guard band (clamped to
+     * the exact frustum like ps2GsClipSetGuardBand) */
+    const uint32_t codes = ps2GsClipVertexCodesInline(R->clip,
+        C->guard_x >= 1.0f ? C->guard_x : 1.0f, C->guard_y >= 1.0f ? C->guard_y : 1.0f);
     gfx_ps2_direct.codes[idx] = codes;
     gfx_ps2_direct.tag[idx] = gfx_ps2_direct.serial;
     return codes;
@@ -2649,7 +2688,10 @@ static void gfx_ps2_at_build_map(const struct GfxTriSetup* S) {
 
 static inline void gfx_ps2_at_invalidate_vertices(size_t first, size_t count) {
     /* range already clamped by gfx_ps2_direct_invalidate_vertices */
-    memset(&gfx_ps2_at.tag[first], 0, count * sizeof(gfx_ps2_at.tag[0]));
+    uint32_t* tag = &gfx_ps2_at.tag[first];
+    for (size_t i = 0; i < count; ++i) {
+        tag[i] = 0;
+    }
 }
 
 static void gfx_ps2_at_flush(void) {
@@ -2788,6 +2830,12 @@ __attribute__((noinline)) static void gfx_sp_tri1_emit(uint8_t vtx1_idx, uint8_t
         gfx_tri_setup(&gfx_tri_setup_cache, false);
         gfx_tri_setup_cache.valid = true;
 #if defined(GFX_PS2_DIRECT)
+        {
+            const struct GfxTriSetup* T = &gfx_tri_setup_cache;
+            gfxPs2DirectSetATSameCoords(T->used_textures[0] && T->used_textures[1] &&
+                                        T->u_scale[0] == T->u_scale[1] && T->u_bias[0] == T->u_bias[1] &&
+                                        T->v_scale[0] == T->v_scale[1] && T->v_bias[0] == T->v_bias[1]);
+        }
         gfx_ps2_direct_refresh(&gfx_tri_setup_cache);
         if (++gfx_ps2_at.serial == 0) {
             gfx_ps2_at.serial = 1;
@@ -2795,12 +2843,6 @@ __attribute__((noinline)) static void gfx_sp_tri1_emit(uint8_t vtx1_idx, uint8_t
         gfx_ps2_at.path = 0;
         if (!gfx_ps2_direct.active && !gfx_tri_setup_cache.depth_source_prim &&
             !gfx_tri_setup_cache.use_grayscale) {
-            {
-                const struct GfxTriSetup* T = &gfx_tri_setup_cache;
-                gfxPs2DirectSetATSameCoords(T->used_textures[0] && T->used_textures[1] &&
-                                            T->u_scale[0] == T->u_scale[1] && T->u_bias[0] == T->u_bias[1] &&
-                                            T->v_scale[0] == T->v_scale[1] && T->v_bias[0] == T->v_bias[1]);
-            }
             gfx_ps2_at.path = gfxPs2DirectQueryAT();
             if (gfx_ps2_at.path != 0) {
                 gfxPs2DirectUpdateGuard(&gfx_ps2_at.gx, &gfx_ps2_at.gy);

@@ -5462,14 +5462,47 @@ static int ps2_direct_shader_path(void)
     return opaque_input1_tex0_lerp ? 0 : 1;
 }
 
+static int ps2_direct_at_path(void);
+static bool s_at_same_coords;
+
+/*
+ * Alpha-trilerp shaders whose two taps are the same texture, sampler and
+ * coordinates, without alpha add, always resolve to the single same-sample
+ * pass: TEX0 modulated by input 1's colour, with input 1's alpha as the
+ * texture-alpha fragment. That is a plain shared-vertex submission, so
+ * they take the direct (VU1 transform) path with the same-sample state.
+ */
+static bool ps2_direct_at_same_sample_eligible(void)
+{
+#if defined(PERFECT_DARK_PS2_ALPHA_SAME_SAMPLE_FASTPATH)
+    if (!s_shader || ps2_direct_at_path() != 1 || s_modulate ||
+        !s_at_same_coords ||
+        s_shader->plan.alpha_recipe == PS2_ALPHA_INPUT1_PLUS_INPUT2_EDGE ||
+        s_shader->plan.alpha_recipe ==
+            PS2_ALPHA_TEX01_LERP_INPUT1_MUL_INPUT2_PLUS_INPUT3 ||
+        s_selected_texture[0] != s_selected_texture[1] ||
+        s_sampler_cms[0] != s_sampler_cms[1] ||
+        s_sampler_cmt[0] != s_sampler_cmt[1]) {
+        return false;
+    }
+    return true;
+#else
+    return false;
+#endif
+}
+
 extern "C" bool gfxPs2DirectQuery(struct GfxPs2DirectContext *ctx)
 {
-    memset(ctx, 0, sizeof(*ctx));
+    *ctx = GfxPs2DirectContext();
     if (!ps2GsCoreIsReady() || ps2RendererTraceIsCapturing() ||
         s_fb_draw_target != 0 || s_fb_texture != 0 || s_depth_decal) {
         return false;
     }
-    const int path = ps2_direct_shader_path();
+    int path = ps2_direct_shader_path();
+    const bool at_same_sample = path == 0 && ps2_direct_at_same_sample_eligible();
+    if (at_same_sample) {
+        path = 1;
+    }
     if (path == 0 || s_shader->features.opt_grayscale) {
         return false;
     }
@@ -5543,6 +5576,14 @@ extern "C" bool gfxPs2DirectQuery(struct GfxPs2DirectContext *ctx)
                 ctx->alpha_const = 0x80u;
                 break;
         }
+    }
+
+    if (at_same_sample) {
+        /* == ps2_make_alpha_trilerp_same_sample_vertices */
+        ctx->rgb_input = 1;
+        ctx->rgb_lut = s_direct_lut_modulate;
+        ctx->alpha_input = 1;
+        ctx->alpha_lut = s_direct_lut_texture_alpha;
     }
 
     gfxPs2DirectUpdateGuard(&ctx->guard_x, &ctx->guard_y);
@@ -5646,8 +5687,11 @@ extern "C" void gfxPs2DirectDraw(const struct Ps2GsVu1TransformVertex *vertices,
         ps2GsCoreGetOffsetX(), ps2GsCoreGetOffsetY(),
         s_depth_near, s_depth_far, transform_scale, transform_offset);
 
+    const bool at_same_sample = !trilerp && ps2_direct_at_path() == 1;
     if (trilerp) {
         ps2_trilerp_set_base_state();
+    } else if (at_same_sample) {
+        ps2_set_alpha_trilerp_same_sample_state();
     } else {
         ps2_apply_texture_clamp(0);
     }
@@ -5664,6 +5708,8 @@ extern "C" void gfxPs2DirectDraw(const struct Ps2GsVu1TransformVertex *vertices,
     }
     if (trilerp) {
         ps2_trilerp_restore_state();
+    } else if (at_same_sample) {
+        ps2_restore_alpha_trilerp_state();
     }
     }
 
@@ -5750,7 +5796,6 @@ static struct {
 } s_at_plan;
 static struct Ps2GsTexturedVertex s_at_ss[128 + 24];
 static bool s_at_batch_ss;
-static bool s_at_same_coords;
 
 static void ps2_at_plan_build(void)
 {
@@ -6227,7 +6272,7 @@ extern "C" void gfxPs2DirectDrawAT(const uint8_t fog_rgb[3])
 #else
 extern "C" bool gfxPs2DirectQuery(struct GfxPs2DirectContext *ctx)
 {
-    memset(ctx, 0, sizeof(*ctx));
+    *ctx = GfxPs2DirectContext();
     return false;
 }
 

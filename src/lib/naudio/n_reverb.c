@@ -140,6 +140,49 @@ Acmd *n_alFxPull(s32 sampleOffset, Acmd *p, s32 arg2)
  * verify the validity of the paramID or the param value. input and output
  * values must be 8 byte aligned, so round down any param passed.
  */
+#ifdef PLATFORM_PS2
+#include "spu2_voices_ps2.h"
+
+/*
+ * SPU2 hardware voices: summarise an FX bus's delay network (longest
+ * active tap, total output gain, strongest feedback) for the SPU2 effect
+ * that stands in for it. Called at start-up and whenever the game (its
+ * sequences' FX events) changes a parameter.
+ */
+void n_ps2HwFxUpdate(s32 bus)
+{
+	ALFx *f;
+	u32 maxout = 0;
+	s32 gain = 0;
+	s32 fb = 0;
+	s32 i;
+
+	if (!g_Ps2HwVoices || bus < 0 || bus >= n_syn->maxAuxBusses || !(f = n_syn->auxBus[bus].fx)) {
+		return;
+	}
+
+	for (i = 0; i < f->section_count; i++) {
+		ALDelay *d = &f->delay[i];
+		s32 g = d->gain < 0 ? -d->gain : d->gain;
+		s32 b = d->fbcoef < 0 ? -d->fbcoef : d->fbcoef;
+
+		if (g != 0 || b != 0) {
+			if (d->output > maxout) {
+				maxout = d->output;
+			}
+		}
+
+		gain += g;
+
+		if (b > fb) {
+			fb = b;
+		}
+	}
+
+	ps2HwVoicesSetFx(bus, (s32)(maxout * 1000u / (u32)n_syn->outputRate), gain, fb);
+}
+#endif
+
 s32 n_alFxParamHdl(void *filter, s32 paramID, void *param)
 {
 	ALFx *f = (ALFx *) filter;
@@ -230,6 +273,17 @@ s32 n_alFxParamHdl(void *filter, s32 paramID, void *param)
 		f->delay[s].rsgain = (f->delay[s].output - f->delay[s].input) * (rsgain / CONVERT);
 	}
 
+#ifdef PLATFORM_PS2
+	{
+		s32 bus;
+
+		for (bus = 0; bus < n_syn->maxAuxBusses; bus++) {
+			if (n_syn->auxBus[bus].fx == (void *)f) {
+				n_ps2HwFxUpdate(bus);
+			}
+		}
+	}
+#endif
 	return 0;
 }
 
