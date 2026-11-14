@@ -5742,7 +5742,15 @@ static struct {
     uint8_t alpha_kind;
     uint8_t final_from_input1; /* alpha-trilerp default recipe */
     bool decal;
+    /* Same-sample lane: both taps are the same texture, sampler and
+     * coordinates and no alpha add, so ps2_draw_alpha_trilerp would draw the
+     * whole batch as one same-sample pass. Fills then build only that pass's
+     * vertex and the batch is drawn straight from it. */
+    bool ss_lane;
 } s_at_plan;
+static struct Ps2GsTexturedVertex s_at_ss[128 + 24];
+static bool s_at_batch_ss;
+static bool s_at_same_coords;
 
 static void ps2_at_plan_build(void)
 {
@@ -5787,6 +5795,11 @@ static void ps2_at_plan_build(void)
     }
 }
 
+extern "C" void gfxPs2DirectSetATSameCoords(bool same)
+{
+    s_at_same_coords = same;
+}
+
 extern "C" int gfxPs2DirectQueryAT(void)
 {
     if (!ps2GsCoreIsReady() || ps2RendererTraceIsCapturing() ||
@@ -5808,7 +5821,26 @@ extern "C" int gfxPs2DirectQueryAT(void)
         return 0;
     }
     ps2_at_plan_build();
+#if defined(PERFECT_DARK_PS2_ALPHA_SAME_SAMPLE_FASTPATH)
+    s_at_plan.ss_lane = path == 1 && s_at_same_coords &&
+        s_at_plan.alpha_kind != PS2_AT_ALPHA_TEX01_LERP &&
+        s_selected_texture[0] == s_selected_texture[1] &&
+        s_sampler_cms[0] == s_sampler_cms[1] &&
+        s_sampler_cmt[0] == s_sampler_cmt[1];
+#else
+    s_at_plan.ss_lane = false;
+#endif
     return path;
+}
+
+static inline void ps2_at_fill_ss(uint32_t slot, uint8_t r, uint8_t g, uint8_t b,
+    uint8_t direct_alpha, float inv_w, float u0, float v0,
+    struct Ps2GsPackedReg packed_position)
+{
+    /* == ps2_make_alpha_trilerp_same_sample_vertices for this vertex */
+    s_at_ss[slot].rgbaq = ps2_pack_rgbaq(r, g, b, direct_alpha, inv_w);
+    s_at_ss[slot].st = ps2_pack_st(u0 * inv_w, v0 * inv_w);
+    s_at_ss[slot].xyz2 = packed_position;
 }
 
 /* Translate one vertex (VBO floats) into cache slot `slot`. Same arithmetic
@@ -5878,6 +5910,13 @@ extern "C" void gfxPs2DirectFillAT(uint32_t slot, const float *src)
         ? ps2_pack_xyzf2(sx, sy, iz, fog)
         : ps2_pack_xyz2(sx, sy, iz);
 
+    if (s_at_plan.ss_lane) {
+        ps2_at_fill_ss(slot, ps2_modulate_component(input[1][0]),
+            ps2_modulate_component(input[1][1]), ps2_modulate_component(input[1][2]),
+            ps2_texture_alpha_fragment_component(input[1][3]), inv_w,
+            tex_u0, tex_v0, packed_position);
+        return;
+    }
     struct Ps2AlphaTrilerpVertex *vertex = &s_at_cache[slot];
     vertex->x = sx;
     vertex->y = sy;
@@ -6000,6 +6039,12 @@ extern "C" void gfxPs2DirectFillATSource(uint32_t slot, const struct Ps2ATSource
         ? ps2_pack_xyzf2(sx, sy, iz, fog)
         : ps2_pack_xyz2(sx, sy, iz);
 
+    if (s_at_plan.ss_lane) {
+        ps2_at_fill_ss(slot, s_at_mod[src->in[1][0]], s_at_mod[src->in[1][1]],
+            s_at_mod[src->in[1][2]], s_at_tfrag[src->in[1][3]], inv_w,
+            tex_u0, tex_v0, packed_position);
+        return;
+    }
     const uint8_t (*in)[4] = src->in;
     struct Ps2AlphaTrilerpVertex *vertex = &s_at_cache[slot];
     vertex->x = sx;
@@ -6080,6 +6125,16 @@ extern "C" uint32_t gfxPs2DirectATCapacity(void)
 
 extern "C" void gfxPs2DirectAppendAT(uint32_t a, uint32_t b, uint32_t c)
 {
+    if (s_at_count == 0u) {
+        s_at_batch_ss = s_at_plan.ss_lane;
+    }
+    if (s_at_batch_ss) {
+        s_stq_vertices[0][s_at_count] = s_at_ss[a];
+        s_stq_vertices[0][s_at_count + 1u] = s_at_ss[b];
+        s_stq_vertices[0][s_at_count + 2u] = s_at_ss[c];
+        s_at_count += 3u;
+        return;
+    }
     const uint32_t idx[3] = { a, b, c };
     for (uint32_t k = 0; k < 3u; ++k) {
         s_alpha_trilerp_vertices[s_at_count] = s_at_cache[idx[k]];
@@ -6131,7 +6186,21 @@ extern "C" void gfxPs2DirectDrawAT(const uint8_t fog_rgb[3])
         s_draw_fog_b = s_direct_lut_u8[fog_rgb[2]];
         ps2GsCoreSetFog(true, s_draw_fog_r, s_draw_fog_g, s_draw_fog_b);
     }
-    if (path == 1) {
+    if (s_at_batch_ss) {
+        /* ps2_draw_alpha_trilerp's same-sample batch, vertices prebuilt */
+        int clip_x0 = s_scissor.x > 0 ? s_scissor.x : 0;
+        int clip_y0 = s_scissor.y > 0 ? s_scissor.y : 0;
+        int clip_x1 = s_scissor.x + s_scissor.width;
+        int clip_y1 = s_scissor.y + s_scissor.height;
+        if (clip_x1 > ps2GsCoreGetWidth()) clip_x1 = ps2GsCoreGetWidth();
+        if (clip_y1 > ps2GsCoreGetHeight()) clip_y1 = ps2GsCoreGetHeight();
+        if (clip_x0 < clip_x1 && clip_y0 < clip_y1) {
+            ps2_set_alpha_trilerp_same_sample_state();
+            ps2GsCoreDrawTexturedTriangles(
+                s_selected_texture[0], s_stq_vertices[0], count);
+            ps2_restore_alpha_trilerp_state();
+        }
+    } else if (path == 1) {
         (void)ps2_draw_alpha_trilerp(count);
     } else if (path == 2) {
         (void)ps2_draw_trilerp_independent_alpha(count);
@@ -6164,6 +6233,7 @@ extern "C" void gfxPs2DirectDraw(const struct Ps2GsVu1TransformVertex *vertices,
 }
 
 extern "C" int gfxPs2DirectQueryAT(void) { return 0; }
+extern "C" void gfxPs2DirectSetATSameCoords(bool same) { (void)same; }
 extern "C" void gfxPs2DirectUpdateGuard(float *gx, float *gy) { *gx = 1.0f; *gy = 1.0f; }
 extern "C" void gfxPs2DirectFillAT(uint32_t slot, const float *v) { (void)slot; (void)v; }
 extern "C" void gfxPs2DirectFillATSource(uint32_t slot, const struct Ps2ATSource *s) { (void)slot; (void)s; }

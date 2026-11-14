@@ -252,6 +252,8 @@ bool gfxPs2DirectQuery(struct GfxPs2DirectContext *ctx);
  * gfxPs2DirectQueryAT returns 0 when the current state is not eligible.
  */
 int gfxPs2DirectQueryAT(void);
+/* Frontend: both texture taps use identical coordinate transforms. */
+void gfxPs2DirectSetATSameCoords(bool same);
 void gfxPs2DirectUpdateGuard(float *guard_x, float *guard_y);
 void gfxPs2DirectFillAT(uint32_t slot, const float *vbo_vertex);
 /* The same fill from the loaded vertex's raw values: clip-space position,

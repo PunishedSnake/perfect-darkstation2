@@ -2610,7 +2610,42 @@ static struct {
     uint32_t tag[MAX_VERTICES];
     uint32_t codes[MAX_VERTICES];
     uint8_t fog[3];
+    /* Per-setup gather: in[] byte i = bank[map[i]], where bank holds the
+     * vertex colour (0..3), the LOD byte (4), 0 (5), 255 (6) and the
+     * combiner constants (7..18). */
+    uint8_t map[12];
+    uint8_t bank[20];
+    bool need_lod;
+    float gx, gy;
 } gfx_ps2_at = { 0, 1 };
+
+static void gfx_ps2_at_build_map(const struct GfxTriSetup* S) {
+    memset(gfx_ps2_at.map, 6, sizeof(gfx_ps2_at.map));
+    gfx_ps2_at.bank[5] = 0;
+    gfx_ps2_at.bank[6] = 255;
+    gfx_ps2_at.need_lod = false;
+    const int n = S->num_inputs < 3 ? S->num_inputs : 3;
+    for (int j = 0; j < n; j++) {
+        for (int c = 0; c < 4; c++) {
+            gfx_ps2_at.bank[7 + j * 4 + c] = S->in_const_u8[j][c];
+        }
+        uint8_t* m = &gfx_ps2_at.map[j * 4];
+        switch (S->in_kind[0][j]) {
+            case GFX_TRI_IN_SHADE: m[0] = 0; m[1] = 1; m[2] = 2; break;
+            case GFX_TRI_IN_SHADE_ALPHA: m[0] = m[1] = m[2] = 3; break;
+            case GFX_TRI_IN_LOD: m[0] = m[1] = m[2] = 4; gfx_ps2_at.need_lod = true; break;
+            default: m[0] = 7 + j * 4; m[1] = 8 + j * 4; m[2] = 9 + j * 4; break;
+        }
+        if (S->use_alpha) {
+            switch (S->in_kind[1][j]) {
+                case GFX_TRI_IN_SHADE: m[3] = 3; break;
+                case GFX_TRI_IN_SHADE_ALPHA: m[3] = 5; break;
+                case GFX_TRI_IN_LOD: m[3] = 4; gfx_ps2_at.need_lod = true; break;
+                default: m[3] = 10 + j * 4; break;
+            }
+        }
+    }
+}
 
 static inline void gfx_ps2_at_invalidate_vertices(size_t first, size_t count) {
     /* range already clamped by gfx_ps2_direct_invalidate_vertices */
@@ -2639,54 +2674,22 @@ static inline void gfx_ps2_at_source(const struct GfxTriSetup* S, const struct L
         }
     }
     out->fog = V->fog;
-    uint32_t* in32 = (uint32_t*)out->in;
-    in32[0] = in32[1] = in32[2] = 0xffffffffu;
-    const int n = S->num_inputs < 3 ? S->num_inputs : 3;
-    for (int j = 0; j < n; j++) {
-        uint8_t* d = out->in[j];
-        switch (S->in_kind[0][j]) {
-            case GFX_TRI_IN_SHADE:
-                d[0] = V->color.r; d[1] = V->color.g; d[2] = V->color.b;
-                break;
-            case GFX_TRI_IN_SHADE_ALPHA:
-                d[0] = d[1] = d[2] = V->color.a;
-                break;
-            case GFX_TRI_IN_LOD: {
-                const float distance_frac = std::max(0.f, std::min(w / 1024.f, 1.f));
-                d[0] = d[1] = d[2] = (uint8_t)((0.7f + distance_frac * 0.3f) * 255.f);
-                break;
-            }
-            default:
-                d[0] = S->in_const_u8[j][0]; d[1] = S->in_const_u8[j][1]; d[2] = S->in_const_u8[j][2];
-                break;
-        }
-        if (S->use_alpha) {
-            switch (S->in_kind[1][j]) {
-                case GFX_TRI_IN_SHADE:
-                    d[3] = V->color.a;
-                    break;
-                case GFX_TRI_IN_SHADE_ALPHA:
-                    d[3] = 0;
-                    break;
-                case GFX_TRI_IN_LOD: {
-                    const float distance_frac = std::max(0.f, std::min(w / 1024.f, 1.f));
-                    d[3] = (uint8_t)((0.7f + distance_frac * 0.3f) * 255.f);
-                    break;
-                }
-                default:
-                    d[3] = S->in_const_u8[j][3];
-                    break;
-            }
-        }
+    uint8_t* bank = gfx_ps2_at.bank;
+    bank[0] = V->color.r;
+    bank[1] = V->color.g;
+    bank[2] = V->color.b;
+    bank[3] = V->color.a;
+    if (gfx_ps2_at.need_lod) {
+        const float distance_frac = std::max(0.f, std::min(w / 1024.f, 1.f));
+        bank[4] = (uint8_t)((0.7f + distance_frac * 0.3f) * 255.f);
+    }
+    const uint8_t* map = gfx_ps2_at.map;
+    uint8_t* in = &out->in[0][0];
+    for (int i = 0; i < 12; i++) {
+        in[i] = bank[map[i]];
     }
 }
 
-/*
- * A triangle crossing the guard band or near plane: clip it in clip space
- * exactly as the VBO path would (same floats, same clipper), then fill the
- * polygon's vertices into scratch cache slots and append its fan. The
- * batch stays intact instead of flushing to the VBO path and back.
- */
 static bool gfx_ps2_at_clipped_tri(const struct GfxTriSetup* S, uint8_t a, uint8_t b, uint8_t c) {
     float tri[3 * PS2_GS_CLIP_MAX_VERTEX_FLOATS];
     float* end = gfx_emit_vbo_vertex(S, &rsp.loaded_vertices[a], tri);
@@ -2734,7 +2737,7 @@ static bool gfx_ps2_at_tri(const struct GfxTriSetup* S, uint8_t a, uint8_t b, ui
         if (gfx_ps2_at.tag[i] != gfx_ps2_at.serial) {
             struct Ps2ATSource src __attribute__((aligned(16)));
             gfx_ps2_at_source(S, &rsp.loaded_vertices[i], &src);
-            gfx_ps2_at.codes[i] = ps2GsClipVertexCodes(src.pos);
+            gfx_ps2_at.codes[i] = ps2GsClipVertexCodesInline(src.pos, gfx_ps2_at.gx, gfx_ps2_at.gy);
             gfxPs2DirectFillATSource(i, &src);
             gfx_ps2_at.tag[i] = gfx_ps2_at.serial;
         }
@@ -2792,10 +2795,17 @@ __attribute__((noinline)) static void gfx_sp_tri1_emit(uint8_t vtx1_idx, uint8_t
         gfx_ps2_at.path = 0;
         if (!gfx_ps2_direct.active && !gfx_tri_setup_cache.depth_source_prim &&
             !gfx_tri_setup_cache.use_grayscale) {
+            {
+                const struct GfxTriSetup* T = &gfx_tri_setup_cache;
+                gfxPs2DirectSetATSameCoords(T->used_textures[0] && T->used_textures[1] &&
+                                            T->u_scale[0] == T->u_scale[1] && T->u_bias[0] == T->u_bias[1] &&
+                                            T->v_scale[0] == T->v_scale[1] && T->v_bias[0] == T->v_bias[1]);
+            }
             gfx_ps2_at.path = gfxPs2DirectQueryAT();
             if (gfx_ps2_at.path != 0) {
-                float gx, gy;
-                gfxPs2DirectUpdateGuard(&gx, &gy);
+                gfxPs2DirectUpdateGuard(&gfx_ps2_at.gx, &gfx_ps2_at.gy);
+                ps2GsClipGetGuardBand(&gfx_ps2_at.gx, &gfx_ps2_at.gy);
+                gfx_ps2_at_build_map(&gfx_tri_setup_cache);
             }
         }
 #endif
