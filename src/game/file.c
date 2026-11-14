@@ -1,3 +1,6 @@
+#ifdef PLATFORM_PS2
+#include "texmem_epoch.h"
+#endif
 #include <ultra64.h>
 #include "constants.h"
 #include "game/file.h"
@@ -4156,6 +4159,9 @@ u32 file0f166ea8(uintptr_t *filetableaddr)
 
 void fileLoad(u8 *dst, u32 allocationlen, romptr_t *romaddrptr, struct fileinfo *info)
 {
+#ifdef PLATFORM_PS2
+	texmemNoteWrite();
+#endif
 #ifndef PLATFORM_N64
 	const u32 loadtype = g_LoadType;
 	g_LoadType = LOADTYPE_NONE;
@@ -4278,6 +4284,9 @@ void filesInit(void)
 
 void fileLoadPartToAddr(u16 filenum, void *memaddr, s32 offset, u32 len)
 {
+#ifdef PLATFORM_PS2
+	texmemNoteWrite();
+#endif
 	u32 stack[2];
 
 #ifndef PLATFORM_N64

@@ -1,3 +1,6 @@
+#ifdef PLATFORM_PS2
+#include "texmem_epoch.h"
+#endif
 #include <ultra64.h>
 #include "constants.h"
 #include "bss.h"
@@ -112,6 +115,9 @@ bool memaDefragPass(struct memaheap *heap)
 
 void memaDefrag(void)
 {
+#ifdef PLATFORM_PS2
+	texmemNoteWrite();
+#endif
 	while (memaDefragPass(&g_MemaHeap));
 }
 
@@ -179,6 +185,9 @@ struct memaspace *memaMakeSlot(struct memaheap *heap)
 
 void _memaFree(uintptr_t addr, u64 size)
 {
+#ifdef PLATFORM_PS2
+	texmemNoteWrite();
+#endif
 	// Choose an index in the spaces array which we'll mark a space as free,
 	// based on how far into the heap the allocation is. This is a rough
 	// estimate and doesn't need to be any particular index, but the defrag
@@ -217,6 +226,9 @@ void memaInit(void)
 
 void memaReset(void *heapaddr, u64 heapsize)
 {
+#ifdef PLATFORM_PS2
+	texmemNoteWrite();
+#endif
 	struct memaspace *space;
 
 #ifdef PLATFORM_N64
@@ -400,6 +412,9 @@ void memaPrint(void)
 
 void *memaAlloc(u64 size)
 {
+#ifdef PLATFORM_PS2
+	texmemNoteWrite();
+#endif
 	uintptr_t addr;
 	uintptr_t diff;
 	s32 i;
@@ -489,6 +504,9 @@ void *memaAlloc(u64 size)
  */
 uintptr_t memaGrow(uintptr_t addr, u64 amount)
 {
+#ifdef PLATFORM_PS2
+	texmemNoteWrite();
+#endif
 	struct memaspace *curr = &g_MemaHeap.spaces[0];
 
 	while (curr->addr != (uintptr_t)-1) {
@@ -552,6 +570,9 @@ u64 memaGetLongestFree(void)
 
 bool memaRealloc(uintptr_t addr, u64 oldsize, u64 newsize)
 {
+#ifdef PLATFORM_PS2
+	texmemNoteWrite();
+#endif
 	if (newsize > oldsize) {
 		if (!memaGrow(addr + oldsize, newsize - oldsize)) {
 			return false;

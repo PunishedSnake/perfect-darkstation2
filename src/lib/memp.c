@@ -1,3 +1,6 @@
+#ifdef PLATFORM_PS2
+#include "texmem_epoch.h"
+#endif
 #include <ultra64.h>
 #include "constants.h"
 #include "bss.h"
@@ -168,6 +171,9 @@ void *mempGetNextStageAllocation(void)
 
 void *mempAllocFromBank(struct memorypool *pool, u32 size, u8 poolnum)
 {
+#ifdef PLATFORM_PS2
+	texmemNoteWrite();
+#endif
 	u8 *allocation;
 
 	pool += poolnum;
@@ -267,6 +273,9 @@ void *mempAlloc(u32 len, u8 pool)
  */
 s32 mempRealloc(void *allocation, s32 newsize, u8 poolnum)
 {
+#ifdef PLATFORM_PS2
+	texmemNoteWrite();
+#endif
 	if (!allocation || newsize < 0 || poolnum >= ARRAYCOUNT(g_MempOnboardPools)) {
 		sysLogPrintf(LOG_ERROR,
 			"mempRealloc: invalid request allocation=%p size=%d pool=%u",
@@ -369,6 +378,9 @@ void *mempAllocFromPackedWord(u32 word)
  */
 void mempResetPool(u8 pool)
 {
+#ifdef PLATFORM_PS2
+	texmemNoteWrite();
+#endif
 	if (pool == MEMPOOL_STAGE) {
 		g_MempOnboardPools[MEMPOOL_STAGE].start = g_MempOnboardPools[MEMPOOL_PERMANENT].leftpos;
 		g_MempOnboardPools[MEMPOOL_PERMANENT].rightpos = g_MempOnboardPools[MEMPOOL_PERMANENT].leftpos;
@@ -399,6 +411,9 @@ void mempDisablePool(u8 pool)
 
 void *mempAllocFromBankRight(struct memorypool *pool, u32 size, u8 poolnum)
 {
+#ifdef PLATFORM_PS2
+	texmemNoteWrite();
+#endif
 	u8 *allocation;
 
 	pool += poolnum;

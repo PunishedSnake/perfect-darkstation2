@@ -467,6 +467,14 @@ static uint32_t s_source_memo_flip;
  */
 static uint32_t s_source_epoch = 1u;
 
+/* Bumped by every game path that can write texture memory (texmem_epoch.h). */
+extern "C" { unsigned int g_TexMemWriteEpoch; }
+
+#if defined(PD_PS2_TEXMEM_VERIFY)
+extern "C" void sysLogPrintf(int level, const char *fmt, ...);
+static uint32_t s_texmem_verify_checked, s_texmem_verify_stale;
+#endif
+
 extern "C" void gfxRdpTmemSourceMemoNewEpoch(void)
 {
     if (++s_source_epoch == 0u) {
@@ -581,6 +589,22 @@ extern "C" uint64_t gfxRdpTmemHashBlockSource(const uint8_t *source,
             s_source_memo[i].dxt == dxt &&
             s_source_memo[i].t_phase == t_phase) {
             if (s_source_memo[i].verified_epoch == s_source_epoch) {
+#if defined(PD_PS2_TEXMEM_VERIFY)
+                const uint64_t *check = gfxRdpTmemSourceMemoBytes(i);
+                if (check) {
+                    ++s_texmem_verify_checked;
+                    if (!gfxRdpTmemSourceEqual(start, check, word_count) &&
+                        s_texmem_verify_stale++ < 16u) {
+                        sysLogPrintf(2, "TEXMEMVERIFY stale source=%p words=%u",
+                            (const void *)start, (unsigned)word_count);
+                    }
+                    if ((s_texmem_verify_checked & 16383u) == 0u) {
+                        sysLogPrintf(0, "TEXMEMVERIFY checked=%u stale=%u",
+                            (unsigned)s_texmem_verify_checked,
+                            (unsigned)s_texmem_verify_stale);
+                    }
+                }
+#endif
                 return s_source_memo[i].hash;
             }
             const uint64_t *copy = gfxRdpTmemSourceMemoBytes(i);

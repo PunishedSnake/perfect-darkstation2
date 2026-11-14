@@ -1,3 +1,6 @@
+#ifdef PLATFORM_PS2
+#include "texmem_epoch.h"
+#endif
 #include <ultra64.h>
 #include "constants.h"
 #include "bss.h"
@@ -165,6 +168,9 @@ void dmaWait(void)
 
 void dmaExec(void *memaddr, romptr_t romaddr, u32 len)
 {
+#ifdef PLATFORM_PS2
+	texmemNoteWrite();
+#endif
 	dmaStart(memaddr, romaddr, len, false);
 	dmaWait();
 #if VERSION >= VERSION_NTSC_1_0
@@ -174,6 +180,9 @@ void dmaExec(void *memaddr, romptr_t romaddr, u32 len)
 
 void dmaExecHighPriority(void *memaddr, romptr_t romaddr, u32 len)
 {
+#ifdef PLATFORM_PS2
+	texmemNoteWrite();
+#endif
 	dmaStart(memaddr, romaddr, len, true);
 	dmaWait();
 #if VERSION >= VERSION_NTSC_1_0
