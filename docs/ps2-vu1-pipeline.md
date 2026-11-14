@@ -55,3 +55,42 @@ The EE stops touching per-vertex data entirely.
 
 Each step keeps the existing path as a verified fallback, so it can land on
 its own.
+
+## Object-space geometry (round 14)
+
+The first piece of this that ships is `gs_vu1_object_transform.vsm`, which takes
+a different route to step 1. It does not read VU1 output back. Instead it skips
+the EE transform for every block that can't need clipping:
+
+* **G_VTX** (`gfx_obj_try_defer`, `gfx_pc.cpp`) computes the block's object-space
+  bounding box with MMI `PMINH`/`PMAXH`. VU0 tests the box against the block's
+  clip matrix as twelve planes: the guard band, near, far, `w >= 1e-3`, and the
+  exact x/y planes. The matrix has aspect, Y flip and depth remap folded in.
+  * Inside the guard band: the slots keep pointers to the source `Vtx` and
+    colour array. Nothing is transformed.
+  * Outside one exact plane: the slots are kept with that plane mask, and
+    triangles over them are rejected as Fast3D would.
+  * Straddling: the usual EE path.
+  * Deferral only happens while the last triangle setup could take object
+    batches. That way, states that end up on the VBO path don't pay a replay.
+* **Triangles** over deferred slots of one block context are culled in object
+  space. Fast3D's `-det[x y w]` equals a dot product of the triangle's plane
+  with a per-matrix vector (Cauchy-Binet; `gfxPs2ObjectCullCross`). Each kept
+  triangle appends three raw vertices to the batch: int32 position, G_TEXTURE
+  scaled `u, v`, and colour bytes.
+* **VU1** builds the whole record: clip matrix, `s, t` scale/bias, and the
+  colour channel program. The program is linear because every direct colour
+  table is `round(i / 255 * K)`. VU1 also computes fog, then does the same
+  divide/viewport/pack as the textured program.
+* **Fallback.** Any other use of a deferred slot replays the original G_VTX
+  for its block with the captured transform inputs (`gfx_obj_replay`). This
+  covers a mixed triangle, a non-direct state, `G_MODIFYVTX`, and the end of
+  the frame. Every other path still sees exactly what it used to.
+
+`Video.Ps2ObjectGeometry=0` in `pd.ini` turns it off for A/B checks. Host
+tests:
+* `gs_vu1_microprogram_test.py` runs the microprogram against the payload
+  builder.
+* `gfx_ps2_object_test.cpp` checks the object-space cull sign against the
+  transformed test. It also checks that box classification is conservative,
+  and the EE conversion.

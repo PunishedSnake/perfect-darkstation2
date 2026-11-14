@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <assert.h>
 #include <string.h>
 #include <limits>
@@ -10,8 +11,60 @@ static struct Ps2GsPackedReg makeReg(uint64_t value, uint64_t reg)
     return result;
 }
 
+static bool test_object_plan_limits(void)
+{
+    struct Ps2GsVu1TransformLayout layout;
+    struct Ps2GsVu1TransformLayout textured;
+    if (!ps2GsVu1PlanObjectTransform(PS2_GS_VU1_OBJECT_MAX_VERTICES,
+            PS2_GS_VU1_TRANSFORM_MAX_PREFIX_RECORDS,
+            PS2_GS_VU1_TRANSFORM_MAX_SUFFIX_RECORDS, &layout) ||
+        layout.input_qw > PS2_GS_VU1_BUFFER_QW ||
+        layout.output_qw > PS2_GS_VU1_BUFFER_QW ||
+        !ps2GsVu1PlanTexturedTransform(3u, 0u, 0u, &textured) ||
+        ps2GsVu1PlanObjectTransform(PS2_GS_VU1_OBJECT_MAX_VERTICES + 3u,
+            0u, 0u, &layout) ||
+        ps2GsVu1PlanObjectTransform(4u, 0u, 0u, &layout)) {
+        return false;
+    }
+    if (!ps2GsVu1PlanObjectTransform(3u, 0u, 0u, &layout) ||
+        layout.input_qw != textured.input_qw + PS2_GS_VU1_OBJECT_XFORM_QW ||
+        layout.output_qw != textured.output_qw) {
+        return false;
+    }
+
+    /* payload: transform constants sit right after the prefix slots */
+    uint32_t payload[256u * 4u];
+    const float scale[4] = { 1.0f, 1.0f, 1.0f, 0.0f };
+    const float offset[4] = { 0.0f, 0.0f, 0.0f, 4095.9375f };
+    struct Ps2GsVu1ObjectTransform xf;
+    memset(&xf, 0, sizeof(xf));
+    xf.m[0][0] = 2.0f;
+    xf.color_add[3] = 9.5f;
+    struct Ps2GsVu1ObjectVertex v[3];
+    memset(v, 0, sizeof(v));
+    v[1].pos[0] = 77;
+    if (!ps2GsVu1BuildObjectTransformPayload(payload, 256u, scale, offset,
+            0u, &xf, NULL, 0u, v, 3u, NULL, 0u, &layout)) {
+        return false;
+    }
+    const uint32_t xform_qw = PS2_GS_VU1_TRANSFORM_HEADER_QW +
+        PS2_GS_VU1_TRANSFORM_MAX_PREFIX_RECORDS;
+    float m00;
+    memcpy(&m00, &payload[xform_qw * 4u], sizeof(m00));
+    int32_t pos;
+    memcpy(&pos, &payload[(xform_qw + PS2_GS_VU1_OBJECT_XFORM_QW + 3u) * 4u],
+        sizeof(pos));
+    return m00 == 2.0f && pos == 77 &&
+        memcmp(&payload[(xform_qw + PS2_GS_VU1_OBJECT_XFORM_QW - 1u) * 4u + 3u],
+            &xf.color_add[3], 4u) == 0;
+}
+
 int main(void)
 {
+    if (!test_object_plan_limits()) {
+        fprintf(stderr, "object plan/payload test failed\n");
+        return 1;
+    }
     struct Ps2GsVu1TransformLayout layout = {};
     float mapped_scale[4] = {};
     float mapped_offset[4] = {};

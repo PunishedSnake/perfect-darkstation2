@@ -1,0 +1,197 @@
+; VU1 object-space geometry transform: builds the whole vertex record.
+; Same contract and output as gs_vu1_textured_transform.vsm; see
+; struct Ps2GsVu1ObjectTransform in gs_vu1_transform.h for the math.
+;
+; Input TOPS bank:
+;   QW 0      control (vertex count in X, fog flag in W)
+;   QW 1..2   viewport/depth scale and offset
+;   QW 3..5   prefix, vertex and suffix GIF tags
+;   QW 6..10  five A+D prefix records, padded with GS NOP writes
+;   QW 11..14 clip matrix rows                       -> VF11..VF14
+;   QW 15     fog constants (255, B, -1, A)           -> VF09
+;   QW 16..18 tex_mul, tex_add, tex_scale             -> VF15..VF17
+;   QW 19..22 colour rows (contribution of r, g, b, a) -> VF18..VF21
+;   QW 23     colour offset (+0.5 rounding included)  -> VF22
+;   QW 24..   per vertex int32 (x, y, z, -), (u, v, 0, 0), (r, g, b, a)
+;   final QW  one A+D suffix record, padded with a GS NOP write
+;
+; With fog the XYZF2 W lane is (255 - trunc(clamp(A*z/w + B, 0, 255))) << 4,
+; Fast3D's per-vertex fog byte run through the direct path's fog table.
+
+	.vu
+	.align 4
+	.global Ps2GsVu1ObjectTransformCodeStart
+	.global Ps2GsVu1ObjectTransformCodeEnd
+Ps2GsVu1ObjectTransformCodeStart:
+	NOP                             xtop          VI02
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             lq            VF01,1(VI02)
+	NOP                             lq            VF02,2(VI02)
+	NOP                             ilw.x         VI05,0(VI02)
+	NOP                             ilw.w         VI06,0(VI02)
+	NOP                             iaddiu        VI03,VI02,0x0006
+	NOP                             iaddiu        VI04,VI02,0x0200
+	NOP                             iaddiu        VI10,VI04,0x0000
+
+	NOP                             lq            VF07,3(VI02)
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             sqi           VF07,(VI04++)
+	NOP                             lqi           VF07,(VI03++)
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             sqi           VF07,(VI04++)
+	NOP                             lqi           VF07,(VI03++)
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             sqi           VF07,(VI04++)
+	NOP                             lqi           VF07,(VI03++)
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             sqi           VF07,(VI04++)
+	NOP                             lqi           VF07,(VI03++)
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             sqi           VF07,(VI04++)
+	NOP                             lqi           VF07,(VI03++)
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             sqi           VF07,(VI04++)
+
+	NOP                             lq            VF07,4(VI02)
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             sqi           VF07,(VI04++)
+
+	NOP                             lqi           VF11,(VI03++)
+	NOP                             lqi           VF12,(VI03++)
+	NOP                             lqi           VF13,(VI03++)
+	NOP                             lqi           VF14,(VI03++)
+	NOP                             lqi           VF09,(VI03++)
+	NOP                             lqi           VF15,(VI03++)
+	NOP                             lqi           VF16,(VI03++)
+	NOP                             lqi           VF17,(VI03++)
+	NOP                             lqi           VF18,(VI03++)
+	NOP                             lqi           VF19,(VI03++)
+	NOP                             lqi           VF20,(VI03++)
+	NOP                             lqi           VF21,(VI03++)
+	NOP                             lqi           VF22,(VI03++)
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+
+vertexLoop:
+	NOP                             lqi           VF03,(VI03++)
+	NOP                             lqi           VF04,(VI03++)
+	NOP                             lqi           VF05,(VI03++)
+	NOP                             NOP
+	itof0.xyz     VF03,VF03         NOP
+	itof0.xy      VF04,VF04         NOP
+	itof0.xyzw    VF05,VF05         NOP
+	NOP                             NOP
+	mulax.xyzw    ACC,VF11,VF03x    NOP
+	madday.xyzw   ACC,VF12,VF03y    NOP
+	maddaz.xyzw   ACC,VF13,VF03z    NOP
+	maddw.xyzw    VF03,VF14,VF00w   NOP
+	mul.xy        VF04,VF04,VF15    NOP
+	mulax.xyzw    ACC,VF18,VF05x    NOP
+	madday.xyzw   ACC,VF19,VF05y    NOP
+	maddaz.xyzw   ACC,VF20,VF05z    div           Q,VF00w,VF03w
+	maddaw.xyzw   ACC,VF21,VF05w    NOP
+	maddw.xyzw    VF05,VF22,VF00w   NOP
+	add.xy        VF04,VF04,VF16    NOP
+	NOP                             NOP
+	NOP                             NOP
+	ftoi0.xyzw    VF05,VF05         NOP
+	mul.xy        VF04,VF04,VF17    NOP
+	mulq.xyz      VF03,VF03,Q       NOP
+	NOP                             NOP
+	NOP                             NOP
+	addw.z        VF04,VF00,VF00w   NOP
+	; fog chain in VF08.w runs through the free upper slots below
+	mulz.w        VF08,VF09,VF03z   NOP
+	maxz.z        VF03,VF03,VF00z   NOP
+	NOP                             NOP
+	NOP                             NOP
+	addy.w        VF08,VF08,VF09y   NOP
+	miniw.z       VF03,VF03,VF00w   NOP
+	NOP                             NOP
+	NOP                             NOP
+	maxx.w        VF08,VF08,VF00x   NOP
+	mulaw.xyz     ACC,VF02,VF00w    NOP
+	madd.xyz      VF06,VF03,VF01    NOP
+	NOP                             NOP
+	minix.w       VF08,VF08,VF09x   NOP
+	NOP                             NOP
+	maxw.xy       VF06,VF06,VF01w   NOP
+	NOP                             NOP
+	ftoi0.w       VF08,VF08         NOP
+	NOP                             NOP
+	miniw.xy      VF06,VF06,VF02w   NOP
+	NOP                             NOP
+	itof0.w       VF08,VF08         NOP
+	NOP                             NOP
+	; MOVE preserves raw fog/ADC bits; floating arithmetic flushes these
+	; subnormal-looking bit patterns to zero on VU hardware.
+	NOP                             move.w        VF06,VF04
+	NOP                             NOP
+	subx.w        VF08,VF08,VF09x   NOP
+	ftoi4.xy      VF06,VF06         NOP
+	NOP                             NOP
+	NOP                             NOP
+	mulz.w        VF08,VF08,VF09z   NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	ftoi4.w       VF08,VF08         NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             ibeq          VI06,VI00,depthNoFog
+	NOP                             NOP
+	; PACKED XYZF2 stores Z in bits 4..27, unlike PACKED XYZ2 bits 0..31.
+	ftoi4.z       VF06,VF06         NOP
+	NOP                             move.w        VF06,VF08
+	NOP                             b             depthReady
+	NOP                             NOP
+depthNoFog:
+	ftoi0.z       VF06,VF06         NOP
+depthReady:
+	mulq.xyz      VF04,VF04,Q       isubiu        VI05,VI05,1
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             sqi           VF04,(VI04++)
+	NOP                             sqi           VF05,(VI04++)
+	NOP                             ibne          VI05,VI00,vertexLoop
+	NOP                             sqi           VF06,(VI04++)
+
+	NOP                             lq            VF07,5(VI02)
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             sqi           VF07,(VI04++)
+	NOP                             lqi           VF07,(VI03++)
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             sqi           VF07,(VI04++)
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             NOP
+	NOP                             xgkick        VI10
+	NOP[E]                          NOP
+	NOP                             NOP
+	.align 4
+Ps2GsVu1ObjectTransformCodeEnd:

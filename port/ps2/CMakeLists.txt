@@ -108,6 +108,9 @@ set(PD_PS2_VU1_PROGRAM_OBJECT
 set(PD_PS2_VU1_TRANSFORM_PROGRAM_OBJECT
   "${CMAKE_CURRENT_BINARY_DIR}/generated/gs_vu1_textured_transform.o"
 )
+set(PD_PS2_VU1_OBJECT_PROGRAM_OBJECT
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/gs_vu1_object_transform.o"
+)
 add_custom_command(
   OUTPUT "${PD_PS2_VU1_PROGRAM_OBJECT}"
   COMMAND "${CMAKE_COMMAND}" -E make_directory
@@ -130,9 +133,21 @@ add_custom_command(
   COMMENT "Assembling VU1 textured transform microprogram"
   VERBATIM
 )
+add_custom_command(
+  OUTPUT "${PD_PS2_VU1_OBJECT_PROGRAM_OBJECT}"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  COMMAND "${PD_PS2_DVP_AS}"
+    "${CMAKE_CURRENT_LIST_DIR}/gs_vu1_object_transform.vsm"
+    -o "${PD_PS2_VU1_OBJECT_PROGRAM_OBJECT}"
+  DEPENDS "${CMAKE_CURRENT_LIST_DIR}/gs_vu1_object_transform.vsm"
+  COMMENT "Assembling VU1 object-space transform microprogram"
+  VERBATIM
+)
 set_source_files_properties(
   "${PD_PS2_VU1_PROGRAM_OBJECT}"
   "${PD_PS2_VU1_TRANSFORM_PROGRAM_OBJECT}"
+  "${PD_PS2_VU1_OBJECT_PROGRAM_OBJECT}"
   PROPERTIES GENERATED TRUE EXTERNAL_OBJECT TRUE
 )
 
@@ -874,6 +889,7 @@ set(PD_PS2_GAME_RENDERER_SOURCES
   "${PD_ROOT}/port/fast3d/rdp_tmem_trace.cpp"
   "${PD_PS2_VU1_PROGRAM_OBJECT}"
   "${PD_PS2_VU1_TRANSFORM_PROGRAM_OBJECT}"
+  "${PD_PS2_VU1_OBJECT_PROGRAM_OBJECT}"
 )
 
 if(PD_PS2_HOT_PATH_O2 AND PD_PS2_OPTIMIZATION STREQUAL "Og")

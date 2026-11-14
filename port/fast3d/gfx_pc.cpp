@@ -438,6 +438,81 @@ static void gfx_ps2_at_flush(void);
 static void gfx_ps2_direct_flush_records(void);
 static inline void gfx_ps2_at_invalidate_vertices(size_t first, size_t count);
 
+/*
+ * Object-space geometry (gfx_ps2_object.h). A G_VTX block whose bounding box
+ * is inside the guard band under the current matrix is not transformed: its
+ * vertices stay in object space, triangles over them are culled in object
+ * space and drawn by VU1's object program with the block's clip matrix. Any
+ * other use of such a slot first replays the original G_VTX for it
+ * (gfx_obj_materialize), so every other path sees exactly what it used to.
+ */
+#include "gfx_ps2_object.h"
+enum {
+    GFX_OBJ_CTX = 32,
+    GFX_OBJ_MAX_VERTICES = PS2_GS_VU1_OBJECT_MAX_VERTICES,
+    GFX_OBJ_NORMAL = 0, /* loaded_vertices[] is current */
+    GFX_OBJ_INSIDE = 1, /* deferred, block inside the guard band */
+    GFX_OBJ_OUTSIDE = 2, /* deferred, block outside the planes in mask[] */
+};
+
+/* Everything gfx_sp_vertex reads for an unlit load, plus derived data. */
+struct GfxObjCtx {
+    float mp[4][4] __attribute__((aligned(16)));
+    bool fb_active;
+    float aspect_ofs, aspect_scale, aspect_ratio;
+    uint32_t geometry_mode;
+    uint16_t tex_s, tex_t;
+    int16_t fog_mul, fog_offset;
+    uint8_t fog_alpha;
+    uint8_t z_is_from_0_to_1, invert_y;
+    struct XYWidthHeight viewport;
+    float guard_x, guard_y;
+    struct Ps2GsVu1ObjectTransform xf __attribute__((aligned(16)));
+    float alpha[4];
+    /* box tests as object-space planes (gfxPs2ObjectBuildPlanes) */
+    float pl[4][PS2_OBJECT_PLANES];
+    float pa[3][PS2_OBJECT_PLANES];
+    /* the same, as three groups of four planes for VU0: x, y, z, constant,
+     * |x|, |y|, |z| rows */
+    float vpl[3][7][4] __attribute__((aligned(16)));
+};
+
+static struct {
+    bool enabled;
+    bool materializing;
+    int8_t fog_linear; /* -1 unknown */
+    int batch_ctx;     /* ctx of the buffered direct batch, -1: clip space */
+    uint32_t next_ctx;
+    int last_ctx;
+    uint8_t state[MAX_VERTICES];
+    uint8_t mask[MAX_VERTICES];
+    uint8_t ctx[MAX_VERTICES];
+    /* The display list is complete and unchanging while gfx_run walks it,
+     * so a deferred slot keeps pointers instead of copies. */
+    const Vtx* src[MAX_VERTICES];
+    const struct NormalColor* cols[MAX_VERTICES];
+    struct GfxObjCtx ctxs[GFX_OBJ_CTX];
+    /* constants of the buffered object batch, and the record program of the
+     * current direct key (gfx_obj_update_prog) */
+    struct Ps2GsVu1ObjectTransform batch_xf __attribute__((aligned(16)));
+    uint32_t prog_serial;
+    bool prog_ok;
+    /* whether the last triangle setup could take object batches: G_VTX only
+     * defers while it could, so states that end up on the VBO path do not
+     * pay a replay for every block */
+    bool setup_ok;
+    struct Ps2GsVu1ObjectTransform prog __attribute__((aligned(16)));
+    /* per-frame counters (PD_PS2_OBJECT_STATS) */
+    uint32_t n_inside, n_outside, n_mixed, n_tris, n_replays;
+#if defined(PD_PS2_DIRECT_VERIFY) || defined(PD_PS2_NO_OBJECT_GEOMETRY)
+} gfx_obj = { false, false, -1, -1, 0u, -1, {}, {}, {}, {}, {}, {}, {}, 0u, false, {}, true };
+#else
+} gfx_obj = { true, false, -1, -1, 0u, -1, {}, {}, {}, {}, {}, {}, {}, 0u, false, {}, true };
+#endif
+
+static bool gfx_obj_try_defer(size_t n_vertices, size_t dest_index, const Vtx* vertices);
+static void gfx_obj_materialize_ctx(int k);
+
 static void gfx_ps2_direct_flush(void) {
     gfx_ps2_at_flush();
     gfx_ps2_direct_flush_records();
@@ -447,9 +522,15 @@ static void gfx_ps2_direct_flush_records(void) {
     if (gfx_ps2_direct.batch_count == 0) {
         return;
     }
-    gfxPs2DirectDraw(gfx_ps2_direct.batch, gfx_ps2_direct.batch_count,
-                     gfx_ps2_direct.batch_trilerp, gfx_ps2_direct.batch_w_ok, gfx_ps2_direct.batch_fog);
+    if (gfx_obj.batch_ctx >= 0) {
+        gfxPs2DirectDrawObject((const struct Ps2GsVu1ObjectVertex*)gfx_ps2_direct.batch, gfx_ps2_direct.batch_count,
+                               gfx_ps2_direct.batch_trilerp, gfx_ps2_direct.batch_fog, &gfx_obj.batch_xf);
+    } else {
+        gfxPs2DirectDraw(gfx_ps2_direct.batch, gfx_ps2_direct.batch_count,
+                         gfx_ps2_direct.batch_trilerp, gfx_ps2_direct.batch_w_ok, gfx_ps2_direct.batch_fog);
+    }
     gfx_ps2_direct.batch_count = 0;
+    gfx_obj.batch_ctx = -1;
 }
 
 static inline void gfx_ps2_direct_invalidate_vertices(size_t first, size_t count) {
@@ -1537,6 +1618,11 @@ static const uint8_t gfx_vclip_to_rej[32] = {
 
 static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx* vertices) {
     SUPPORT_CHECK(n_vertices <= MAX_VERTICES);
+#if defined(GFX_PS2_DIRECT)
+    if (gfx_obj_try_defer(n_vertices, dest_index, vertices)) {
+        return;
+    }
+#endif
 
     /*
      * Per-call invariants. Writes through `d` alias rsp, so without local
@@ -1672,6 +1758,12 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx* verti
 
 #if defined(GFX_PS2_DIRECT)
     gfx_ps2_direct_invalidate_vertices(dest_index, n_vertices);
+    if (dest_index < MAX_VERTICES) {
+        const size_t end = dest_index + n_vertices < MAX_VERTICES ? dest_index + n_vertices : MAX_VERTICES;
+        for (size_t i = dest_index; i < end; ++i) {
+            gfx_obj.state[i] = GFX_OBJ_NORMAL;
+        }
+    }
 #endif
     for (size_t i = 0; i < n_vertices; i++, dest_index++) {
         const Vtx* v = &vertices[i];
@@ -1902,6 +1994,11 @@ static void gfx_sp_modify_vertex(uint16_t vtx_idx, uint8_t where, uint32_t val) 
     int16_t s = (int16_t)(val >> 16);
     int16_t t = (int16_t)val;
 
+#if defined(GFX_PS2_DIRECT)
+    if (vtx_idx < MAX_VERTICES && gfx_obj.state[vtx_idx] != GFX_OBJ_NORMAL) {
+        gfx_obj_materialize_ctx(gfx_obj.ctx[vtx_idx]);
+    }
+#endif
     struct LoadedVertex* v = &rsp.loaded_vertices[vtx_idx];
     v->u = s;
     v->v = t;
@@ -2454,9 +2551,13 @@ static inline void gfx_ps2_direct_copy_record(struct Ps2GsVu1TransformVertex* ds
  * colour/fog values rather than the combiner inputs; both conversions are
  * linear, so they agree to the last rounding step.
  */
-static void gfx_ps2_direct_begin_batch(void) {
+static void gfx_ps2_direct_begin_batch(int obj_ctx = -1) {
     gfx_ps2_at_flush();
+    if (gfx_ps2_direct.batch_count != 0 && gfx_obj.batch_ctx != obj_ctx) {
+        gfx_ps2_direct_flush_records();
+    }
     if (gfx_ps2_direct.batch_count == 0) {
+        gfx_obj.batch_ctx = obj_ctx;
         gfx_ps2_direct.batch_trilerp = gfx_ps2_direct.key.ctx.trilerp != 0;
         gfx_ps2_direct.batch_w_ok = true;
         gfx_ps2_direct.batch_fog[0] = rdp.fog_color.r;
@@ -2817,6 +2918,529 @@ static bool gfx_ps2_at_tri(const struct GfxTriSetup* S, uint8_t a, uint8_t b, ui
 }
 #endif
 
+#if defined(GFX_PS2_DIRECT)
+static void gfx_obj_update_prog(const struct GfxTriSetup* S);
+#endif
+
+/* Build the cached triangle setup (and the PS2 direct/AT state) if stale. */
+static inline void gfx_tri_ensure_setup(void) {
+    if (gfx_tri_setup_cache.valid) {
+        return;
+    }
+    gfx_tri_setup(&gfx_tri_setup_cache, false);
+    gfx_tri_setup_cache.valid = true;
+#if defined(GFX_PS2_DIRECT)
+    {
+        const struct GfxTriSetup* T = &gfx_tri_setup_cache;
+        gfxPs2DirectSetATSameCoords(T->used_textures[0] && T->used_textures[1] &&
+                                    T->u_scale[0] == T->u_scale[1] && T->u_bias[0] == T->u_bias[1] &&
+                                    T->v_scale[0] == T->v_scale[1] && T->v_bias[0] == T->v_bias[1]);
+    }
+    gfx_ps2_direct_refresh(&gfx_tri_setup_cache);
+    if (gfx_ps2_direct.active) {
+        gfx_obj_update_prog(&gfx_tri_setup_cache);
+    }
+    gfx_obj.setup_ok = gfx_ps2_direct.active && gfx_obj.prog_ok && !gfx_ps2_direct.rec_lod;
+    if (++gfx_ps2_at.serial == 0) {
+        gfx_ps2_at.serial = 1;
+    }
+    gfx_ps2_at.path = 0;
+    if (!gfx_ps2_direct.active && !gfx_tri_setup_cache.depth_source_prim &&
+        !gfx_tri_setup_cache.use_grayscale) {
+        gfx_ps2_at.path = gfxPs2DirectQueryAT();
+        if (gfx_ps2_at.path != 0) {
+            gfxPs2DirectUpdateGuard(&gfx_ps2_at.gx, &gfx_ps2_at.gy);
+            ps2GsClipGetGuardBand(&gfx_ps2_at.gx, &gfx_ps2_at.gy);
+            gfx_ps2_at_build_map(&gfx_tri_setup_cache);
+            if (gfxPs2DirectATSameSampleLane()) {
+                /* the lane reads only input 1 and tap 0 */
+                gfx_ps2_at.need_lod = (gfx_ps2_at.map[4] == 4 || gfx_ps2_at.map[5] == 4 ||
+                                       gfx_ps2_at.map[6] == 4 || gfx_ps2_at.map[7] == 4);
+            }
+        }
+    }
+#endif
+}
+
+#if defined(GFX_PS2_DIRECT)
+/* True when ctx X was captured from exactly the transform inputs current now. */
+static inline bool gfx_obj_ctx_current(const struct GfxObjCtx* X) {
+    const uint64_t* a = (const uint64_t*)X->mp;
+    const uint64_t* b = (const uint64_t*)rsp.MP_matrix;
+    uint64_t diff = 0;
+    for (int i = 0; i < 8; ++i) {
+        diff |= a[i] ^ b[i];
+    }
+    return diff == 0 && X->geometry_mode == rsp.geometry_mode && X->fb_active == fbActive &&
+           X->aspect_ofs == rsp.aspect_ofs && X->aspect_scale == rsp.aspect_scale &&
+           X->aspect_ratio == gfx_current_dimensions.aspect_ratio && X->tex_s == rsp.texture_scaling_factor.s &&
+           X->tex_t == rsp.texture_scaling_factor.t && X->fog_mul == rsp.fog_mul &&
+           X->fog_offset == rsp.fog_offset && X->fog_alpha == rdp.fog_color.a && X->viewport.x == rdp.viewport.x &&
+           X->viewport.y == rdp.viewport.y && X->viewport.width == rdp.viewport.width &&
+           X->viewport.height == rdp.viewport.height;
+}
+
+/* Capture the current transform inputs into X and derive everything else. */
+static void gfx_obj_ctx_build(struct GfxObjCtx* X) {
+    memcpy(X->mp, rsp.MP_matrix, sizeof(X->mp));
+    X->fb_active = fbActive;
+    X->aspect_ofs = rsp.aspect_ofs;
+    X->aspect_scale = rsp.aspect_scale;
+    X->aspect_ratio = gfx_current_dimensions.aspect_ratio;
+    X->geometry_mode = rsp.geometry_mode;
+    X->tex_s = rsp.texture_scaling_factor.s;
+    X->tex_t = rsp.texture_scaling_factor.t;
+    X->fog_mul = rsp.fog_mul;
+    X->fog_offset = rsp.fog_offset;
+    X->fog_alpha = rdp.fog_color.a;
+    X->viewport = rdp.viewport;
+    const struct GfxClipParameters clip = gfx_rapi->get_clip_parameters();
+    X->z_is_from_0_to_1 = clip.z_is_from_0_to_1;
+    X->invert_y = clip.invert_y;
+    float gx, gy;
+    gfxPs2DirectPeekGuard(&gx, &gy);
+    /* clamped to the exact frustum like the direct path's codes */
+    X->guard_x = gx >= 1.0f ? gx : 1.0f;
+    X->guard_y = gy >= 1.0f ? gy : 1.0f;
+
+    float ml[4][4]; /* LoadedVertex space: aspect applied */
+    const float k = X->aspect_scale / X->aspect_ratio;
+    for (int i = 0; i < 4; ++i) {
+        for (int j = 0; j < 4; ++j) {
+            ml[i][j] = X->mp[i][j];
+        }
+        if (!X->fb_active) {
+            ml[i][0] = (X->aspect_ofs * X->mp[i][3] + X->mp[i][0]) * k;
+        }
+    }
+    gfxPs2ObjectCullBasis(ml, X->alpha);
+    for (int i = 0; i < 4; ++i) {
+        X->xf.m[i][0] = ml[i][0];
+        X->xf.m[i][1] = X->invert_y ? -ml[i][1] : ml[i][1];
+        X->xf.m[i][2] = X->z_is_from_0_to_1 ? (ml[i][2] + ml[i][3]) / 2.0f : ml[i][2];
+        X->xf.m[i][3] = ml[i][3];
+    }
+    /* Fast3D: fog byte = trunc(clamp(z_raw / w * fog_mul + fog_offset)), or
+     * the fog colour's alpha without G_FOG. VU1 sees z' = (z_raw + w) / 2. */
+    float fa = 0.0f, fb = X->fog_alpha;
+    if (X->geometry_mode & G_FOG) {
+        fa = X->z_is_from_0_to_1 ? 2.0f * X->fog_mul : (float)X->fog_mul;
+        fb = X->z_is_from_0_to_1 ? (float)X->fog_offset - X->fog_mul : (float)X->fog_offset;
+    }
+    X->xf.fog[0] = 255.0f;
+    X->xf.fog[1] = fb;
+    X->xf.fog[2] = -1.0f;
+    X->xf.fog[3] = fa;
+
+    gfxPs2ObjectBuildPlanes(X->xf.m, X->guard_x, X->guard_y, 1e-3f, X->pl, X->pa);
+    for (int g = 0; g < 3; ++g) {
+        for (int lane = 0; lane < 4; ++lane) {
+            const int j = g * 4 + lane;
+            for (int r = 0; r < 4; ++r) {
+                X->vpl[g][r][lane] = X->pl[r][j];
+            }
+            for (int r = 0; r < 3; ++r) {
+                X->vpl[g][4 + r][lane] = X->pa[r][j];
+            }
+        }
+    }
+}
+
+/* gfxPs2ObjectClassifyPlanes with the twelve plane ranges on VU0. */
+static inline enum Ps2ObjectBoxClass gfx_obj_classify(const struct GfxObjCtx* X, const float lo[3], const float hi[3],
+                                                      uint32_t* outside_mask) {
+#if defined(_EE)
+    float ce[2][4] __attribute__((aligned(16))) = {
+        { (lo[0] + hi[0]) * 0.5f, (lo[1] + hi[1]) * 0.5f, (lo[2] + hi[2]) * 0.5f, 1.0f },
+        { (hi[0] - lo[0]) * 0.5f, (hi[1] - lo[1]) * 0.5f, (hi[2] - lo[2]) * 0.5f, 0.0f },
+    };
+    float vmin[12] __attribute__((aligned(16)));
+    float vmax[12] __attribute__((aligned(16)));
+    __asm__ __volatile__("lqc2    $vf1, 0(%0)\n\t"
+                         "lqc2    $vf2, 16(%0)\n\t"
+                         :
+                         : "r"(ce)
+                         : "memory");
+    for (int g = 0; g < 3; ++g) {
+        __asm__ __volatile__("lqc2    $vf3, 0(%0)\n\t"
+                             "lqc2    $vf4, 16(%0)\n\t"
+                             "lqc2    $vf5, 32(%0)\n\t"
+                             "lqc2    $vf6, 48(%0)\n\t"
+                             "lqc2    $vf7, 64(%0)\n\t"
+                             "lqc2    $vf8, 80(%0)\n\t"
+                             "lqc2    $vf9, 96(%0)\n\t"
+                             "vmulax.xyzw  $ACC, $vf3, $vf1x\n\t"
+                             "vmadday.xyzw $ACC, $vf4, $vf1y\n\t"
+                             "vmaddaz.xyzw $ACC, $vf5, $vf1z\n\t"
+                             "vmaddw.xyzw  $vf10, $vf6, $vf0w\n\t"
+                             "vmulax.xyzw  $ACC, $vf7, $vf2x\n\t"
+                             "vmadday.xyzw $ACC, $vf8, $vf2y\n\t"
+                             "vmaddz.xyzw  $vf11, $vf9, $vf2z\n\t"
+                             "vsub.xyzw    $vf12, $vf10, $vf11\n\t"
+                             "vadd.xyzw    $vf13, $vf10, $vf11\n\t"
+                             "sqc2    $vf12, 0(%1)\n\t"
+                             "sqc2    $vf13, 0(%2)\n\t"
+                             :
+                             : "r"(X->vpl[g]), "r"(&vmin[g * 4]), "r"(&vmax[g * 4])
+                             : "memory");
+    }
+    uint32_t mask = 0;
+    mask |= vmax[7] < 0.0f ? 1u : 0u;
+    mask |= vmax[8] < 0.0f ? 2u : 0u;
+    mask |= vmax[9] < 0.0f ? 4u : 0u;
+    mask |= vmax[10] < 0.0f ? 8u : 0u;
+    mask |= vmax[4] < 0.0f ? 16u : 0u;
+    mask |= vmax[5] < 0.0f ? 32u : 0u;
+    *outside_mask = mask;
+    if (mask != 0) {
+        return PS2_OBJECT_BOX_OUTSIDE;
+    }
+    for (int j = 0; j < 7; ++j) {
+        if (!(vmin[j] >= 0.0f)) {
+            return PS2_OBJECT_BOX_MIXED;
+        }
+    }
+    return PS2_OBJECT_BOX_INSIDE;
+#else
+    return gfxPs2ObjectClassifyPlanes(X->pl, X->pa, lo, hi, outside_mask);
+#endif
+}
+
+/* Replay the original G_VTX for slots [first, first + count) of ctx k. */
+static void gfx_obj_replay(int k, size_t first, size_t count) {
+    const struct GfxObjCtx* X = &gfx_obj.ctxs[k];
+    float saved_mp[4][4];
+    memcpy(saved_mp, rsp.MP_matrix, sizeof(saved_mp));
+    const bool saved_fb = fbActive;
+    const float saved_ofs = rsp.aspect_ofs, saved_scale = rsp.aspect_scale;
+    const float saved_ratio = gfx_current_dimensions.aspect_ratio;
+    const uint32_t saved_geom = rsp.geometry_mode;
+    const uint16_t saved_s = rsp.texture_scaling_factor.s, saved_t = rsp.texture_scaling_factor.t;
+    const int16_t saved_fm = rsp.fog_mul, saved_fo = rsp.fog_offset;
+    const uint8_t saved_fa = rdp.fog_color.a;
+    const struct NormalColor* saved_cols = rsp.vertex_colors;
+
+    memcpy(rsp.MP_matrix, X->mp, sizeof(X->mp));
+    fbActive = X->fb_active;
+    rsp.aspect_ofs = X->aspect_ofs;
+    rsp.aspect_scale = X->aspect_scale;
+    gfx_current_dimensions.aspect_ratio = X->aspect_ratio;
+    rsp.geometry_mode = X->geometry_mode;
+    rsp.texture_scaling_factor.s = X->tex_s;
+    rsp.texture_scaling_factor.t = X->tex_t;
+    rsp.fog_mul = X->fog_mul;
+    rsp.fog_offset = X->fog_offset;
+    rdp.fog_color.a = X->fog_alpha;
+
+    gfx_obj.materializing = true;
+    /* one call per run of slots that came from one G_VTX source array */
+    size_t i = first;
+    while (i < first + count) {
+        size_t j = i + 1;
+        while (j < first + count && gfx_obj.src[j] == gfx_obj.src[j - 1] + 1 &&
+               gfx_obj.cols[j] == gfx_obj.cols[i]) {
+            ++j;
+        }
+        rsp.vertex_colors = gfx_obj.cols[i];
+        gfx_sp_vertex(j - i, i, gfx_obj.src[i]);
+        i = j;
+    }
+    gfx_obj.materializing = false;
+    ++gfx_obj.n_replays;
+
+    memcpy(rsp.MP_matrix, saved_mp, sizeof(saved_mp));
+    fbActive = saved_fb;
+    rsp.aspect_ofs = saved_ofs;
+    rsp.aspect_scale = saved_scale;
+    gfx_current_dimensions.aspect_ratio = saved_ratio;
+    rsp.geometry_mode = saved_geom;
+    rsp.texture_scaling_factor.s = saved_s;
+    rsp.texture_scaling_factor.t = saved_t;
+    rsp.fog_mul = saved_fm;
+    rsp.fog_offset = saved_fo;
+    rdp.fog_color.a = saved_fa;
+    rsp.vertex_colors = saved_cols;
+}
+
+/* Bring every deferred slot of ctx k up to date in loaded_vertices[]. */
+static void gfx_obj_materialize_ctx(int k) {
+    size_t i = 0;
+    while (i < MAX_VERTICES) {
+        if (gfx_obj.state[i] == GFX_OBJ_NORMAL || gfx_obj.ctx[i] != k) {
+            ++i;
+            continue;
+        }
+        size_t j = i + 1;
+        while (j < MAX_VERTICES && gfx_obj.state[j] != GFX_OBJ_NORMAL && gfx_obj.ctx[j] == k) {
+            ++j;
+        }
+        gfx_obj_replay(k, i, j - i); /* sets the slots back to NORMAL */
+        i = j;
+    }
+}
+
+static void gfx_obj_materialize_all(void) {
+    for (size_t i = 0; i < MAX_VERTICES; ++i) {
+        if (gfx_obj.state[i] != GFX_OBJ_NORMAL) {
+            gfx_obj_materialize_ctx(gfx_obj.ctx[i]);
+        }
+    }
+}
+
+/* Object-space bounds of n vertices (x, y, z of each Vtx). */
+static inline void gfx_obj_bounds(const Vtx* v, size_t n, float lo[3], float hi[3]) {
+#if defined(_EE)
+    /* MMI parallel halfword min/max over x, y, z (lane 3 is flags/colour) */
+    typedef unsigned int qword_t __attribute__((mode(TI)));
+    uint64_t first;
+    memcpy(&first, &v[0], 8);
+    qword_t qlo = first, qhi = first;
+    for (size_t i = 1; i < n; ++i) {
+        uint64_t raw;
+        memcpy(&raw, &v[i], 8);
+        const qword_t q = raw;
+        __asm__("pminh %0, %1, %2" : "=r"(qlo) : "r"(qlo), "r"(q));
+        __asm__("pmaxh %0, %1, %2" : "=r"(qhi) : "r"(qhi), "r"(q));
+    }
+    const uint64_t l = (uint64_t)qlo, h = (uint64_t)qhi;
+    for (int k = 0; k < 3; ++k) {
+        lo[k] = (float)(int16_t)(l >> (16 * k));
+        hi[k] = (float)(int16_t)(h >> (16 * k));
+    }
+#else
+    int l[3] = { v[0].v[0], v[0].v[1], v[0].v[2] };
+    int h[3] = { l[0], l[1], l[2] };
+    for (size_t i = 1; i < n; ++i) {
+        for (int k = 0; k < 3; ++k) {
+            const int c = v[i].v[k];
+            l[k] = c < l[k] ? c : l[k];
+            h[k] = c > h[k] ? c : h[k];
+        }
+    }
+    for (int k = 0; k < 3; ++k) {
+        lo[k] = (float)l[k];
+        hi[k] = (float)h[k];
+    }
+#endif
+}
+
+static bool gfx_obj_try_defer(size_t n_vertices, size_t dest_index, const Vtx* vertices) {
+    if (!gfx_obj.enabled || gfx_obj.materializing || !gfx_obj.setup_ok || n_vertices == 0 ||
+        dest_index >= MAX_VERTICES ||
+        n_vertices > MAX_VERTICES - dest_index || (rsp.geometry_mode & G_LIGHTING) != 0 ||
+        rsp.vertex_colors == nullptr) {
+        return false;
+    }
+
+    /* Reuse the last context when nothing the transform reads changed. */
+    int k = gfx_obj.last_ctx;
+    if (k < 0 || !gfx_obj_ctx_current(&gfx_obj.ctxs[k])) {
+        k = (int)(gfx_obj.next_ctx++ % GFX_OBJ_CTX);
+        /* the slot is recycled: nothing may still refer to it */
+        if (gfx_obj.batch_ctx == k) {
+            gfx_ps2_direct_flush_records();
+        }
+        gfx_obj_materialize_ctx(k);
+        gfx_obj_ctx_build(&gfx_obj.ctxs[k]);
+        gfx_obj.last_ctx = k;
+    }
+    const struct GfxObjCtx* X = &gfx_obj.ctxs[k];
+
+    float lo[3], hi[3];
+    gfx_obj_bounds(vertices, n_vertices, lo, hi);
+    uint32_t mask = 0;
+    const enum Ps2ObjectBoxClass cls = gfx_obj_classify(X, lo, hi, &mask);
+    if (cls == PS2_OBJECT_BOX_MIXED) {
+        ++gfx_obj.n_mixed;
+        return false;
+    }
+    cls == PS2_OBJECT_BOX_INSIDE ? ++gfx_obj.n_inside : ++gfx_obj.n_outside;
+
+    /* No direct/AT tag invalidation here: those caches are only read for
+     * NORMAL slots, and materializing goes through gfx_sp_vertex again. */
+    const uint8_t state = cls == PS2_OBJECT_BOX_INSIDE ? GFX_OBJ_INSIDE : GFX_OBJ_OUTSIDE;
+    const struct NormalColor* cols = rsp.vertex_colors;
+    for (size_t i = 0; i < n_vertices; ++i) {
+        const size_t d = dest_index + i;
+        gfx_obj.src[d] = &vertices[i];
+        gfx_obj.cols[d] = cols;
+        gfx_obj.state[d] = state;
+        gfx_obj.mask[d] = (uint8_t)mask;
+        gfx_obj.ctx[d] = (uint8_t)k;
+    }
+    return true;
+}
+
+/*
+ * Record program of the current direct key for VU1: texture coordinate
+ * scale/bias and the colour channel program, which is linear because every
+ * direct colour table is round(i / 255 * K). False when it is not
+ * expressible (LOD input or an unknown table).
+ */
+static void gfx_obj_update_prog(const struct GfxTriSetup* S) {
+    const struct GfxPs2DirectContext* C = &gfx_ps2_direct.key.ctx;
+    struct Ps2GsVu1ObjectTransform* P = &gfx_obj.prog;
+    bool ok = true;
+    memset(P->color, 0, sizeof(P->color));
+    for (int c = 0; c < 4; ++c) {
+        const uint8_t src = gfx_ps2_direct.rec_src[c];
+        if (src == 0xff) {
+            P->color_add[c] = gfx_ps2_direct.rec_const[c] + 0.5f;
+        } else if (src == 5) {
+            P->color_add[c] = gfx_ps2_direct.rec_lut[c][0] + 0.5f;
+        } else if (src <= 3) {
+            float k;
+            if (!gfxPs2DirectLutScale(gfx_ps2_direct.rec_lut[c], &k)) {
+                ok = false;
+            }
+            P->color[src][c] = k;
+            P->color_add[c] = 0.5f;
+        } else {
+            ok = false; /* LOD */
+        }
+    }
+    for (int i = 0; i < 4; ++i) {
+        P->tex_mul[i] = P->tex_add[i] = P->tex_scale[i] = 0.0f;
+    }
+    if (!C->color_only) {
+        P->tex_mul[0] = S->u_scale[0];
+        P->tex_mul[1] = S->v_scale[0];
+        P->tex_add[0] = S->u_bias[0];
+        P->tex_add[1] = S->v_bias[0];
+        P->tex_scale[0] = C->scale_s;
+        P->tex_scale[1] = C->scale_t;
+    }
+    gfx_obj.prog_ok = ok;
+    gfx_obj.prog_serial = gfx_ps2_direct.serial;
+}
+
+/* Batch constants: the ctx's matrix and fog with the key's record program. */
+static void gfx_obj_start_batch(int k) {
+    struct Ps2GsVu1ObjectTransform* B = &gfx_obj.batch_xf;
+    *B = gfx_obj.prog;
+    memcpy(B->m, gfx_obj.ctxs[k].xf.m, sizeof(B->m));
+    memcpy(B->fog, gfx_obj.ctxs[k].xf.fog, sizeof(B->fog));
+    if (!gfx_ps2_direct.key.ctx.fog) {
+        /* records without a fog coefficient carry 0 in the fog lane */
+        B->fog[1] = 255.0f;
+        B->fog[3] = 0.0f;
+    }
+}
+
+/* The raw vertex VU1 builds the record from (struct Ps2GsVu1ObjectVertex). */
+__attribute__((always_inline)) static inline void gfx_obj_pack(uint8_t idx, const struct GfxObjCtx* X, struct Ps2GsVu1ObjectVertex* o) {
+    const Vtx* v = gfx_obj.src[idx];
+    const struct NormalColor col = gfx_obj.cols[idx][v->colour >> 2];
+    o->pos[0] = v->v[0];
+    o->pos[1] = v->v[1];
+    o->pos[2] = v->v[2];
+    o->pos[3] = 0;
+    /* LoadedVertex u/v exactly as gfx_sp_vertex derives them */
+    o->uv[0] = (short)(v->s * (int32_t)X->tex_s >> 16);
+    o->uv[1] = (short)(v->t * (int32_t)X->tex_t >> 16);
+    o->uv[2] = 0;
+    o->uv[3] = 0;
+    o->rgba[0] = col.r;
+    o->rgba[1] = col.g;
+    o->rgba[2] = col.b;
+    o->rgba[3] = col.a;
+}
+
+__attribute__((always_inline)) static inline void gfx_obj_pos(uint8_t idx, float p[3]) {
+    const Vtx* v = gfx_obj.src[idx];
+    p[0] = v->v[0];
+    p[1] = v->v[1];
+    p[2] = v->v[2];
+}
+
+/*
+ * Triangle over at least one deferred slot. True when consumed (rejected,
+ * culled or buffered in an object batch); false after bringing the slots up
+ * to date for the usual path.
+ */
+static bool gfx_obj_tri(uint8_t a, uint8_t b, uint8_t c) {
+    const uint8_t sa = gfx_obj.state[a], sb = gfx_obj.state[b], sc = gfx_obj.state[c];
+    if (sa != GFX_OBJ_NORMAL && sb != GFX_OBJ_NORMAL && sc != GFX_OBJ_NORMAL) {
+        /* every vertex outside one exact plane: Fast3D rejects it too */
+        if ((gfx_obj.mask[a] & gfx_obj.mask[b] & gfx_obj.mask[c]) != 0) {
+            return true;
+        }
+        const int k = gfx_obj.ctx[a];
+        if (sa == GFX_OBJ_INSIDE && sb == GFX_OBJ_INSIDE && sc == GFX_OBJ_INSIDE && gfx_obj.ctx[b] == k &&
+            gfx_obj.ctx[c] == k) {
+            const struct GfxObjCtx* X = &gfx_obj.ctxs[k];
+            const uint32_t cull_mode = rsp.geometry_mode & G_CULL_BOTH;
+#if defined(PERFECT_DARK_PS2_DISABLE_CULLING)
+            if (false) {
+#else
+            if (cull_mode != 0) {
+#endif
+                float pa[3], pb[3], pc[3];
+                gfx_obj_pos(a, pa);
+                gfx_obj_pos(b, pb);
+                gfx_obj_pos(c, pc);
+                const float cross = gfxPs2ObjectCullCross(X->alpha, pa, pb, pc);
+                switch (cull_mode) {
+                    case G_CULL_FRONT:
+                        if (cross <= 0) {
+                            return true;
+                        }
+                        break;
+                    case G_CULL_BACK:
+                        if (cross >= 0) {
+                            return true;
+                        }
+                        break;
+                    case G_CULL_BOTH:
+                        return true;
+                }
+            }
+            gfx_tri_ensure_setup();
+            const struct GfxTriSetup* S = &gfx_tri_setup_cache;
+            const struct GfxPs2DirectContext* C = &gfx_ps2_direct.key.ctx;
+            if (gfx_obj.fog_linear < 0) {
+                gfx_obj.fog_linear = gfxPs2DirectFogLinear() ? 1 : 0;
+            }
+            if (gfx_ps2_direct.active && gfx_obj.prog_serial != gfx_ps2_direct.serial) {
+                gfx_obj_update_prog(S);
+            }
+            if (gfx_ps2_direct.active && gfx_obj.prog_ok && !gfx_ps2_direct.rec_lod &&
+                S->z_is_from_0_to_1 == (X->z_is_from_0_to_1 != 0) && S->invert_y == (X->invert_y != 0) &&
+                C->guard_x >= X->guard_x && C->guard_y >= X->guard_y && (!C->fog || gfx_obj.fog_linear == 1)) {
+                if (buf_vbo_len > 0) {
+                    gfx_flush();
+                }
+                if (gfx_ps2_direct.batch_count == 0 || gfx_obj.batch_ctx != k) {
+                    gfx_ps2_direct_begin_batch(k);
+                    gfx_obj_start_batch(k);
+                }
+                struct Ps2GsVu1ObjectVertex* out =
+                    (struct Ps2GsVu1ObjectVertex*)&gfx_ps2_direct.batch[gfx_ps2_direct.batch_count];
+                gfx_obj_pack(a, X, &out[0]);
+                gfx_obj_pack(b, X, &out[1]);
+                gfx_obj_pack(c, X, &out[2]);
+                gfx_ps2_direct.batch_count += 3;
+                ++gfx_obj.n_tris;
+                if (gfx_ps2_direct.batch_count + 3 > GFX_OBJ_MAX_VERTICES) {
+                    gfx_ps2_direct_flush();
+                }
+                return true;
+            }
+        }
+    }
+    if (sa != GFX_OBJ_NORMAL) {
+        gfx_obj_materialize_ctx(gfx_obj.ctx[a]);
+    }
+    if (gfx_obj.state[b] != GFX_OBJ_NORMAL) {
+        gfx_obj_materialize_ctx(gfx_obj.ctx[b]);
+    }
+    if (gfx_obj.state[c] != GFX_OBJ_NORMAL) {
+        gfx_obj_materialize_ctx(gfx_obj.ctx[c]);
+    }
+    return false;
+}
+#endif
+
 /*
  * Everything after culling. Kept out of line so the culling front end
  * (about half of all triangles end there) inlines into the G_TRI1/G_TRI4
@@ -2834,36 +3458,8 @@ __attribute__((noinline)) static void gfx_sp_tri1_emit(uint8_t vtx1_idx, uint8_t
     if (is_rect) {
         gfx_tri_setup(&rect_setup, true);
         S = &rect_setup;
-    } else if (!gfx_tri_setup_cache.valid) {
-        gfx_tri_setup(&gfx_tri_setup_cache, false);
-        gfx_tri_setup_cache.valid = true;
-#if defined(GFX_PS2_DIRECT)
-        {
-            const struct GfxTriSetup* T = &gfx_tri_setup_cache;
-            gfxPs2DirectSetATSameCoords(T->used_textures[0] && T->used_textures[1] &&
-                                        T->u_scale[0] == T->u_scale[1] && T->u_bias[0] == T->u_bias[1] &&
-                                        T->v_scale[0] == T->v_scale[1] && T->v_bias[0] == T->v_bias[1]);
-        }
-        gfx_ps2_direct_refresh(&gfx_tri_setup_cache);
-        if (++gfx_ps2_at.serial == 0) {
-            gfx_ps2_at.serial = 1;
-        }
-        gfx_ps2_at.path = 0;
-        if (!gfx_ps2_direct.active && !gfx_tri_setup_cache.depth_source_prim &&
-            !gfx_tri_setup_cache.use_grayscale) {
-            gfx_ps2_at.path = gfxPs2DirectQueryAT();
-            if (gfx_ps2_at.path != 0) {
-                gfxPs2DirectUpdateGuard(&gfx_ps2_at.gx, &gfx_ps2_at.gy);
-                ps2GsClipGetGuardBand(&gfx_ps2_at.gx, &gfx_ps2_at.gy);
-                gfx_ps2_at_build_map(&gfx_tri_setup_cache);
-                if (gfxPs2DirectATSameSampleLane()) {
-                    /* the lane reads only input 1 and tap 0 */
-                    gfx_ps2_at.need_lod = (gfx_ps2_at.map[4] == 4 || gfx_ps2_at.map[5] == 4 ||
-                                           gfx_ps2_at.map[6] == 4 || gfx_ps2_at.map[7] == 4);
-                }
-            }
-        }
-#endif
+    } else {
+        gfx_tri_ensure_setup();
     }
 #if defined(GFX_PS2_DIRECT) && defined(PD_PS2_DIRECT_VERIFY)
     /* Verification build: draw through the VBO, but record what the direct
@@ -2904,6 +3500,13 @@ __attribute__((noinline)) static void gfx_sp_tri1_emit(uint8_t vtx1_idx, uint8_t
 }
 
 static inline void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx, bool is_rect) {
+#if defined(GFX_PS2_DIRECT)
+    if (!is_rect && vtx1_idx < MAX_VERTICES && vtx2_idx < MAX_VERTICES && vtx3_idx < MAX_VERTICES &&
+        (gfx_obj.state[vtx1_idx] | gfx_obj.state[vtx2_idx] | gfx_obj.state[vtx3_idx]) != 0 &&
+        gfx_obj_tri(vtx1_idx, vtx2_idx, vtx3_idx)) {
+        return;
+    }
+#endif
     struct LoadedVertex* v1 = &rsp.loaded_vertices[vtx1_idx];
     struct LoadedVertex* v2 = &rsp.loaded_vertices[vtx2_idx];
     struct LoadedVertex* v3 = &rsp.loaded_vertices[vtx3_idx];
@@ -4140,7 +4743,25 @@ extern "C" void gfx_run(Gfx* commands) {
     rendering_state.viewport = {};
     rendering_state.scissor = {};
     gfx_tri_setup_invalidate();
+#if defined(GFX_PS2_DIRECT) && !defined(PD_PS2_DIRECT_VERIFY) && !defined(PD_PS2_NO_OBJECT_GEOMETRY)
+    gfx_obj.enabled = gfxPs2ObjectGeometryEnabled();
+#endif
     gfx_run_dl(commands);
+#if defined(GFX_PS2_DIRECT)
+    /* slots a later frame might read without reloading */
+    gfx_obj_materialize_all();
+#if defined(PD_PS2_OBJECT_STATS)
+    {
+        static uint32_t frames;
+        if (++frames % 60 == 0) {
+            sysLogPrintf(LOG_NOTE, "OBJGEOM blocks inside=%u outside=%u mixed=%u tris=%u replays=%u (per frame)",
+                         gfx_obj.n_inside / 60, gfx_obj.n_outside / 60, gfx_obj.n_mixed / 60, gfx_obj.n_tris / 60,
+                         gfx_obj.n_replays / 60);
+            gfx_obj.n_inside = gfx_obj.n_outside = gfx_obj.n_mixed = gfx_obj.n_tris = gfx_obj.n_replays = 0;
+        }
+    }
+#endif
+#endif
     gfx_flush();
     gfxFramebuffer = 0;
 
