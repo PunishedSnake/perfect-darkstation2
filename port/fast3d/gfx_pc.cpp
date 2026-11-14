@@ -518,6 +518,8 @@ static struct {
 
 static bool gfx_obj_try_defer(size_t n_vertices, size_t dest_index, const Vtx* vertices);
 static void gfx_obj_materialize_ctx(int k);
+/* bit k: ctx k may still own deferred slots (cleared by materializing it) */
+static uint32_t gfx_obj_ctx_deferred;
 
 static void gfx_ps2_direct_flush(void) {
     gfx_ps2_at_flush();
@@ -3233,6 +3235,12 @@ static void gfx_obj_replay(int k, size_t first, size_t count) {
 
 /* Bring every deferred slot of ctx k up to date in loaded_vertices[]. */
 static void gfx_obj_materialize_ctx(int k) {
+    /* Most recycled contexts own nothing (one per model part): skip the
+     * scan of every vertex slot for them. */
+    if (!(gfx_obj_ctx_deferred & (1u << k))) {
+        return;
+    }
+    gfx_obj_ctx_deferred &= ~(1u << k);
     size_t i = 0;
     while (i < MAX_VERTICES) {
         if (gfx_obj.state[i] == GFX_OBJ_NORMAL || gfx_obj.ctx[i] != k) {
@@ -3293,8 +3301,9 @@ static inline void gfx_obj_bounds(const Vtx* v, size_t n, float lo[3], float hi[
 #endif
 }
 
+extern "C" bool gfxPs2ObjectDeferEnabled(void);
 static bool gfx_obj_try_defer(size_t n_vertices, size_t dest_index, const Vtx* vertices) {
-    if (!gfx_obj.enabled || gfx_obj.materializing || !gfx_obj.setup_ok || n_vertices == 0 ||
+    if (!gfx_obj.enabled || !gfxPs2ObjectDeferEnabled() || gfx_obj.materializing || !gfx_obj.setup_ok || n_vertices == 0 ||
         dest_index >= MAX_VERTICES ||
         n_vertices > MAX_VERTICES - dest_index || (rsp.geometry_mode & G_LIGHTING) != 0 ||
         rsp.vertex_colors == nullptr) {
@@ -3336,6 +3345,7 @@ static bool gfx_obj_try_defer(size_t n_vertices, size_t dest_index, const Vtx* v
         gfx_obj.state[d] = state;
         gfx_obj.mask[d] = (uint8_t)mask;
         gfx_obj.ctx[d] = (uint8_t)k;
+        gfx_obj_ctx_deferred |= 1u << k;
     }
     return true;
 }
