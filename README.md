@@ -238,7 +238,7 @@ These are mainly for A/B checks on hardware:
 | `Video.Ps2Emotion3DSkin` | 1 | Character models on the VU1 skin path. |
 | `Video.Ps2Emotion3DModels` | 0 | Model display-list replay without the skin path (measured slower). |
 | `Video.Ps2ObjectGeometry` | 1 | Object-space geometry transformed on VU1. |
-| `Video.DisplayFPS` | 0 | FPS counter; on PS2 a second line shows milliseconds per frame for logic, gfx, audio and present (30-frame averages). |
+| `Video.DisplayFPS` | 0 | FPS counter. On PS2 a second line shows ms per frame for logic, gfx, audio and present; a third shows EE wait on DMA/GS (ms), texture upload KB, chain KB, arena spills ×10 and VU1 state (0 ok, 1 VIF error, 2 timeout). 30-frame averages. |
 | `Debug.TraceCapture` | 0 | Select on controller 1 captures one renderer frame (stalls while writing). |
 
 ## Controls and video settings

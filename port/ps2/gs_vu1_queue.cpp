@@ -43,6 +43,11 @@ extern "C" uint32_t Ps2GsVu1SkinCodeEnd;
 
 static bool s_initialized;
 static bool s_enabled;
+/* Display FPS diagnostics: 0 = VU1 path healthy, 1 = disabled after a VIF1
+ * error, 2 = after a wait timeout; g_Ps2Vu1FaultStat holds VIF1_STAT. */
+extern "C" {
+uint32_t g_Ps2Vu1Fault, g_Ps2Vu1FaultStat;
+}
 static bool s_pending;
 static bool s_wait_failure_logged;
 
@@ -109,6 +114,8 @@ static bool ps2GsVu1QueueWaitVifIdle(void)
                 now_us >= start_us ? now_us - start_us : 0u,
                 observed_busy);
             s_enabled = false;
+            g_Ps2Vu1Fault = 1u;
+            g_Ps2Vu1FaultStat = status;
             ps2RendererStatsRecordVu1WaitFailure(false);
             if (!s_wait_failure_logged) {
                 sysLogPrintf(LOG_ERROR,
@@ -134,6 +141,8 @@ static bool ps2GsVu1QueueWaitVifIdle(void)
                 now_us >= start_us ? now_us - start_us : 0u,
                 observed_busy);
             s_enabled = false;
+            g_Ps2Vu1Fault = 2u;
+            g_Ps2Vu1FaultStat = status;
             ps2RendererStatsRecordVu1WaitFailure(true);
             if (!s_wait_failure_logged) {
                 sysLogPrintf(LOG_ERROR,

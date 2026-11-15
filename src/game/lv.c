@@ -957,6 +957,7 @@ void lvFindThreats(void)
 #ifndef PLATFORM_N64
 #ifdef PLATFORM_PS2
 extern u32 g_Ps2HudTenthsMs[4];
+extern u32 g_Ps2HudGs[5];
 #endif
 
 Gfx *lvRenderFPS(Gfx *gdl)
@@ -1000,6 +1001,20 @@ Gfx *lvRenderFPS(Gfx *gdl)
 				const u32 t = g_Ps2HudTenthsMs[i];
 				snprintf(part, sizeof part, "%u.%u ", (unsigned)(t / 10), (unsigned)(t % 10));
 				gdl = textRender(gdl, &x, &y, part, g_CharsNumeric, g_FontNumeric, colors[i], 0x000000a0, viGetWidth(), viGetHeight(), 0, 0);
+			}
+			/* GS line: wait ms, upload KB, chain KB, spills x10, VU1 fault */
+			x = 27;
+			y += 12;
+			for (i = 0; i < 5; i++) {
+				char part[16];
+				const u32 v = g_Ps2HudGs[i];
+				const u32 col = i == 4 ? (v ? 0xff4040a0 : 0x40ff40a0) : 0xc0a0ffa0;
+				if (i == 0) {
+					snprintf(part, sizeof part, "%u.%u ", (unsigned)(v / 10), (unsigned)(v % 10));
+				} else {
+					snprintf(part, sizeof part, "%u ", (unsigned)v);
+				}
+				gdl = textRender(gdl, &x, &y, part, g_CharsNumeric, g_FontNumeric, col, 0x000000a0, viGetWidth(), viGetHeight(), 0, 0);
 			}
 		}
 #endif

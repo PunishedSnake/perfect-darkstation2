@@ -66,6 +66,10 @@ extern u64 g_Ps2PhaseGfxUs;
 extern u64 g_Ps2PhaseFlipWaitUs; // EE idle waiting for the previous scanout flip
 // Display FPS breakdown: logic, gfx, audio, present (0.1 ms, 30-frame average)
 extern u32 g_Ps2HudTenthsMs[4];
+// Display FPS GS line: DMA/GS wait (0.1 ms), upload KB, chain KB, spills x10,
+// VU1 fault (0 ok, 1 VIF error, 2 timeout); per frame, 30-frame average
+extern u32 g_Ps2HudGs[5];
+
 #endif
 
 #endif

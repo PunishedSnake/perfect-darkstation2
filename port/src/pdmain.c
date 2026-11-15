@@ -73,6 +73,11 @@
 #include "data.h"
 #include "types.h"
 #include "system.h"
+#ifdef PLATFORM_PS2
+/* gs_native_queue.cpp / gs_vu1_queue.cpp diagnostics (C linkage) */
+extern u64 g_Ps2GsWaitUs, g_Ps2GsUploadBytes, g_Ps2GsChainQw;
+extern u32 g_Ps2GsSpills, g_Ps2Vu1Fault;
+#endif
 
 #ifdef PLATFORM_PS2
 #ifndef PD_PS2_EE_PROFILER_START_S
@@ -591,6 +596,8 @@ void mainLoop(void)
 					/* on-screen breakdown (Display FPS): averages over 30
 					 * frames of logic, gfx, audio and present, in 0.1 ms */
 					static u64 hudTick, hudEnd, hudAudio0, hudGfx0;
+					static u64 hudWait0, hudUp0, hudQw0;
+					static u32 hudSpill0;
 					static u32 hudFrames;
 					hudTick += tickEnd - frameStart;
 					hudEnd += frameEnd - tickEnd;
@@ -603,6 +610,18 @@ void mainLoop(void)
 						g_Ps2HudTenthsMs[1] = (u32)(gfx / 3000u);
 						g_Ps2HudTenthsMs[2] = (u32)(audio / 3000u);
 						g_Ps2HudTenthsMs[3] = (u32)(hudEnd / 3000u);
+						/* GS side: EE waiting on DMA/GS (0.1 ms), texture
+						 * upload KB, chain KB, arena spills (all per frame,
+						 * spills x10) and the VU1 fault state */
+						g_Ps2HudGs[0] = (u32)((g_Ps2GsWaitUs - hudWait0) / 3000u);
+						g_Ps2HudGs[1] = (u32)((g_Ps2GsUploadBytes - hudUp0) / (30u * 1024u));
+						g_Ps2HudGs[2] = (u32)((g_Ps2GsChainQw - hudQw0) * 16u / (30u * 1024u));
+						g_Ps2HudGs[3] = (g_Ps2GsSpills - hudSpill0) / 3u;
+						g_Ps2HudGs[4] = g_Ps2Vu1Fault;
+						hudWait0 = g_Ps2GsWaitUs;
+						hudUp0 = g_Ps2GsUploadBytes;
+						hudQw0 = g_Ps2GsChainQw;
+						hudSpill0 = g_Ps2GsSpills;
 						hudTick = hudEnd = 0;
 						hudFrames = 0;
 						hudAudio0 = g_Ps2PhaseAudioUs;
