@@ -54,6 +54,9 @@ static s32 s_enabled_cfg = 1;
 /* SPU2 effects for hardware voices: 0 off, 1 follow the game's FX buses.
  * Depth is a percentage applied to the derived effect return level. */
 static s32 s_reverb_mode = 1;
+/* Debug.AudioStats (default 0): poll the IOP every 60 frames for the Display
+ * FPS audio line instead of every 1200. */
+static s32 s_audio_stats;
 static s32 s_reverb_depth = 100;
 static SifRpcClientData_t s_client __attribute__((aligned(64)));
 static PdSndFrameArgs s_frame[2] __attribute__((aligned(64)));
@@ -76,6 +79,7 @@ PD_CONSTRUCTOR static void ps2HwVoicesConfigInit(void)
     configRegisterInt("Audio.HardwareVoices", &s_enabled_cfg, 0, 1);
     configRegisterInt("Audio.HardwareReverb", &s_reverb_mode, 0, 1);
     configRegisterInt("Audio.HardwareReverbDepth", &s_reverb_depth, 0, 200);
+    configRegisterInt("Debug.AudioStats", &s_audio_stats, 0, 1);
 }
 
 static bool load_bank_index(void)
@@ -307,7 +311,7 @@ void ps2HwVoicesFlush(void)
     ++s_frame_index;
     cur_frame()->count = 0;
 
-    if ((s_frames_sent % 60u) == 0u) {
+    if ((s_frames_sent % (s_audio_stats ? 60u : 1200u)) == 0u) {
         while (SifCheckStatRpc(&s_client)) {
             nopdelay();
         }

@@ -568,19 +568,15 @@ static inline void gfx_ps2_direct_invalidate_vertices(size_t first, size_t count
 #endif
 
 #if defined(PLATFORM_PS2)
-/* Display FPS profile: EE cycles in room leaves, model lists and draw
+/* Display FPS profile: microseconds in room leaves, model lists and draw
  * flushes (flushes also happen inside the other two). Cumulative. */
 extern "C" {
 uint32_t g_Ps2CycRoom, g_Ps2CycModel, g_Ps2CycFlush;
 }
+/* Microsecond timer (the kernel timer every renderer wait already uses;
+ * no COP0 access). The counters are in microseconds. */
 static inline uint32_t gfx_ps2_cycles(void) {
-#if defined(_EE)
-    uint32_t c;
-    __asm__ __volatile__("mfc0 %0, $9" : "=r"(c));
-    return c;
-#else
-    return 0u;
-#endif
+    return (uint32_t)sysGetMicroseconds();
 }
 #endif
 
