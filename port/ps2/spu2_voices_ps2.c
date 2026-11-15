@@ -48,6 +48,7 @@ extern u8 *_seqtblSegmentRomStart, *_seqtblSegmentRomEnd;
 #define PS2_HW_SPU_END 0x001c0000u
 
 bool g_Ps2HwVoices;
+u32 g_Ps2HudAudio[5];
 
 static s32 s_enabled_cfg = 1;
 /* SPU2 effects for hardware voices: 0 off, 1 follow the game's FX buses.
@@ -306,11 +307,20 @@ void ps2HwVoicesFlush(void)
     ++s_frame_index;
     cur_frame()->count = 0;
 
-    if ((s_frames_sent % 1200u) == 0u) {
+    if ((s_frames_sent % 60u) == 0u) {
         while (SifCheckStatRpc(&s_client)) {
             nopdelay();
         }
         SifCallRpc(&s_client, PDSND_FUNC_STATUS, 0, NULL, 0, &s_status, sizeof(s_status), NULL, NULL);
+        /* Display FPS audio line: sample loads, load failures, queue drops,
+         * unmatched sounds (cumulative) */
+        g_Ps2HudAudio[0] = s_status.loads;
+        g_Ps2HudAudio[1] = s_status.failures;
+        g_Ps2HudAudio[2] = s_status.queue_drops;
+        g_Ps2HudAudio[3] = s_misses;
+        g_Ps2HudAudio[4] = (u32)(s_status.load_us / 1000u);
+    }
+    if ((s_frames_sent % 1200u) == 0u) {
         sysLogPrintf(LOG_NOTE,
             "SPU2 voices: frames=%u loads=%u (%u KiB, %u ms) evict=%u fail=%u cache=%u KiB qdrop=%u overflow=%u miss=%u fx=%u streams=%u",
             (unsigned)s_status.frames, (unsigned)s_status.loads,
