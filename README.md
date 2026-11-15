@@ -238,8 +238,10 @@ These are mainly for A/B checks on hardware:
 | `Video.Ps2Emotion3DSkin` | 1 | Character models on the VU1 skin path. |
 | `Video.Ps2Emotion3DModels` | 0 | Model display-list replay without the skin path (measured slower). |
 | `Video.Ps2ObjectGeometry` | 1 | Object-space geometry transformed on VU1. |
-| `Video.DisplayFPS` | 0 | FPS counter. On PS2 a second line shows ms per frame for logic, gfx, audio and present; a third shows EE wait on DMA/GS (ms), texture upload KB, chain KB, arena spills ×10 and VU1 state (0 ok, 1 VIF error, 2 timeout); a fourth shows ms in room leaves, model lists and draw flushes plus I-cache and D-cache misses (thousands per frame); a fifth shows SPU2 sample loads, load failures, queue drops, unmatched sounds and total load ms (cumulative). |
+| `Video.DisplayFPS` | 0 | FPS counter. On PS2 a second line shows ms per frame for logic, gfx, audio and present; a third shows EE wait on DMA/GS (ms), texture upload KB, chain KB, arena spills ×10 and VU1 state (0 ok, 1 VIF error, 2 timeout); a fourth shows ms in room leaves, model lists and draw flushes plus I-cache and D-cache misses (thousands per frame, with `Debug.PerfCounters=1`); a fifth shows SPU2 sample loads, load failures, queue drops, unmatched sounds and total load ms (cumulative). |
 | `Debug.TraceCapture` | 0 | Select on controller 1 captures one renderer frame (stalls while writing). |
+| `Debug.PerfCounters` | 0 | Fills the cache-miss numbers on the Display FPS profile line from the EE performance counters. |
+| `Debug.AudioStats` | 0 | Polls the IOP every second (instead of every 20 s) for the Display FPS audio line. |
 
 ## Controls and video settings
 

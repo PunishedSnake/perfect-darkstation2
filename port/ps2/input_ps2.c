@@ -725,6 +725,10 @@ PD_CONSTRUCTOR static void ps2InputConfigInit(void)
 {
     char key[96];
     configRegisterInt("Debug.TraceCapture", &s_trace_capture, 0, 1);
+    {
+        extern s32 g_Ps2PerfCounters;
+        configRegisterInt("Debug.PerfCounters", &g_Ps2PerfCounters, 0, 1);
+    }
     for (s32 controller = 0; controller < INPUT_MAX_CONTROLLERS;
          ++controller) {
         const s32 player = controller + 1;
