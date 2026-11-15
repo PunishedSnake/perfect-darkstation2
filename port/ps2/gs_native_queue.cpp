@@ -13,6 +13,15 @@
 #include "renderer_trace.h"
 #include "system.h"
 
+/* Display FPS diagnostics: cumulative, never reset (readers diff them). */
+extern "C" {
+uint64_t g_Ps2GsWaitUs;       /* EE blocked on VIF1/GIF DMA or GS FINISH */
+uint64_t g_Ps2GsUploadBytes;  /* texture IMAGE payload */
+uint64_t g_Ps2GsChainQw;      /* VIF1 chain qwords kicked */
+uint32_t g_Ps2GsSpills;       /* mid-frame arena hand-offs */
+}
+
+
 #define PS2_GIF_PACKED 0u
 #define PS2_GIF_REG_AD 0x0eu
 #define PS2_GIF_MAX_NLOOP 0x7fffu
@@ -128,6 +137,7 @@ static bool ps2GsNativeSpillFor(uint32_t need_qw)
         return false;
     }
     ++s_stats.spills;
+    ++g_Ps2GsSpills;
     return true;
 }
 
@@ -581,7 +591,25 @@ extern "C" uint32_t *ps2GsNativeQueueReserveVu1PackedBatch(uint32_t head_qw,
 }
 
 /* Bounded wait for the VIF1 chain, VU1 and their GIF hand-off to finish. */
+static inline int ps2GsNativeTimedGifWait(void)
+{
+    const uint64_t t0 = sysGetMicroseconds();
+    const int r = dmaKit_wait(DMA_CHANNEL_GIF, 0);
+    g_Ps2GsWaitUs += sysGetMicroseconds() - t0;
+    return r;
+}
+
+static bool ps2GsNativeWaitVif1IdleRaw(void);
+
 static bool ps2GsNativeWaitVif1Idle(void)
+{
+    const uint64_t t0 = sysGetMicroseconds();
+    const bool r = ps2GsNativeWaitVif1IdleRaw();
+    g_Ps2GsWaitUs += sysGetMicroseconds() - t0;
+    return r;
+}
+
+static bool ps2GsNativeWaitVif1IdleRaw(void)
 {
     if (!ps2GsVu1QueueWaitIdle()) {
         return false;
@@ -809,6 +837,7 @@ static bool ps2GsNativeQueueUploadTextureInternal(GSGLOBAL *gs,
         ? sysGetMicroseconds() : 0u;
     ++s_stats.uploads;
     s_stats.upload_bytes += payload_bytes;
+    g_Ps2GsUploadBytes += payload_bytes;
 #if defined(PD_PS2_OBJECT_STATS)
     const uint64_t stats_up_start = sysGetMicroseconds();
 #endif
@@ -817,7 +846,7 @@ static bool ps2GsNativeQueueUploadTextureInternal(GSGLOBAL *gs,
     s_stats.upload_wait_us += (uint32_t)(sysGetMicroseconds() - stats_up_start);
 #endif
     const int upload_gif_wait = upload_vu1_idle
-        ? dmaKit_wait(DMA_CHANNEL_GIF, 0) : -1;
+        ? ps2GsNativeTimedGifWait() : -1;
     if (ps2RendererTraceIsCapturing()) {
         const uint64_t upload_wait_end = sysGetMicroseconds();
         ps2RendererTraceRecord(PS2_TRACE_QUEUE_WAIT,
@@ -1013,7 +1042,7 @@ static bool ps2GsNativeQueueSubmitInternal(bool *vif_idle_after_submit)
 #endif
     const bool submit_vif_idle = ps2GsNativeWaitVif1Idle();
     const int submit_gif_wait = submit_vif_idle
-        ? dmaKit_wait(DMA_CHANNEL_GIF, 0) : -1;
+        ? ps2GsNativeTimedGifWait() : -1;
 #if defined(PD_PS2_OBJECT_STATS)
     s_stats.submit_wait_us += (uint32_t)(sysGetMicroseconds() - stats_wait_start);
 #endif
@@ -1038,6 +1067,7 @@ static bool ps2GsNativeQueueSubmitInternal(bool *vif_idle_after_submit)
     ps2GsVu1QueueMarkPending();
     ++s_stats.submits;
     s_stats.qwords += chain_qw;
+    g_Ps2GsChainQw += chain_qw;
 #if defined(PD_PS2_OBJECT_STATS)
     /* Walk the chain: what the qwords are. */
     for (uint32_t q = 0u; q < chain_qw;) {
@@ -1131,7 +1161,7 @@ extern "C" bool ps2GsNativeQueueWaitGs(void)
 #endif
     const bool vu1_idle = ps2GsNativeWaitVif1Idle();
     const int ownership_wait = vu1_idle
-        ? dmaKit_wait(DMA_CHANNEL_GIF, 0) : -1;
+        ? ps2GsNativeTimedGifWait() : -1;
     const uint64_t ownership_end =
         trace_capture ? sysGetMicroseconds() : 0u;
     if (!vu1_idle || ownership_wait < 0) {
@@ -1147,7 +1177,7 @@ extern "C" bool ps2GsNativeQueueWaitGs(void)
     ++s_stats.finishes;
     GS_SETREG_CSR_FINISH(1);
     dmaKit_send_ucab(DMA_CHANNEL_GIF, s_finish_ucab, 2);
-    const int finish_dma_wait = dmaKit_wait(DMA_CHANNEL_GIF, 0);
+    const int finish_dma_wait = ps2GsNativeTimedGifWait();
     const uint64_t dma_end = trace_capture ? sysGetMicroseconds() : 0u;
     if (finish_dma_wait < 0) {
         if (trace_capture) {
@@ -1162,7 +1192,11 @@ extern "C" bool ps2GsNativeQueueWaitGs(void)
 
     const uint64_t gs_poll_start =
         trace_capture ? sysGetMicroseconds() : 0u;
-    while (!(GS_CSR_FINISH)) {
+    {
+        const uint64_t t0 = sysGetMicroseconds();
+        while (!(GS_CSR_FINISH)) {
+        }
+        g_Ps2GsWaitUs += sysGetMicroseconds() - t0;
     }
 #if defined(PD_PS2_OBJECT_STATS)
     s_stats.finish_wait_us += (uint32_t)(sysGetMicroseconds() - stats_fin_start);

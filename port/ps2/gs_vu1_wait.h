@@ -11,7 +11,7 @@ extern "C" {
 #define PS2_GS_VU1_DMAC_STR_MASK    0x00000100u
 #define PS2_GS_VU1_STAT_ACTIVE_MASK 0x1f00000fu
 #define PS2_GS_VU1_STAT_ERROR_MASK  0x00003000u
-#define PS2_GS_VU1_WAIT_TIMEOUT_US   100000u
+#define PS2_GS_VU1_WAIT_TIMEOUT_US   2000000u /* a slow GS frame is not a hang */
 
 enum Ps2GsVu1WaitState {
     PS2_GS_VU1_WAIT_IDLE = 0,
