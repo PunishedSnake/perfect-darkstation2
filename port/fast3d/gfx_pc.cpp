@@ -567,7 +567,27 @@ static inline void gfx_ps2_direct_invalidate_vertices(size_t first, size_t count
 
 #endif
 
+#if defined(PLATFORM_PS2)
+/* Display FPS profile: EE cycles in room leaves, model lists and draw
+ * flushes (flushes also happen inside the other two). Cumulative. */
+extern "C" {
+uint32_t g_Ps2CycRoom, g_Ps2CycModel, g_Ps2CycFlush;
+}
+static inline uint32_t gfx_ps2_cycles(void) {
+#if defined(_EE)
+    uint32_t c;
+    __asm__ __volatile__("mfc0 %0, $9" : "=r"(c));
+    return c;
+#else
+    return 0u;
+#endif
+}
+#endif
+
 static void gfx_flush(void) {
+#if defined(PLATFORM_PS2)
+    const uint32_t flush_c0 = gfx_ps2_cycles();
+#endif
 #if defined(GFX_PS2_DIRECT)
     gfx_ps2_direct_flush();
 #endif
@@ -576,6 +596,9 @@ static void gfx_flush(void) {
         buf_vbo_len = 0;
         buf_vbo_num_tris = 0;
     }
+#if defined(PLATFORM_PS2)
+    g_Ps2CycFlush += gfx_ps2_cycles() - flush_c0;
+#endif
 }
 
 static struct ShaderProgram* gfx_lookup_or_create_shader_program(uint64_t shader_id0, uint32_t shader_id1) {
@@ -4465,14 +4488,22 @@ static void gfx_run_dl(Gfx* cmd) {
 #if defined(PLATFORM_PS2)
             case (uint8_t)G_E3D_ROOMLEAF_EXT:
 #if defined(GFX_PS2_DIRECT)
+            {
+                const uint32_t c0 = gfx_ps2_cycles();
                 e3d_room_leaf(C0(0, 16), (Gfx*)cmd->words.w1, ps2_trace_depth);
+                g_Ps2CycRoom += gfx_ps2_cycles() - c0;
+            }
 #else
                 gfx_run_dl((Gfx*)cmd->words.w1, ps2_trace_depth + 1u);
 #endif
                 break;
             case (uint8_t)G_E3D_MODELDL_EXT:
 #if defined(GFX_PS2_DIRECT)
+            {
+                const uint32_t c0 = gfx_ps2_cycles();
                 e3d_model_dl((Gfx*)seg_addr(cmd->words.w1), ps2_trace_depth);
+                g_Ps2CycModel += gfx_ps2_cycles() - c0;
+            }
 #else
                 gfx_run_dl((Gfx*)seg_addr(cmd->words.w1), ps2_trace_depth + 1u);
 #endif

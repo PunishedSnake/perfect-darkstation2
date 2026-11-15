@@ -77,6 +77,27 @@
 /* gs_native_queue.cpp / gs_vu1_queue.cpp diagnostics (C linkage) */
 extern u64 g_Ps2GsWaitUs, g_Ps2GsUploadBytes, g_Ps2GsChainQw;
 extern u32 g_Ps2GsSpills, g_Ps2Vu1Fault;
+extern u32 g_Ps2CycRoom, g_Ps2CycModel, g_Ps2CycFlush;
+u32 g_Ps2HudProf[5];
+
+/* EE performance counters: PCR0 = I-cache misses, PCR1 = D-cache misses
+ * (event 6 on both), all privilege levels. Returns the counts since the
+ * last call and restarts them. */
+static void mainPerfCounters(u32 *imiss, u32 *dmiss)
+{
+	static bool started;
+	u32 a = 0, b = 0;
+	if (!started) {
+		const u32 pccr = 0x80000000u | 0x1eu | (6u << 5) | 0x7800u | (6u << 15);
+		__asm__ __volatile__("mtps %0, 0\n\tsync.p" :: "r"(pccr));
+		started = true;
+	} else {
+		__asm__ __volatile__("mfpc %0, 0\n\tmfpc %1, 1" : "=r"(a), "=r"(b));
+	}
+	__asm__ __volatile__("mtpc $0, 0\n\tmtpc $0, 1\n\tsync.p");
+	*imiss = a;
+	*dmiss = b;
+}
 #endif
 
 #ifdef PLATFORM_PS2
@@ -618,6 +639,22 @@ void mainLoop(void)
 						g_Ps2HudGs[2] = (u32)((g_Ps2GsChainQw - hudQw0) * 16u / (30u * 1024u));
 						g_Ps2HudGs[3] = (g_Ps2GsSpills - hudSpill0) / 3u;
 						g_Ps2HudGs[4] = g_Ps2Vu1Fault;
+						{
+							/* gfx breakdown (0.1 ms): room leaves, model
+							 * lists, draw flushes (partly inside the other
+							 * two); cache misses per frame in thousands */
+							static u32 cRoom0, cModel0, cFlush0;
+							u32 imiss, dmiss;
+							mainPerfCounters(&imiss, &dmiss);
+							g_Ps2HudProf[0] = (g_Ps2CycRoom - cRoom0) / (30u * 29491u);
+							g_Ps2HudProf[1] = (g_Ps2CycModel - cModel0) / (30u * 29491u);
+							g_Ps2HudProf[2] = (g_Ps2CycFlush - cFlush0) / (30u * 29491u);
+							g_Ps2HudProf[3] = imiss / 30000u;
+							g_Ps2HudProf[4] = dmiss / 30000u;
+							cRoom0 = g_Ps2CycRoom;
+							cModel0 = g_Ps2CycModel;
+							cFlush0 = g_Ps2CycFlush;
+						}
 						hudWait0 = g_Ps2GsWaitUs;
 						hudUp0 = g_Ps2GsUploadBytes;
 						hudQw0 = g_Ps2GsChainQw;

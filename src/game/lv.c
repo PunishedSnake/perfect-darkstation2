@@ -958,6 +958,8 @@ void lvFindThreats(void)
 #ifdef PLATFORM_PS2
 extern u32 g_Ps2HudTenthsMs[4];
 extern u32 g_Ps2HudGs[5];
+extern u32 g_Ps2HudProf[5];
+extern u32 g_Ps2HudAudio[5];
 #endif
 
 Gfx *lvRenderFPS(Gfx *gdl)
@@ -1015,6 +1017,29 @@ Gfx *lvRenderFPS(Gfx *gdl)
 					snprintf(part, sizeof part, "%u ", (unsigned)v);
 				}
 				gdl = textRender(gdl, &x, &y, part, g_CharsNumeric, g_FontNumeric, col, 0x000000a0, viGetWidth(), viGetHeight(), 0, 0);
+			}
+			/* profile line: rooms, models, flushes (ms); I-cache and
+			 * D-cache misses per frame (thousands) */
+			x = 27;
+			y += 12;
+			for (i = 0; i < 5; i++) {
+				char part[16];
+				const u32 v = g_Ps2HudProf[i];
+				if (i < 3) {
+					snprintf(part, sizeof part, "%u.%u ", (unsigned)(v / 10), (unsigned)(v % 10));
+				} else {
+					snprintf(part, sizeof part, "%u ", (unsigned)v);
+				}
+				gdl = textRender(gdl, &x, &y, part, g_CharsNumeric, g_FontNumeric, i < 3 ? 0x80e0ffa0 : 0xff80c0a0, 0x000000a0, viGetWidth(), viGetHeight(), 0, 0);
+			}
+			/* audio line: sample loads, load failures, queue drops,
+			 * unmatched sounds, total load ms (cumulative) */
+			x = 27;
+			y += 12;
+			for (i = 0; i < 5; i++) {
+				char part[16];
+				snprintf(part, sizeof part, "%u ", (unsigned)g_Ps2HudAudio[i]);
+				gdl = textRender(gdl, &x, &y, part, g_CharsNumeric, g_FontNumeric, 0xffd060a0, 0x000000a0, viGetWidth(), viGetHeight(), 0, 0);
 			}
 		}
 #endif
